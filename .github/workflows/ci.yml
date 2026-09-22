@@ -35,7 +35,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
@@ -63,5 +63,8 @@ jobs:
         working-directory: ui
 
       - name: App builds (tauri build --debug, no bundling)
-        run: npm run tauri -- build --debug --no-bundle
-        working-directory: ui
+        # Not `npm run tauri` from ui/: the Tauri CLI only looks for
+        # src-tauri/ in subfolders of the current directory, and
+        # src-tauri lives at the repo root, not inside ui/ (see
+        # Justfile's `build-app` recipe for the same reasoning).
+        run: ./ui/node_modules/.bin/tauri build --debug --no-bundle
