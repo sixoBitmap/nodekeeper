@@ -604,6 +604,192 @@ spec, rather than trusting a conf-generator's unit tests (which the
 first, broken version also passed — they only checked "does the string
 contain this line," not "does a real bitcoind accept this file").
 
+## Phase 2 — CI-only bug: relative NK_TEST_BITCOIND path (2026-09-23)
+
+First real GitHub Actions run for Phase 2 (`35794069542`) failed on all
+3 OSes at `cargo test`, but the preceding "Fetch and verify Bitcoin
+Core" step had succeeded on all 3 — so the download/verify path itself
+was fine:
+
+```
+thread 'tests::starts_mines_101_blocks_and_stops_cleanly' panicked at crates/nk-testkit/src/lib.rs:188:14:
+bitcoind should start: Bitcoind(Spawn(Os { code: 2, kind: NotFound, message: "No such file or directory" }))
+```
+
+Root cause: `cargo test` runs each crate's test binary with its cwd set
+to *that crate's own* manifest directory, not the workspace root — not
+previously known, confirmed by checking `std::env::current_dir()` from
+inside a `nk-testkit` test. The CI step that captures
+`fetch_bitcoin_core`'s stdout into `NK_TEST_BITCOIND` runs with
+cwd=repo root, and the example printed a path relative to that cwd
+(`target/nodekeeper-bitcoin-core-31.1/...`). When `nk-testkit`'s test
+(cwd=`crates/nk-testkit/`) later read that same relative path back, it
+resolved to a nonexistent location, so the spawn failed with `NotFound`.
+This is a CI-only failure mode: every local run so far had cwd=repo
+root for both the fetch step and manual `cargo test` invocations, so the
+mismatch never showed up until the real CI run.
+
+Fixed by canonicalizing the printed path (both the cache-hit and
+fresh-download branches of `fetch_bitcoin_core.rs`) before printing it.
+Used `dunce::canonicalize`, not `std::fs::canonicalize` — the latter
+returns a `\\?\`-prefixed verbatim path on Windows, the same failure
+mode already hit once and fixed in `nk-core::system_check` (verbatim
+paths don't string-prefix-match the way naive code expects, and aren't
+always safe to hand to `CreateProcess`/external tools). Added
+`dunce = "1"` to `crates/nk-verify/Cargo.toml`.
+
+Verified before pushing: ran the example locally to get the (cached)
+absolute path, then ran `cargo test -p nk-testkit` from the workspace
+root with `NK_TEST_BITCOIND` set to that path — both integration tests,
+including the real regtest bitcoind spawn, passed. Pushed and confirmed
+green on all 3 OSes: run `35795672861`, with `cargo test` actually
+executing (not skipping) the real regtest integration test on every OS.
+
+## Phase 2 — security self-review (2026-09-23)
+
+Per CLAUDE.md/docs/SPEC.md's "Security self-review at the end of Phases 2,
+5, and 7": going through docs/SPEC.md's SECURITY RULES (mandatory) line by
+line, what enforces each today, and what's still a gap.
+
+1. **RPC and ord server bind to 127.0.0.1 only; ord's address flag must be
+   passed explicitly (VERIFY: defaults to 0.0.0.0).**
+   RPC: `nk-core::bitcoin_conf::generate_bitcoin_conf` always writes
+   `rpcbind=127.0.0.1` *and* `rpcallowip=127.0.0.1` under the chain's
+   `[section]` (verified live that `rpcbind` alone does nothing without
+   `rpcallowip`), tested. ord server doesn't exist yet — Phase 4 per spec.
+   **Reminder for Phase 4**: Phase 0's VERIFY already found ord defaults to
+   `0.0.0.0`; the ord server wrapper must pass `--address`/`--http`
+   explicitly from day one.
+
+2. **Cookie auth; secrets stored per Foundation E.**
+   `generate_bitcoin_conf` never writes `rpcuser`/`rpcpassword` (tested).
+   `nk-rpc::from_cookie_file` reads the real `__cookie__:<password>`
+   format. `nk-secrets` (Phase 1): OS keychain (`keyring`) + Argon2id/
+   XChaCha20-Poly1305 encrypted-file fallback, tested (round-trip, wrong
+   password fails, tampered ciphertext fails, fresh salt+nonce per write).
+   Not yet wired to a real secret-producing flow (wallet creation is
+   Phase 5) — mechanism built and tested ahead of use, by design.
+
+3. **Never log/store/transmit seed phrases or private keys; sensitive
+   output channel only.**
+   `nk-exec`'s `Sensitivity::Sensitive`: the broadcast stream gets
+   `"[sensitive output hidden]"`, never the real content (even redacted)
+   — only `execute()`'s direct return value carries it; tested. No log
+   call anywhere is given `Sensitive` output — the mechanism withholds it
+   at the source, not via downstream filtering. `SensitiveSeedView` (view
+   → confirm-3-random-words) is built and tested but not yet wired to a
+   real mnemonic-producing command. **Gap**: verified as a mechanism only
+   — no real seed has flowed through the app yet, so this needs re-
+   verification with a real flow at the Phase 5 self-review.
+
+4. **Wallet-encryption passphrases never persisted; in-memory mnemonics/
+   passphrases zeroized after use.**
+   `nk-exec::executor.rs` zeroizes the stdin secret buffer immediately
+   after writing it to the child (`stdin_data.zeroize()`). `nk-secrets`
+   wraps derived keys and decrypted plaintext in `Zeroizing<...>` so they
+   wipe on drop, including on an early return or panic. No real passphrase
+   flow exists yet (Phase 5) — mechanism-only, correctly deferred.
+
+5. **Backups contain only public descriptors unless the user explicitly
+   creates an encrypted private backup.**
+   Not started — no backup feature exists (Phase 5+). Nothing to review.
+
+6. **All commands go through the central executor; secrets via stdin/RPC,
+   never argv.**
+   Mechanically enforced: `clippy.toml`'s `disallowed-methods` bans
+   `std::process::Command::new`/`tokio::process::Command::new` everywhere
+   except `nk-exec`/`nk-proc` (each with a documented
+   `#![allow(clippy::disallowed_methods)]`), `just check` runs clippy with
+   `-D warnings` so a violation fails the build — deliberately verified
+   once in Phase 1 (added a violation, confirmed the build broke, removed
+   it). `nk-rpc` routes every call through `Executor::record()`, never a
+   bare HTTP call outside it. Tested that stdin-passed secrets never
+   appear in the command display. **Gap**: no command yet actually carries
+   a real secret (no ord wallet commands exist), so there's no real call
+   site yet to audit for an argv violation beyond the mechanism itself.
+
+7. **Inscription content sandboxed per Foundation D; CSP lists only exact
+   ord server origins.**
+   Phase 1 set `tauri.conf.json`'s CSP to `default-src 'self'` with no
+   `frame-src` — the correct fail-closed baseline, since no ord origin
+   should be trusted before Phase 4 adds it explicitly (documented in
+   ARCHITECTURE.md "Webview security model", including what Phase 4 must
+   add). Not yet applicable otherwise — inscription rendering is Phase
+   4/6.
+
+8. **All mainnet wallets are encrypted.**
+   No wallet creation flow exists yet (Phase 5). Correctly deferred; flagged
+   again here as a CLAUDE.md STOP-AND-ASK area, not to be improvised.
+
+9. **Verify all binaries (pinned keys/hashes, official sources, checked by
+   me); fail closed.**
+   Bitcoin Core: fully implemented and tested in `nk-verify` — `>=3` valid
+   signatures required from *distinct* pinned keys
+   (`REQUIRED_VALID_SIGNATURES: usize = 3`), hash checked against
+   `SHA256SUMS`, every error path (missing sig, too few valid sigs, hash
+   mismatch, corrupt download, unparseable pinned-key bundle) fails closed
+   with a typed error — tested against the real live 31.1 release (tampered
+   file rejected; too few signatures rejected; a filename missing from
+   `SHA256SUMS` rejected). Builder keys pinned from a fresh fetch of
+   `bitcoin-core/guix.sigs` (not reused from Phase 0), source URL and fetch
+   date recorded in this file. The "checked by me" half — the user
+   independently verifying every fingerprint — is the still-open [MANUAL]
+   item in PROGRESS.md. ord binary verification is explicitly Phase 4 per
+   the spec itself (docs/SPEC.md: "ord and index options in Phase 4") —
+   not a Phase 2 gap.
+
+10. **Fund-moving actions need a preview (dry run/PSBT) and explicit
+    confirmation; mainnet needs an extra step from the first fund-moving
+    phase; Core spend against ord wallets blocked by default.**
+    No fund-moving action exists yet (Phase 5/6). The shared `ConfirmDialog`
+    (Phase 1) already has the mainnet extra step (a required checkbox that
+    disables Confirm until checked) ready for Phase 5 to use, tested.
+    Correctly deferred otherwise.
+
+11. **Environments are fully isolated: no command/script/wallet
+    action/template may cross environments.**
+    The `Environment` model and per-chain path resolution are built and
+    tested for all 4 chains, and every `nk-exec` command is tagged with its
+    `environment` field. **Gap**: nothing yet actively *prevents*, at
+    runtime, a command built for one environment from being issued against
+    another's client — there's no such cross-environment code path to
+    misuse yet, since only one environment's worth of end-to-end plumbing
+    exists so far. Needs a real regression test once Phase 3 has multiple
+    environments running side by side, hardened further by Phase 8's Test
+    Lab.
+
+12. **No telemetry; network calls only to the allowed list.**
+    Reviewed every outbound call added so far: `nk-verify`'s `reqwest`
+    calls target real bitcoincore.org release URLs only (binary +
+    `SHA256SUMS` + `SHA256SUMS.asc`); `nk-rpc`'s HTTP calls target the
+    local RPC URL only (127.0.0.1). No analytics/telemetry crate anywhere
+    in the workspace. No auto-update code yet (Phase 10). Consistent with
+    the rule.
+
+13. **Scripts are trusted code; the runner enforces environment
+    restrictions.**
+    No script runner exists yet (Phase 7). Not applicable yet.
+
+14. **A VERIFY result conflicting with any of these rules: STOP AND ASK.**
+    Followed this phase: sequoia-openpgp's production-readiness gap was a
+    STOP AND ASK (user chose rpgp). No SECURITY RULES conflict has arisen
+    that wasn't escalated.
+
+**Summary of open gaps carried forward** (none block Phase 2 closing, since
+each is scoped to a later phase by the spec itself, but listed so they
+aren't forgotten):
+- ord server bind-address must be set explicitly once the Phase 4 wrapper
+  exists (item 1).
+- Sensitive-output/zeroization paths are mechanism-tested only, not yet
+  exercised by a real secret — re-verify at the Phase 5 self-review (items
+  3, 4).
+- No active runtime guard against cross-environment command misuse yet —
+  add a regression test once Phase 3+ has multiple live environments (item
+  11).
+- The two Phase 2 [MANUAL] items (mainnet bitcoind smoke test; independent
+  builder-key fingerprint check) remain open in PROGRESS.md — they're the
+  user's part of this phase, not something completable in-session.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

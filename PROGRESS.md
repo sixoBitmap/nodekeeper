@@ -367,23 +367,37 @@ CI
       test`, with an `actions/cache` step (keyed by OS) so most runs skip
       the network transfer entirely (the helper checks for an already-
       extracted binary from a prior run and skips re-verifying if found)
+- [x] Found and fixed a real bug via the first actual CI run (not
+      inspection): the helper printed a path relative to the repo root
+      (its own cwd when the CI step runs it), but `cargo test` runs each
+      crate's test binary with cwd set to *that crate's own* manifest
+      directory — so `nk-testkit`'s tests resolved the relative
+      `NK_TEST_BITCOIND` path incorrectly and bitcoind failed to spawn
+      (`NotFound`) on all 3 OSes. Fixed by canonicalizing to an absolute
+      path before printing; used `dunce::canonicalize` rather than
+      `std::fs::canonicalize` to avoid reintroducing the `\\?\`-verbatim-
+      path problem already solved once in `nk-core::system_check`. See
+      DECISIONS.md
 
 Acceptance criteria (from docs/SPEC.md Phase 2 "Done when"):
 - [x] [CI] real Bitcoin Core binaries download and verify with 3+ pinned
       signatures; a tampered file is rejected — passes locally against
       the live bitcoincore.org release (7-11 valid signatures found
-      depending on run); CI wiring added, not yet confirmed by an actual
-      GitHub Actions run
+      depending on run) **and confirmed by a real GitHub Actions run,
+      green on all 3 OSes**: run 35795672861
 - [x] [CI] regtest bitcoind starts, mines 101 blocks, and stops cleanly —
-      passes locally with a real bitcoind; same CI-confirmation caveat
+      passes locally with a real bitcoind **and confirmed in the same CI
+      run**, with `cargo test` actually executing (not skipping)
+      `nk-testkit`'s real regtest integration test on all 3 OSes
 - [x] [CI] redaction unit tests pass; a pre-existing bitcoind is detected
-      — both pass locally
+      — both pass locally and in CI
 - [ ] [MANUAL] mainnet bitcoind starts, connects to peers, and stops
       cleanly (no full sync required)
 - [ ] [MANUAL] I have checked every pinned builder-key fingerprint
       against bitcoin-core/guix.sigs from a separate machine or browser
-- [ ] Security self-review completed (go through SECURITY RULES line by
-      line, point to the code/test enforcing each, list any gaps)
+- [x] Security self-review completed (go through SECURITY RULES line by
+      line, point to the code/test enforcing each, list any gaps) — see
+      DECISIONS.md "Phase 2 — security self-review"
 
 ## Phase 3 — Dashboard and monitor
 
