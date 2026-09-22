@@ -3,6 +3,7 @@
 //! See `ARCHITECTURE.md` ("The environment model") and `docs/SPEC.md`
 //! Foundation A.
 
+pub mod bitcoin_conf;
 pub mod chain;
 pub mod environment;
 pub mod paths;

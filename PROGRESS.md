@@ -271,34 +271,45 @@ commit -> tick):
       Core's own `SHA256SUMS.asc` and this crate's pinned-key bundle are
       both exactly that shape (many single-item blocks concatenated)
 
-`nk-core` (config generation)
-- [ ] Generate `bitcoin.conf` per environment: txindex=1, prune=0,
-      server=1, RPC bound to 127.0.0.1 only, cookie auth (no explicit
-      rpcuser/rpcpassword), dbcache sized to available RAM (accounting
-      for other running environments — reuse `system_check`'s memory
-      numbers)
-- [ ] Tests: generated conf has every required line; dbcache sizing
-      respects a caller-supplied "already reserved by other
-      environments" amount
+`nk-core` (config generation) — **done**
+- [x] Generate `bitcoin.conf` per environment: txindex=1, prune=0,
+      server=1, RPC bound to 127.0.0.1 only (verified live against
+      `bitcoind --help` 31.1 that `rpcbind` alone does nothing without
+      `rpcallowip` — both are written), cookie auth (no explicit
+      rpcuser/rpcpassword), dbcache sized to available RAM (a quarter of
+      what's left after other environments' reservations, clamped to
+      Core's accepted range and an 8 GiB ceiling)
+- [x] Tests: generated conf has every required line and never writes
+      rpcuser/rpcpassword; dbcache sizing scales with available memory
+      within bounds and respects a caller-supplied "already reserved by
+      other environments" amount
 
-`nk-exec` (central command executor)
-- [ ] Argument-array command execution (never shell-interpolated
+`nk-exec` (central command executor) — **done**
+- [x] Argument-array command execution (never shell-interpolated
       strings) — the ONLY place besides nk-proc allowed to spawn
       processes (already enforced by the disallowed-methods check from
       Phase 1)
-- [ ] Tags every command with environment, source, triggering action
-- [ ] Redaction: a pluggable set of secret patterns scrubbed from
-      logged/stored output before it leaves the executor
-- [ ] Sensitive-output channel: a way to mark a command's output as
-      sensitive so it's routed away from normal logging entirely (full
-      wiring to a seed-view UI is Phase 5; this phase just needs the
-      mechanism and its tests)
-- [ ] Zeroizes secret inputs after use
-- [ ] Streams structured events (tagged command start/output/exit) via a
-      channel — the Live Command Monitor UI (Phase 3) will consume this;
-      Phase 2 only needs the producer side and a test double consumer
-- [ ] Tests: redaction of every secret type; sensitive-output never
-      appears in normal event stream
+- [x] Tags every command with environment, source, triggering action
+- [x] Redaction: every occurrence of every caller-declared secret string
+      scrubbed from the command display and all output before it reaches
+      the broadcast event stream
+- [x] Sensitive-output channel: `Sensitivity::Sensitive` commands' real
+      output goes only to `execute()`'s direct return value; the
+      broadcast stream gets `[sensitive output hidden]` instead, never
+      the real content even redacted (full wiring to a seed-view UI is
+      Phase 5; this phase built the mechanism itself and proved it)
+- [x] Zeroizes the stdin secret buffer immediately after writing it to
+      the child
+- [x] Streams structured `ExecEvent`s (Started/Output/Finished, TS-
+      exported) via a `tokio::sync::broadcast` channel — the Live Command
+      Monitor UI (Phase 3) will subscribe to this; Phase 2 only needed
+      the producer side, proven with a direct subscriber in tests
+- [x] Tests (12, all against a real spawned child process, not mocked):
+      stdout/exit-code capture; redaction reaches the broadcast stream
+      but not the direct return value; sensitive output never reaches
+      the broadcast stream even as a placeholder-wrapped real value;
+      stdin-passed secrets never appear in the command display; a
+      command that never gets stdin input doesn't hang waiting for it
 
 `nk-rpc` (Bitcoin Core JSON-RPC client)
 - [ ] Minimal JSON-RPC client over HTTP with cookie auth, calls routed

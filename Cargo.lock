@@ -3124,6 +3124,15 @@ dependencies = [
 [[package]]
 name = "nk-exec"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "ts-rs",
+ "uuid",
+ "zeroize",
+]
 
 [[package]]
 name = "nk-ord"
@@ -5967,6 +5976,7 @@ checksum = "756050066659291d47a554a9f558125db17428b073c5ffce1daf5dcb0f7231d8"
 dependencies = [
  "thiserror 2.0.20",
  "ts-rs-macros",
+ "uuid",
 ]
 
 [[package]]
