@@ -3207,6 +3207,7 @@ dependencies = [
 name = "nk-verify"
 version = "0.1.0"
 dependencies = [
+ "dunce",
  "futures-util",
  "pgp",
  "reqwest",

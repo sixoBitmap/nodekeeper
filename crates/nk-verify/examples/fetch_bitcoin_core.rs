@@ -45,8 +45,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let extracted_dir = dest_dir.join("extracted");
     let bin_path = extracted_dir.join(bin_subpath);
     if bin_path.is_file() {
-        eprintln!("Using cached, previously-verified {}", bin_path.display());
-        println!("{}", bin_path.display());
+        let absolute = dunce::canonicalize(&bin_path)?;
+        eprintln!("Using cached, previously-verified {}", absolute.display());
+        println!("{}", absolute.display());
         return Ok(());
     }
 
@@ -82,9 +83,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::set_permissions(&bin_path, perms)?;
     }
 
-    // The one line of intentional stdout output: the verified binary
-    // path, for the CI step to capture.
-    println!("{}", bin_path.display());
+    // The one line of intentional stdout output: the verified binary's
+    // *absolute* path, for the CI step to capture -- `cargo test` runs
+    // each crate's tests with cwd set to that crate's own directory, not
+    // the workspace root, so a relative path here would resolve
+    // differently (and wrongly) once nk-testkit's tests read it back via
+    // NK_TEST_BITCOIND.
+    println!("{}", dunce::canonicalize(&bin_path)?.display());
     Ok(())
 }
 
