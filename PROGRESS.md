@@ -42,14 +42,89 @@ Tasks:
 
 ## Phase 1 — Foundation
 
-Not started. Build: Cargo workspace + crate skeletons, quality gate command,
-disallowed-methods check, CI matrix, UI shell/navigation, design tokens +
-shared components (EnvBanner, StatusBadge, ErrorPanel, ConfirmDialog
-skeleton), i18n setup, SQLite + migrations, environment model + per-chain
-path resolution (incl. Windows long paths), minimal environment switcher,
-single-instance lock, secrets storage, first-run disclaimer, system check.
+In progress. Dev-environment setup (2026-09-22): this machine had no Rust
+toolchain and no C++ linker at all. Installed Rust stable (MSVC host) via
+rustup; Visual Studio Build Tools (C++ workload, MSVC + Windows 11 SDK) is
+being installed to provide `link.exe` (blocked once on low disk space —
+user freed space via Windows Update cleanup, retried with a leaner
+component set).
 
-Acceptance criteria: see docs/SPEC.md Phase 1.
+Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
+
+Environment / tooling
+- [ ] Confirm `cargo build` links successfully (MSVC toolchain smoke test)
+- [ ] Install `just` (cargo install just) for the quality-gate command
+
+Cargo workspace
+- [ ] Root `Cargo.toml` workspace + `crates/nk-core`, `nk-exec`, `nk-proc`,
+      `nk-verify`, `nk-rpc`, `nk-ord`, `nk-secrets`, `nk-store`,
+      `nk-testkit` skeletons (lib.rs stub + Cargo.toml each, compiles)
+- [ ] `src-tauri/` thin Tauri 2 app skeleton (no business logic), wired to
+      the workspace
+- [ ] clippy `disallowed-methods` config banning
+      `std::process::Command`/`tokio::process::Command` outside
+      nk-exec/nk-proc; deliberately verify it fails the build once with a
+      violation added to another crate, record the result, then remove it
+- [ ] `Justfile` with `just check` (cargo fmt --check, cargo clippy -D
+      warnings, cargo test, tsc, eslint, vitest)
+
+CI
+- [ ] `.github/workflows/ci.yml`: matrix over windows-latest, macos-latest,
+      ubuntu-latest running the quality gate
+
+Frontend shell
+- [ ] Vite + React + TypeScript + Tailwind + shadcn/ui scaffold in `ui/`,
+      wired into the Tauri app
+- [ ] Typed IPC scaffold (tauri-specta or ts-rs) with one no-op Tauri
+      command proven end-to-end (Rust type -> generated TS type -> UI call)
+- [ ] Locked-down Tauri capabilities file (IPC only for the main window's
+      own origin) — Foundation D groundwork, established now even though
+      inscription rendering is a later phase
+- [ ] Design tokens: per-environment colors (mainnet orange, regtest
+      purple, etc.), spacing, typography; dark-mode-first with a light
+      theme
+- [ ] Shared components: EnvBanner, StatusBadge, ErrorPanel, ConfirmDialog
+      skeleton (mainnet extra-step + Learn mode plumbing, even if no
+      fund-moving action calls it yet), SensitiveSeedView skeleton
+- [ ] i18n setup (react-i18next), English locale file, no hard-coded
+      user-facing strings from this point on
+- [ ] Minimal environment switcher (top bar, shows configured environments
+      + status placeholder; switching only changes the displayed
+      environment)
+- [ ] First-run disclaimer screen (self-custody warning, acknowledge once,
+      persisted)
+- [ ] System check screen (OS/CPU/RAM/disk space)
+
+Storage
+- [ ] `nk-store`: rusqlite + a migration tool, initial schema (settings
+      table at minimum), migration runner with tests
+
+Environment model / path resolution (nk-core)
+- [ ] Environment struct (name, color, chain, ports, paths) for mainnet/
+      regtest/signet/testnet4
+- [ ] Per-chain path resolution module (cookie/wallet/index paths) with
+      unit tests for every chain
+- [ ] Windows long-path support (app manifest `longPathAware`,
+      `\\?\`-prefixed paths where needed); test with a deeply nested path
+
+Process / secrets
+- [ ] `nk-proc`: single-instance lock file (hostname/PID/timestamp) with
+      stale-lock detection; test that a second instance on the same data
+      folder is refused
+- [ ] `nk-secrets`: OS keychain (`keyring` crate) + encrypted secrets-file
+      fallback (Argon2id + XChaCha20-Poly1305); round-trip test and
+      wrong-master-password-fails test
+
+Acceptance criteria (from docs/SPEC.md Phase 1 "Done when"):
+- [ ] [CI] app builds and launches on all 3 OSes; the quality gate passes
+- [ ] [CI] a deliberate process spawn outside nk-exec/nk-proc fails the
+      build (verified once, then removed)
+- [ ] [CI] path resolution tests pass for all chains, incl. a deeply
+      nested Windows path
+- [ ] [CI] a second app instance on the same data folder is refused
+- [ ] [CI] encrypted secrets file round-trips; wrong master password fails
+- [ ] [MANUAL] banner shows the current environment; disclaimer appears on
+      first run only
 
 ## Phase 2 — Process manager, executor, installer
 
