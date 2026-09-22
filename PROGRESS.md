@@ -43,57 +43,72 @@ Tasks:
 ## Phase 1 — Foundation
 
 In progress. Dev-environment setup (2026-09-22): this machine had no Rust
-toolchain and no C++ linker at all. Installed Rust stable (MSVC host) via
-rustup; Visual Studio Build Tools (C++ workload, MSVC + Windows 11 SDK) is
-being installed to provide `link.exe` (blocked once on low disk space —
+toolchain, no C++ linker, and an outdated Node.js at all. Installed Rust
+stable (MSVC host) via rustup; Visual Studio Build Tools (C++ workload,
+MSVC + Windows 11 SDK) for `link.exe` (blocked once on low disk space —
 user freed space via Windows Update cleanup, retried with a leaner
-component set).
+component set, succeeded); Node.js upgraded 20.17.0 -> 24.21.0 LTS (current
+frontend tooling needs Node >=20.19). All details and exact
+versions/commands in DECISIONS.md.
 
 Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
 
 Environment / tooling
-- [ ] Confirm `cargo build` links successfully (MSVC toolchain smoke test)
-- [ ] Install `just` (cargo install just) for the quality-gate command
+- [x] Confirm `cargo build` links successfully (MSVC toolchain smoke test)
+- [x] Install `just` (cargo install just) for the quality-gate command
 
 Cargo workspace
-- [ ] Root `Cargo.toml` workspace + `crates/nk-core`, `nk-exec`, `nk-proc`,
+- [x] Root `Cargo.toml` workspace + `crates/nk-core`, `nk-exec`, `nk-proc`,
       `nk-verify`, `nk-rpc`, `nk-ord`, `nk-secrets`, `nk-store`,
       `nk-testkit` skeletons (lib.rs stub + Cargo.toml each, compiles)
-- [ ] `src-tauri/` thin Tauri 2 app skeleton (no business logic), wired to
-      the workspace
-- [ ] clippy `disallowed-methods` config banning
+- [x] `src-tauri/` thin Tauri 2 app skeleton (no business logic), wired to
+      the workspace — scaffolded via `npm create tauri-app`, moved to the
+      repo root per the spec's layout (see DECISIONS.md for the
+      `beforeDevCommand`/`cwd` fix that required)
+- [x] clippy `disallowed-methods` config banning
       `std::process::Command`/`tokio::process::Command` outside
-      nk-exec/nk-proc; deliberately verify it fails the build once with a
-      violation added to another crate, record the result, then remove it
-- [ ] `Justfile` with `just check` (cargo fmt --check, cargo clippy -D
+      nk-exec/nk-proc; deliberately verified it fails the build once (a
+      violation added to nk-core, confirmed, recorded in DECISIONS.md,
+      then removed)
+- [x] `Justfile` with `just check` (cargo fmt --check, cargo clippy -D
       warnings, cargo test, tsc, eslint, vitest)
 
 CI
-- [ ] `.github/workflows/ci.yml`: matrix over windows-latest, macos-latest,
-      ubuntu-latest running the quality gate
+- [x] `.github/workflows/ci.yml`: matrix over windows-latest, macos-latest,
+      ubuntu-latest running the quality gate — written, **not yet
+      verified by an actual GitHub Actions run** (no remote/PR pushed yet)
 
 Frontend shell
-- [ ] Vite + React + TypeScript + Tailwind + shadcn/ui scaffold in `ui/`,
-      wired into the Tauri app
-- [ ] Typed IPC scaffold (tauri-specta or ts-rs) with one no-op Tauri
-      command proven end-to-end (Rust type -> generated TS type -> UI call)
+- [x] Vite + React + TypeScript + Tailwind (v4) scaffold in `ui/`, wired
+      into the Tauri app; verified with a real `tauri build --debug
+      --no-bundle` (Rust backend + frontend linked together, not just each
+      half separately)
+- [ ] shadcn/ui — deferred to pair with the "Shared components" task below
+      rather than an `init` now with nothing using it yet
+- [x] Typed IPC scaffold: used **ts-rs**, not tauri-specta (its published
+      docs for the current version looked inconsistent/stale when
+      checked — not worth the risk; ts-rs is the spec's explicitly-allowed
+      alternative). Real command (`system_check`: OS/CPU/RAM/disk) proven
+      end-to-end — Rust type -> generated `ui/src/bindings/SystemCheck.ts`
+      -> committed. Found and fixed a real u64-vs-bigint IPC mismatch
+      along the way (see ARCHITECTURE.md "Typed IPC")
 - [ ] Locked-down Tauri capabilities file (IPC only for the main window's
-      own origin) — Foundation D groundwork, established now even though
-      inscription rendering is a later phase
-- [ ] Design tokens: per-environment colors (mainnet orange, regtest
-      purple, etc.), spacing, typography; dark-mode-first with a light
-      theme
+      own origin) — scaffold default not yet reviewed/tightened
+- [x] Design tokens: per-environment colors (mainnet/regtest/signet/
+      testnet4), dark-mode-first with a light override, in
+      `ui/src/index.css`
 - [ ] Shared components: EnvBanner, StatusBadge, ErrorPanel, ConfirmDialog
       skeleton (mainnet extra-step + Learn mode plumbing, even if no
       fund-moving action calls it yet), SensitiveSeedView skeleton
-- [ ] i18n setup (react-i18next), English locale file, no hard-coded
+- [x] i18n setup (react-i18next), English locale file, no hard-coded
       user-facing strings from this point on
 - [ ] Minimal environment switcher (top bar, shows configured environments
       + status placeholder; switching only changes the displayed
       environment)
 - [ ] First-run disclaimer screen (self-custody warning, acknowledge once,
       persisted)
-- [ ] System check screen (OS/CPU/RAM/disk space)
+- [ ] System check **screen** — backend command exists (above); no UI
+      screen calling it yet
 
 Storage
 - [ ] `nk-store`: rusqlite + a migration tool, initial schema (settings

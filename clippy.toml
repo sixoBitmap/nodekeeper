@@ -1,0 +1,13 @@
+# Enforces the "all commands through the executor" rule (CLAUDE.md,
+# docs/SPEC.md Foundation B): only nk-exec and nk-proc may spawn processes
+# directly. Every other crate's lib.rs must NOT have
+# `#![allow(clippy::disallowed_methods)]`, and `just check` runs clippy with
+# `-D warnings`, so any other crate spawning a process directly fails the
+# build.
+disallowed-methods = [
+    { path = "std::process::Command::new", reason = "spawn processes only via nk-exec (or nk-proc for graceful-stop signaling) — see CLAUDE.md" },
+    # tokio's "process" feature isn't enabled in every crate, so this path
+    # doesn't always resolve; allow-invalid silences that (harmless) case
+    # while still catching it in any crate where tokio::process is in scope.
+    { path = "tokio::process::Command::new", reason = "spawn processes only via nk-exec (or nk-proc for graceful-stop signaling) — see CLAUDE.md", allow-invalid = true },
+]

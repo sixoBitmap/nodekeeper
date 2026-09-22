@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gate:
+    name: Quality gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux Tauri/webkit build deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf build-essential
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: ui
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy (disallowed-methods enforced)
+        run: cargo clippy --workspace --all-targets -- -D warnings -W clippy::disallowed-methods
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: Frontend typecheck / lint / test
+        run: |
+          npm run typecheck
+          npm run lint
+          npm run test -- --run
+        working-directory: ui
+
+      - name: App builds (tauri build --debug, no bundling)
+        run: npm run tauri -- build --debug --no-bundle
+        working-directory: ui

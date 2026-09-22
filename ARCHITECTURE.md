@@ -99,6 +99,24 @@ index-addresses). Dependent features are hidden/explained rather than
 erroring when the option is off. Exact feature->option mapping is a Phase 0
 VERIFY item (see DECISIONS.md). Regtest enables all index options by default.
 
+## Typed IPC
+
+Rust types that cross the Tauri IPC boundary derive `ts_rs::TS`; a test in
+`src-tauri/src/lib.rs` (`export_bindings`) regenerates
+`ui/src/bindings/*.ts` from them on every `cargo test`/`just check` — the
+frontend never hand-writes a duplicate type.
+
+**u64/i64 gotcha**: ts-rs maps `u64`/`i64` to TS `bigint` by default
+(technically lossless), but Tauri's IPC serializes command results as plain
+JSON via serde_json, which the frontend receives as a JS `number`, not a
+`bigint` — so the default mapping doesn't match what actually arrives at
+runtime (discovered while building the `system_check` command's
+`SystemCheck` type, Phase 1). Fix: annotate any `u64`/`i64` IPC field with
+`#[ts(type = "number")]` (safe as long as the value can't realistically
+exceed 2^53 — true for byte counts, satoshi amounts, block heights, etc.).
+Apply this to every new u64/i64 field that crosses IPC, not just the ones
+that happen to hit it first.
+
 ## Suggested libraries
 
 Rust: tokio, serde, thiserror, tracing, reqwest (rustls), sha2,

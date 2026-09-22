@@ -1,0 +1,12 @@
+[package]
+name = "nk-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+sysinfo = "0.39"
+ts-rs = "12"
+dunce = "1"

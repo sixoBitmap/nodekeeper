@@ -1,0 +1,9 @@
+{
+  "app": {
+    "title": "Nodekeeper"
+  },
+  "theme": {
+    "toggleToLight": "Switch to light theme",
+    "toggleToDark": "Switch to dark theme"
+  }
+}

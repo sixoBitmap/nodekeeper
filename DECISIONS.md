@@ -280,6 +280,58 @@ Please answer yes/no for each platform (they're independent) so the macOS
 first-launch flow and Windows installer/SmartScreen messaging can be
 designed correctly starting in Phase 1.
 
+## Phase 1 — dev environment and Cargo workspace (2026-09-22)
+
+- **This machine had no Rust toolchain and no C++ linker at all** (neither
+  MSVC `link.exe` nor MinGW `gcc`). Installed Rust stable via the official
+  rustup installer (`rustc 1.98.1`, MSVC host), and Visual Studio Build
+  Tools 2022 (C++ workload: `Microsoft.VisualStudio.Component.VC.Tools.x86.x64`
+  + `Microsoft.VisualStudio.Component.Windows11SDK.22621`, MSVC toolset
+  14.44.35207) for the linker. First attempt failed on low disk space
+  (needed 6.71 GB, had 5.61 GB); user freed space via Windows Update
+  cleanup, retry with a leaner component set (no `--includeRecommended`)
+  succeeded. Verified with a real `cargo build` smoke test (compiles and
+  links) before touching the real workspace.
+- **Node.js 20.17.0 (pre-installed) was too old** for current frontend
+  tooling — Vite 8 and ESLint 9's dependencies require Node `^20.19.0 ||
+  >=22.12.0`, and downgrading every affected package individually was
+  going to be a recurring problem. Upgraded to the current Node.js LTS via
+  the official installer instead: **Node v24.21.0 ("Krypton")**, from
+  `https://nodejs.org/dist/v24.21.0/node-v24.21.0-x64.msi` (fetched the
+  latest-LTS entry live from `https://nodejs.org/dist/index.json` rather
+  than assuming a version).
+- **`tauri.conf.json`'s `beforeDevCommand`/`beforeBuildCommand` object form
+  uses a `script` field, not `command`** (confirmed against the live
+  schema at `https://schema.tauri.app/config/2`, `HookCommand` definition)
+  — used because `src-tauri/` lives at the repo root while the frontend
+  lives in `ui/`, per the spec's directory layout, so the hook needs an
+  explicit `cwd`.
+- **Disallowed-methods clippy check, verified once per the spec's Phase 1
+  acceptance criterion**: added a deliberate
+  `std::process::Command::new(...)` call to `nk-core` (a crate other than
+  nk-exec/nk-proc), ran `cargo clippy --workspace --all-targets -- -D
+  warnings -W clippy::disallowed-methods`, and confirmed it failed the
+  build:
+  ```
+  error: use of a disallowed method `std::process::Command::new`
+  error: could not compile `nk-core` (lib) due to 1 previous error
+  ```
+  Removed the violation immediately after confirming this. Clean workspace
+  now passes the same command with exit 0. This check runs via `just
+  check` and in CI on every push.
+- **`just` needs `sh` on PATH on Windows** (it shells out to `sh` for every
+  recipe, which is how it runs POSIX-style recipes like `cd ui && npm run
+  ...` — this is documented `just` behavior, not a bug). Git for Windows
+  ships one at `C:\Program Files\Git\usr\bin\sh.exe`, but that directory
+  isn't necessarily on PATH in every shell (it wasn't in this one). Add it
+  to PATH if `just check` fails with "could not find the shell `sh`".
+  GitHub's `windows-latest` runner has Git for Windows on PATH by default,
+  so this shouldn't affect CI.
+- Ran the full local quality gate (`just check`: cargo fmt --check, cargo
+  clippy -D warnings, cargo test --workspace, tsc, eslint, vitest) clean
+  end to end after all of the above, and a real `tauri build --debug
+  --no-bundle` (Rust backend + frontend linked together) with no warnings.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

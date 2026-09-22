@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/nk-core",
+    "crates/nk-exec",
+    "crates/nk-proc",
+    "crates/nk-verify",
+    "crates/nk-rpc",
+    "crates/nk-ord",
+    "crates/nk-secrets",
+    "crates/nk-store",
+    "crates/nk-testkit",
+    "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+nk-core = { path = "crates/nk-core" }
+nk-exec = { path = "crates/nk-exec" }
+nk-proc = { path = "crates/nk-proc" }
+nk-verify = { path = "crates/nk-verify" }
+nk-rpc = { path = "crates/nk-rpc" }
+nk-ord = { path = "crates/nk-ord" }
+nk-secrets = { path = "crates/nk-secrets" }
+nk-store = { path = "crates/nk-store" }
+nk-testkit = { path = "crates/nk-testkit" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "time", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
