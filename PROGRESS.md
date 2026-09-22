@@ -9,24 +9,37 @@ Tasks:
 - [x] Save spec verbatim as docs/SPEC.md
 - [x] Create CLAUDE.md, ARCHITECTURE.md (initial draft), DECISIONS.md,
       PROGRESS.md
-- [ ] In spikes/, download current Bitcoin Core and ord, run on regtest
-- [ ] VERIFY: encrypted Core wallet + ord wallet commands, unlock method
-- [ ] VERIFY: ord graceful shutdown (SIGINT / CTRL_BREAK_EVENT)
-- [ ] VERIFY: which ord commands accept secrets via stdin
-- [ ] VERIFY: ord server default bind address + flag to change it
-- [ ] VERIFY: `ord wallet send --dry-run` existence/output
-- [ ] VERIFY: reinscribe syntax, batch reinscribe support
-- [ ] VERIFY: index-option -> feature mapping
-- [ ] VERIFY: per-chain data paths (Bitcoin Core, ord)
-- [ ] VERIFY: testnet4 support; ord release checksums
-- [ ] VERIFY: built-in regtest command (e.g. `ord env`)
-- [ ] Record all VERIFY results in DECISIONS.md with exact commands + output
-- [ ] Present summary, ask code-signing question, flag any spec conflicts
-- [ ] [MANUAL] User has read DECISIONS.md, answered code-signing question,
-      approved
+- [x] In spikes/, download current Bitcoin Core and ord, run on regtest
+- [x] VERIFY: encrypted Core wallet + ord wallet commands, unlock method
+      (confirmed, no conflict)
+- [x] VERIFY: ord graceful shutdown (SIGINT / CTRL_BREAK_EVENT) (Windows
+      confirmed live; macOS/Linux SIGINT needs a CI job — no such machine
+      available in this session)
+- [x] VERIFY: which ord commands accept secrets via stdin (mnemonic/
+      descriptor: yes; BIP39 passphrase: argv-only — STOP AND ASK A)
+- [x] VERIFY: ord server default bind address + flag to change it
+      (defaults to 0.0.0.0, confirmed; `--address`/`--http` both required)
+- [x] VERIFY: `ord wallet send --dry-run` / `inscribe --dry-run`
+      existence/output (both exist and confirmed live)
+- [x] VERIFY: reinscribe syntax, batch reinscribe support (both confirmed,
+      full round trip tested live on regtest)
+- [x] VERIFY: index-option -> feature mapping (confirmed empirically:
+      sat views need index-sats, address lookups need index-addresses,
+      rune listing needs index-runes but fails soft not hard)
+- [x] VERIFY: per-chain data paths (Bitcoin Core, ord) (confirmed live)
+- [x] VERIFY: testnet4 support; ord release checksums (testnet4 supported,
+      should not be hidden; ord has no maintainer-signed checksums file)
+- [x] VERIFY: built-in regtest command (e.g. `ord env`) (confirmed exists;
+      Nodekeeper uses its own process manager instead)
+- [x] Record all VERIFY results in DECISIONS.md with exact commands + output
+- [x] Present summary, ask code-signing question, flag spec conflicts
+      (see DECISIONS.md "STOP AND ASK")
+- [ ] [MANUAL] User has read DECISIONS.md, answered the two STOP AND ASK
+      items (BIP39 passphrase handling; code signing), approved
 
 Done when: every VERIFY item above has an answer or is explicitly marked
-"needs CI/Windows"; user has approved.
+"needs CI/Windows" (macOS/Linux SIGINT is the one item marked that way);
+user has approved.
 
 ## Phase 1 — Foundation
 

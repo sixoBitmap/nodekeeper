@@ -1,0 +1,5 @@
+/spikes/
+/target/
+/node_modules/
+/dist/
+*.log
