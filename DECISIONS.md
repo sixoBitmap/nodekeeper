@@ -399,6 +399,56 @@ Nodekeeper's own file I/O, with the manifest as a secondary opt-in.
   and already covers Windows/macOS/Linux Secret Service, so no extra
   feature flags were needed there either.
 
+## Phase 1 — frontend shell, shared components, CSP (2026-09-22)
+
+- **shadcn/ui's `init` writes its own design tokens into `index.css`**
+  (`--background`, `--card`, `--primary`, etc., Nova preset) alongside
+  whatever was already there. Left as two parallel token systems this
+  would have been confusing long-term, so they were consolidated: shadcn's
+  tokens stayed as the general UI palette, the hand-written
+  `--color-env-*`/`--color-success`/etc. tokens (which shadcn has no
+  equivalent for) were kept as Nodekeeper-specific additions layered on
+  top, and the now-redundant hand-written `--color-bg`/`--color-surface`/
+  `--color-text`/etc. tokens were removed in favor of shadcn's.
+- **Tailwind's build-time class scanner requires literal class-name
+  strings in source** — `` `bg-env-${chain}` `` produces no CSS at all,
+  since Tailwind doesn't evaluate JavaScript, only regex-scans source text
+  for complete-looking class tokens. `ui/src/lib/environment-colors.ts`
+  uses `Record<Chain, string>` lookup tables with every class name written
+  out in full for exactly this reason.
+- **CSP hardened from `null` to a `default-src 'self'` baseline** now,
+  not deferred to when inscription rendering lands — a strict default is
+  worth having regardless of phase, and `null` meant no CSP was applied
+  at all. No `frame-src` is set, meaning no iframes are possible yet,
+  which is the correct fail-closed state; Phase 4 must add each
+  environment's `http://127.0.0.1:<ord-port>` explicitly when inscription
+  rendering is built. `capabilities/default.json`'s scaffold default
+  (`"windows": ["main"]`) was reviewed and is already sufficient for one
+  trusted window with no untrusted content source yet. Full detail in
+  ARCHITECTURE.md "Webview security model". **Not verified against the
+  real Tauri webview** — only that `tauri build` accepts the config;
+  browser-based UI verification (below) doesn't exercise this CSP at all,
+  since it only applies inside the actual Tauri window, not a plain
+  browser hitting the Vite dev server.
+- **UI verification**: automated tests (Vitest + Testing Library) cover
+  the safety-critical logic (the mainnet extra-step gating in
+  `ConfirmDialog`, the word-confirmation gating in `SensitiveSeedView`,
+  the disclaimer-then-main-shell flow in `App`). Beyond that, rendered the
+  real app in an actual browser with Tauri's IPC mocked
+  (`@tauri-apps/api/mocks`' `mockIPC`, wired up in
+  `ui/src/lib/dev-tauri-mock.ts`, active only under `npm run dev` outside
+  a real Tauri context — also useful going forward for anyone iterating on
+  the UI without the full Tauri shell) and visually confirmed the
+  disclaimer screen and, after acknowledging it, the main shell (orange
+  MAINNET banner, environment switcher, real system-check numbers). One
+  interaction (the theme-toggle button) produced a screenshot that stayed
+  on the old (dark) frame after clicking, despite `getComputedStyle`,
+  `document.documentElement.classList`, and `localStorage` all correctly
+  showing the light theme applied — traced to the preview tool's
+  screenshot pipeline (the tab's `document.visibilityState` was
+  `"hidden"` at the time), not the app; re-verified against computed
+  styles directly rather than trusting that one screenshot.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

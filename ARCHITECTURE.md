@@ -83,6 +83,19 @@ or the wallet: served from the environment's own ord server origin
 listing exact configured ord origins (no wildcards), and a locked-down Tauri
 capabilities file (IPC only for the main window's own origin).
 
+Phase 1 baseline (`src-tauri/tauri.conf.json`'s `security.csp`, set now
+rather than left `null`, since a strict default doesn't need inscription
+rendering to be worth having): `default-src 'self'` with `connect-src`/
+`img-src` scoped to exactly what Tauri's own IPC and asset protocol need,
+`style-src 'self' 'unsafe-inline'` (Radix/shadcn inject inline styles for
+popover/dialog positioning), and no `frame-src` at all — which means no
+iframes are allowed yet, the correct fail-closed state until Phase 4 wires
+up inscription rendering and adds each environment's `http://127.0.0.1:
+<ord-port>` explicitly. `capabilities/default.json` is already scoped to
+`"windows": ["main"]` (the scaffold default) — with exactly one window and
+no untrusted content source yet, this is sufficient for now; revisit
+alongside the CSP once the ord-content webview/iframe exists.
+
 ## Secrets storage (`nk-secrets`)
 
 Installed mode: OS keychain (`keyring` crate). Linux without a Secret

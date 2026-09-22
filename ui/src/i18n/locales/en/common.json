@@ -5,5 +5,46 @@
   "theme": {
     "toggleToLight": "Switch to light theme",
     "toggleToDark": "Switch to dark theme"
+  },
+  "errorPanel": {
+    "showTechnicalDetails": "Show technical details",
+    "hideTechnicalDetails": "Hide technical details"
+  },
+  "confirmDialog": {
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "mainnetWarningTitle": "You are on {{environment}} — this uses real bitcoin",
+    "mainnetAcknowledge": "I understand this action is on mainnet and involves real bitcoin.",
+    "commandLabel": "Command that will run"
+  },
+  "sensitiveSeed": {
+    "screenshotWarning": "Do not screenshot or photograph this screen. Write these words down on paper and store them somewhere safe.",
+    "title": "Your recovery phrase",
+    "iWroteItDown": "I've written it down",
+    "confirmTitle": "Confirm a few words",
+    "word": "Word {{number}}",
+    "confirm": "Confirm"
+  },
+  "disclaimer": {
+    "title": "Before you begin",
+    "intro": "Nodekeeper helps you run your own Bitcoin node and manage ordinals. A few things to understand first:",
+    "selfCustody": "This is self-custody. You alone hold your keys and your recovery phrase.",
+    "noRecovery": "Nobody — including Nodekeeper — can recover your funds if you lose your recovery phrase. There is no \"forgot password\" option.",
+    "practiceFirst": "Practice on Regtest first. It uses test coins with no real value, so you can try everything safely before using mainnet.",
+    "mainnetIsReal": "Mainnet uses real bitcoin. Every mainnet transaction is real and, once broadcast, cannot be undone.",
+    "acknowledge": "I understand"
+  },
+  "systemCheck": {
+    "title": "System check",
+    "os": "Operating system",
+    "cpuCores": "CPU cores",
+    "totalMemory": "Total memory",
+    "availableMemory": "Available memory",
+    "diskFree": "Free disk space",
+    "diskUnknown": "Could not determine free disk space",
+    "continue": "Continue"
+  },
+  "environmentSwitcher": {
+    "label": "Environment"
   }
 }

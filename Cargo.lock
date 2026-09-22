@@ -2479,6 +2479,7 @@ name = "nodekeeper"
 version = "0.1.0"
 dependencies = [
  "nk-core",
+ "nk-store",
  "serde",
  "serde_json",
  "tauri",

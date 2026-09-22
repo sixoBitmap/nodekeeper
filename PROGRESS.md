@@ -83,32 +83,65 @@ Frontend shell
       into the Tauri app; verified with a real `tauri build --debug
       --no-bundle` (Rust backend + frontend linked together, not just each
       half separately)
-- [ ] shadcn/ui — deferred to pair with the "Shared components" task below
-      rather than an `init` now with nothing using it yet
+- [x] shadcn/ui: initialized (Vite template, Radix base, Nova preset).
+      Its own tokens (`--background`, `--card`, `--primary`, etc.) were
+      merged with the hand-written design tokens rather than left as two
+      parallel systems — only the per-environment/status colors (which
+      shadcn has no equivalent for) stayed as separate `--color-env-*`/
+      `--color-success` etc. tokens. Added `button`, `dialog`, `checkbox`,
+      `input`, `select` components as the shared components below needed
+      them
 - [x] Typed IPC scaffold: used **ts-rs**, not tauri-specta (its published
       docs for the current version looked inconsistent/stale when
       checked — not worth the risk; ts-rs is the spec's explicitly-allowed
-      alternative). Real command (`system_check`: OS/CPU/RAM/disk) proven
-      end-to-end — Rust type -> generated `ui/src/bindings/SystemCheck.ts`
+      alternative). Real commands (`system_check`; `list_default_
+      environments`; `get_setting`/`set_setting` backed by `nk-store`)
+      proven end-to-end — Rust types -> generated `ui/src/bindings/*.ts`
       -> committed. Found and fixed a real u64-vs-bigint IPC mismatch
       along the way (see ARCHITECTURE.md "Typed IPC")
-- [ ] Locked-down Tauri capabilities file (IPC only for the main window's
-      own origin) — scaffold default not yet reviewed/tightened
+- [x] Locked-down Tauri capabilities file: reviewed, not just left as the
+      scaffold default — `capabilities/default.json`'s `"windows":
+      ["main"]` scoping is already sufficient for now (one window, no
+      untrusted content source yet). Also hardened `security.csp` from
+      `null` (no CSP at all) to a `default-src 'self'` baseline with no
+      `frame-src` (so no iframes are possible yet — the correct
+      fail-closed state until Phase 4's inscription rendering adds each
+      environment's ord origin explicitly). Documented both, and what
+      Phase 4 needs to add, in ARCHITECTURE.md "Webview security model"
 - [x] Design tokens: per-environment colors (mainnet/regtest/signet/
       testnet4), dark-mode-first with a light override, in
       `ui/src/index.css`
-- [ ] Shared components: EnvBanner, StatusBadge, ErrorPanel, ConfirmDialog
-      skeleton (mainnet extra-step + Learn mode plumbing, even if no
-      fund-moving action calls it yet), SensitiveSeedView skeleton
+- [x] Shared components: `EnvBanner`, `StatusBadge`, `ErrorPanel`,
+      `ConfirmDialog` (mainnet extra step — a required checkbox that
+      disables Confirm until checked — plus Learn mode's command display;
+      tested), `SensitiveSeedView` (view -> confirm-3-random-words flow;
+      tested) — all in `ui/src/components/`
 - [x] i18n setup (react-i18next), English locale file, no hard-coded
       user-facing strings from this point on
-- [ ] Minimal environment switcher (top bar, shows configured environments
-      + status placeholder; switching only changes the displayed
-      environment)
-- [ ] First-run disclaimer screen (self-custody warning, acknowledge once,
-      persisted)
-- [ ] System check **screen** — backend command exists (above); no UI
-      screen calling it yet
+- [x] Minimal environment switcher (top bar `Select`, backed by the real
+      `list_default_environments` command; switching only updates a
+      Zustand store, never starts/stops anything)
+- [x] First-run disclaimer screen (self-custody warning, practice-on-
+      regtest-first, mainnet-is-real; acknowledgement persisted via
+      `nk-store`'s settings table through the new `get_setting`/
+      `set_setting` commands, shown once)
+- [x] System check **screen**: wired to the real `system_check` command,
+      human-readable byte formatting
+
+Verification beyond the automated suite: rendered the real app (Tauri
+IPC mocked via `@tauri-apps/api/mocks`' `mockIPC` — `ui/src/lib/
+dev-tauri-mock.ts`, active only in `npm run dev` outside a real Tauri
+context, also useful for future UI iteration) in an actual browser and
+confirmed visually: the disclaimer screen, and after acknowledging it,
+the main shell with the orange MAINNET banner, environment switcher, and
+real system-check data. Confirmed the theme toggle actually flips
+`--background` et al. via computed styles (a screenshot-pipeline quirk in
+the preview tool kept showing a stale frame after that specific
+interaction — verified against `getComputedStyle`/`localStorage` instead
+of trusting the screenshot). Did **not** visually verify the new CSP
+against the real Tauri webview (only that `tauri build` accepts it) —
+the dev-server browser check above doesn't exercise `tauri.conf.json`'s
+CSP at all, since that only applies inside the actual Tauri webview.
 
 Storage
 - [x] `nk-store`: rusqlite (bundled) + rusqlite_migration, initial schema
@@ -163,15 +196,24 @@ Process / secrets
       guessing repeatedly
 
 Acceptance criteria (from docs/SPEC.md Phase 1 "Done when"):
-- [ ] [CI] app builds and launches on all 3 OSes; the quality gate passes
-- [ ] [CI] a deliberate process spawn outside nk-exec/nk-proc fails the
-      build (verified once, then removed)
-- [ ] [CI] path resolution tests pass for all chains, incl. a deeply
-      nested Windows path
-- [ ] [CI] a second app instance on the same data folder is refused
-- [ ] [CI] encrypted secrets file round-trips; wrong master password fails
-- [ ] [MANUAL] banner shows the current environment; disclaimer appears on
-      first run only
+- [~] [CI] app builds and launches on all 3 OSes; the quality gate passes
+      — verified locally on Windows only (`just check` + `tauri build
+      --debug --no-bundle`, both clean); macOS/Linux need the actual
+      GitHub Actions run once this is pushed (workflow is written, not
+      yet exercised — see the CI item above)
+- [x] [CI] a deliberate process spawn outside nk-exec/nk-proc fails the
+      build (verified once, then removed) — done locally, see DECISIONS.md
+- [x] [CI] path resolution tests pass for all chains, incl. a deeply
+      nested Windows path — passes locally (11 nk-core tests)
+- [x] [CI] a second app instance on the same data folder is refused —
+      passes locally (nk-proc lock tests)
+- [x] [CI] encrypted secrets file round-trips; wrong master password fails
+      — passes locally (nk-secrets tests)
+- [x] [MANUAL] banner shows the current environment; disclaimer appears on
+      first run only — verified visually (see "Verification" note above)
+      with mocked IPC; not yet verified against a real, persisted
+      first-launch (that needs the actual Tauri app with its real SQLite
+      file, not the browser-based mock)
 
 ## Phase 2 — Process manager, executor, installer
 
