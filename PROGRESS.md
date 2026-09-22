@@ -42,12 +42,18 @@ Tasks:
 
 ## Phase 1 — Foundation
 
-In progress. Dev-environment setup (2026-09-22): this machine had no Rust
-toolchain, no C++ linker, and an outdated Node.js at all. Installed Rust
-stable (MSVC host) via rustup; Visual Studio Build Tools (C++ workload,
-MSVC + Windows 11 SDK) for `link.exe` (blocked once on low disk space —
-user freed space via Windows Update cleanup, retried with a leaner
-component set, succeeded); Node.js upgraded 20.17.0 -> 24.21.0 LTS (current
+All coding tasks below are done and the local quality gate is clean.
+**What's not done**: the CI workflow has never actually run (no git
+remote/push yet), so macOS/Linux are unverified and the "[CI]"
+acceptance criteria are only proven locally-on-Windows so far — see the
+acceptance-criteria list at the bottom of this section.
+
+Dev-environment setup (2026-09-22): this machine had no Rust toolchain,
+no C++ linker, and an outdated Node.js at all. Installed Rust stable
+(MSVC host) via rustup; Visual Studio Build Tools (C++ workload, MSVC +
+Windows 11 SDK) for `link.exe` (blocked once on low disk space — user
+freed space via Windows Update cleanup, retried with a leaner component
+set, succeeded); Node.js upgraded 20.17.0 -> 24.21.0 LTS (current
 frontend tooling needs Node >=20.19). All details and exact
 versions/commands in DECISIONS.md.
 
