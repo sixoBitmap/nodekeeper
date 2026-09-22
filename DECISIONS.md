@@ -449,6 +449,42 @@ Nodekeeper's own file I/O, with the manifest as a secondary opt-in.
   `"hidden"` at the time), not the app; re-verified against computed
   styles directly rather than trusting that one screenshot.
 
+## Phase 1 — CI verification (2026-09-22)
+
+Pushed to a new private GitHub repo (https://github.com/sixoBitmap/nodekeeper,
+created with `gh repo create`) so `.github/workflows/ci.yml` could actually
+run — it had only ever been syntax-written before this, never exercised.
+
+First run (`35777802145`) failed identically on all 3 OSes, at the same
+step, same error — a real bug, not flakiness:
+```
+Error: [vitest-pool]: Failed to start forks worker for test files ....test.tsx
+Caused by: TypeError: webidl.util.markAsUncloneable is not a function
+  at new CacheStorage node_modules/undici/lib/web/cache/cachestorage.js:20:17
+  at Object.<anonymous> node_modules/jsdom/lib/api.js:12:33
+```
+Cause: the workflow pinned `actions/setup-node@v4` to `node-version:
+"20"`, but local dev on this machine had been upgraded to Node 24.21
+earlier in this session (see the Cargo-workspace entry above) — every
+local `just check`/`npm test` run had therefore only ever exercised Node
+24, never 20. jsdom's fetch/Cache-API polyfill (via `undici`) broke
+against Node 20's older internals. Fixed by changing `node-version` to
+`"24"` to match local dev exactly, rather than picking a version neither
+environment actually uses.
+
+While investigating, also fixed the "App builds" CI step before it could
+fail the same way: it ran `npm run tauri -- build --debug --no-bundle`
+with `working-directory: ui`, which has the exact same bug already fixed
+locally in the Justfile's `build-app` recipe (the Tauri CLI only finds
+`src-tauri/` in subfolders of the current directory, and `src-tauri`
+lives at the repo root, not inside `ui/`). Changed to invoke
+`./ui/node_modules/.bin/tauri` directly from the repo root, matching the
+Justfile.
+
+Second run (`35779301209`): green on windows-latest, macos-latest, and
+ubuntu-latest — every step, including the full `tauri build` on each OS.
+https://github.com/sixoBitmap/nodekeeper/actions/runs/35779301209
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

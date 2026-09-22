@@ -40,13 +40,12 @@ Tasks:
 
 **Phase 0 complete (2026-09-22).** Next: begin Phase 1 task breakdown.
 
-## Phase 1 — Foundation
+## Phase 1 — Foundation — complete (2026-09-22)
 
-All coding tasks below are done and the local quality gate is clean.
-**What's not done**: the CI workflow has never actually run (no git
-remote/push yet), so macOS/Linux are unverified and the "[CI]"
-acceptance criteria are only proven locally-on-Windows so far — see the
-acceptance-criteria list at the bottom of this section.
+Every task and every acceptance criterion below is done, including the
+real GitHub Actions run (green on all 3 OSes) — see the CI item and the
+acceptance-criteria list further down. Repo:
+https://github.com/sixoBitmap/nodekeeper (private).
 
 Dev-environment setup (2026-09-22): this machine had no Rust toolchain,
 no C++ linker, and an outdated Node.js at all. Installed Rust stable
@@ -81,8 +80,18 @@ Cargo workspace
 
 CI
 - [x] `.github/workflows/ci.yml`: matrix over windows-latest, macos-latest,
-      ubuntu-latest running the quality gate — written, **not yet
-      verified by an actual GitHub Actions run** (no remote/PR pushed yet)
+      ubuntu-latest running the quality gate. Pushed to
+      https://github.com/sixoBitmap/nodekeeper (private) and **verified
+      green on all 3 OSes** (run
+      https://github.com/sixoBitmap/nodekeeper/actions/runs/35779301209).
+      The first push failed on all 3 (real bug, not flakiness): CI pinned
+      Node 20 while local dev had been upgraded to Node 24 earlier this
+      session, and jsdom's fetch/Cache polyfill broke against Node 20's
+      older internals (`webidl.util.markAsUncloneable is not a
+      function`) — never seen locally since local testing only ran
+      against Node 24. Also fixed the same `npm run tauri` working-
+      directory issue in the "App builds" step that the Justfile's
+      `build-app` recipe already had to work around. See DECISIONS.md.
 
 Frontend shell
 - [x] Vite + React + TypeScript + Tailwind (v4) scaffold in `ui/`, wired
@@ -202,11 +211,13 @@ Process / secrets
       guessing repeatedly
 
 Acceptance criteria (from docs/SPEC.md Phase 1 "Done when"):
-- [~] [CI] app builds and launches on all 3 OSes; the quality gate passes
-      — verified locally on Windows only (`just check` + `tauri build
-      --debug --no-bundle`, both clean); macOS/Linux need the actual
-      GitHub Actions run once this is pushed (workflow is written, not
-      yet exercised — see the CI item above)
+- [x] [CI] app builds and launches on all 3 OSes; the quality gate passes
+      — verified both locally on Windows (`just check` + `tauri build
+      --debug --no-bundle`) and via the real GitHub Actions run, green on
+      windows-latest/macos-latest/ubuntu-latest (see the CI item above).
+      "Launches" is CI-verified as "builds and starts" (no GUI on CI
+      runners to click through); the full interactive golden path was
+      manually verified on Windows only (see "Verification" note above)
 - [x] [CI] a deliberate process spawn outside nk-exec/nk-proc fails the
       build (verified once, then removed) — done locally, see DECISIONS.md
 - [x] [CI] path resolution tests pass for all chains, incl. a deeply
