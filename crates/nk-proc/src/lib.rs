@@ -5,3 +5,7 @@
 //! Foundation C. May use `std::process::Command` / `tokio::process::Command`
 //! directly (along with `nk-exec`).
 #![allow(clippy::disallowed_methods)]
+
+pub mod lock;
+
+pub use lock::{LockError, SingleInstanceLock};

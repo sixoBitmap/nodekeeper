@@ -2,3 +2,6 @@
 //! XChaCha20-Poly1305 encrypted file (portable mode / no Secret Service),
 //! plus zeroization helpers. Wallet passphrases and mnemonics are never
 //! stored here — see `docs/SPEC.md` Foundation E.
+
+pub mod encrypted_file;
+pub mod keychain;

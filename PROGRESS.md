@@ -111,24 +111,56 @@ Frontend shell
       screen calling it yet
 
 Storage
-- [ ] `nk-store`: rusqlite + a migration tool, initial schema (settings
-      table at minimum), migration runner with tests
+- [x] `nk-store`: rusqlite (bundled) + rusqlite_migration, initial schema
+      (`settings` table), migration runner with tests (round-trip,
+      reopen-is-a-no-op, migration-list validity)
 
 Environment model / path resolution (nk-core)
-- [ ] Environment struct (name, color, chain, ports, paths) for mainnet/
-      regtest/signet/testnet4
-- [ ] Per-chain path resolution module (cookie/wallet/index paths) with
-      unit tests for every chain
-- [ ] Windows long-path support (app manifest `longPathAware`,
-      `\\?\`-prefixed paths where needed); test with a deeply nested path
+- [x] Environment struct (name, chain, ports, data_root) for mainnet/
+      regtest/signet/testnet4 — `color` is intentionally *not* a Rust
+      field: it's purely presentational (`ui/src/index.css`'s
+      `--color-env-*` tokens, keyed by chain), so there's nothing to keep
+      in sync by duplicating it backend-side
+- [x] Per-chain path resolution module (cookie/wallet/wallets/index paths)
+      with unit tests for every chain. Corrected a wrong assumption from
+      Phase 0 along the way: ord nests its own chain subfolder under
+      `--data-dir` even when given explicitly (see DECISIONS.md) — also
+      verified bitcoind's signet/testnet4 subfolder names live, since
+      Phase 0 had only actually checked regtest
+- [x] Windows long-path support: `longPathAware` app manifest (correct
+      2016-namespace element verified against Microsoft's own docs, not
+      tauri-build's example, which uses the wrong 2005 one; embedded
+      manifest confirmed with the Windows SDK's `mt.exe`, not just assumed
+      from a successful build) + `nk_core::paths::to_verbatim`
+      (`\\?\`-prefixing) for Nodekeeper's own file I/O, since the manifest
+      alone needs a machine-wide registry value Nodekeeper can't set for
+      the user. Tested with a real >260-character nested path under a
+      tempdir: fails without `to_verbatim`, succeeds with it
 
 Process / secrets
-- [ ] `nk-proc`: single-instance lock file (hostname/PID/timestamp) with
-      stale-lock detection; test that a second instance on the same data
-      folder is refused
-- [ ] `nk-secrets`: OS keychain (`keyring` crate) + encrypted secrets-file
-      fallback (Argon2id + XChaCha20-Poly1305); round-trip test and
-      wrong-master-password-fails test
+- [x] `nk-proc`: single-instance lock file (hostname/PID/timestamp),
+      atomic `create_new` acquisition (no check-then-write race), stale-
+      lock detection via `sysinfo` (same-host + PID no longer running).
+      A lock from a *different* host is never treated as stale (can't
+      probe a remote machine's processes) — matches the portable-drive-
+      opened-from-two-machines case explicitly. Tests: fresh acquire +
+      drop releases; second instance on the same folder refused; stale
+      same-host lock cleaned up and re-acquired; different-host lock
+      never touched
+- [x] `nk-secrets`: OS keychain (`keyring` crate, default features
+      already cover Windows/macOS/Linux Secret Service — checked its
+      Cargo.toml rather than assuming a feature flag was needed) +
+      encrypted secrets-file fallback (Argon2id, 64MiB/3-iter/4-parallel —
+      well above OWASP's minimum since this runs once per unlock, not
+      per-request; XChaCha20-Poly1305). Tests: round-trip with the
+      correct password; wrong password fails; tampered ciphertext fails
+      (not just wrong output); fresh salt+nonce every write. No automated
+      keychain tests (OS keychain access isn't reliable in headless CI —
+      documented in the module, covered by the [MANUAL] checklist
+      instead). Used the actual crate source in the local cargo registry
+      to get the current `aead`/`chacha20poly1305` `Generate`-trait API
+      right (its docs.rs example didn't match this version) rather than
+      guessing repeatedly
 
 Acceptance criteria (from docs/SPEC.md Phase 1 "Done when"):
 - [ ] [CI] app builds and launches on all 3 OSes; the quality gate passes

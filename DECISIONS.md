@@ -194,15 +194,31 @@ pattern (`<datadir>/.cookie` for mainnet with no subfolder,
 `<datadir>/signet/.cookie`, `<datadir>/testnet4/.cookie`) per Bitcoin Core's
 well-documented, unchanged-in-decades behavior.
 
-ord (via `ord settings`, no `--data-dir` override):
+ord (via `ord settings`):
 ```
-regtest: data_dir = %APPDATA%\ord\regtest
-mainnet: data_dir = %APPDATA%\ord
+no --data-dir override:  regtest -> %APPDATA%\ord\regtest   mainnet -> %APPDATA%\ord
+--data-dir=X override:   regtest -> X\regtest                mainnet -> X   (X unchanged)
 ```
-Same per-chain-subfolder pattern as Core. Nodekeeper always passes an
-explicit `--data-dir` per environment anyway (per Foundation A's
-`data/<environment>/ord` layout), so this default never actually applies in
-the app — but confirms the path-resolution module's assumptions are correct.
+Same per-chain-subfolder pattern as Core, confirmed also for signet and
+testnet4 (all four: `ord --<chain> --data-dir=X settings` and the
+equivalent live `bitcoind -<chain> -datadir=X` run, both checked directly
+against files on disk, not just `settings` output — see the Phase 1 entry
+below).
+
+**Correction to the note originally here**: it previously claimed that
+because Nodekeeper always passes an explicit `--data-dir`, ord's per-chain
+default "never actually applies in the app." That was wrong — untested at
+the time. **ord appends its own chain subfolder to `--data-dir` even when
+it's given explicitly** (confirmed above), for every non-mainnet chain.
+Since each Nodekeeper environment already maps 1:1 to one chain, this means
+ord's *actual* on-disk index directory is one level deeper than the
+`--data-dir` value Nodekeeper passes it — e.g. passing
+`--data-dir=data/regtest/ord` on the regtest environment means the index
+really lands in `data/regtest/ord/regtest/`, not `data/regtest/ord/`
+directly. `nk-core`'s path resolution (added in Phase 1) distinguishes
+"the `--data-dir` argument to pass ord" from "where ord's files actually
+end up," because disk-usage reporting and "Reset Test Lab" (regtest-only
+delete) need the real path, not the argument value.
 
 ### 9. testnet4 support; ord release checksums — CONFIRMED
 `ord --help` lists `testnet4` as a valid `--chain` value and has a dedicated
@@ -280,6 +296,42 @@ Please answer yes/no for each platform (they're independent) so the macOS
 first-launch flow and Windows installer/SmartScreen messaging can be
 designed correctly starting in Phase 1.
 
+## Phase 1 — environment model / path resolution (2026-09-22)
+
+Phase 0's per-chain path check (VERIFY item #8) only actually tested
+regtest. Before writing `nk-core`'s path resolution, checked signet and
+testnet4 too, live, with the same Bitcoin Core 31.1 / ord 0.29.0 binaries
+from the Phase 0 spike (`spikes/bitcoin`, `spikes/ord` — not re-downloaded):
+
+- `bitcoind -signet -datadir=X` -> `X/signet/` (cookie, blocks, chainstate,
+  etc. all under it). `bitcoind -testnet4 -datadir=X` -> `X/testnet4/`,
+  same pattern. Both confirmed by inspecting the actual directory contents
+  after a live (brief) run, not just log lines.
+- `ord --signet`/`--testnet4 --data-dir=X settings` -> `data_dir` reported
+  as `X/signet` / `X/testnet4` respectively — see the corrected note under
+  "Per-chain data paths" above for the more important finding (ord nests
+  its own chain subfolder under `--data-dir` even when given explicitly).
+
+Conclusion: bitcoind and ord both use the *exact same* subfolder name for
+a given chain — literally `regtest`/`signet`/`testnet4`, no subfolder for
+mainnet — for both their default and explicit-`--data-dir` behavior. `nk-core`'s
+`Chain::data_subdir()` encodes this once, shared by both.
+
+**Windows long paths**: the `longPathAware` manifest element's namespace
+matters and is easy to get wrong silently (an unrecognized namespace is
+just ignored, not an error) — tauri-build's own doc example uses
+`http://schemas.microsoft.com/SMI/2005/WindowsSettings`, but Microsoft's
+own current docs specify `.../2016/WindowsSettings` for `longPathAware`
+specifically (2005 is for older settings like `dpiAware`). Used the 2016
+one (Microsoft's own page, not the tauri-build example), and verified the
+built `.exe`'s embedded manifest directly with the Windows SDK's `mt.exe`
+rather than trusting the build succeeded silently. Also confirmed via
+Microsoft's docs that `longPathAware` alone is insufficient without a
+machine-wide `LongPathsEnabled` registry value Nodekeeper can't set for
+the user — so `nk_core::paths::to_verbatim` (`\\?\`-prefixing, which
+bypasses MAX_PATH unconditionally) is the mechanism actually relied on for
+Nodekeeper's own file I/O, with the manifest as a secondary opt-in.
+
 ## Phase 1 — dev environment and Cargo workspace (2026-09-22)
 
 - **This machine had no Rust toolchain and no C++ linker at all** (neither
@@ -331,6 +383,21 @@ designed correctly starting in Phase 1.
   clippy -D warnings, cargo test --workspace, tsc, eslint, vitest) clean
   end to end after all of the above, and a real `tauri build --debug
   --no-bundle` (Rust backend + frontend linked together) with no warnings.
+- **`chacha20poly1305` 0.11 / `aead` 0.6's nonce/key generation API**: a
+  docs.rs fetch for the current version returned an example that didn't
+  compile (`OsRng`/`generate_nonce` don't exist at those paths in this
+  version). Rather than guessing again, read the actual crate source
+  already downloaded into the local cargo registry
+  (`~/.cargo/registry/src/.../aead-0.6.1`,
+  `~/.cargo/registry/src/.../crypto-common-0.2.2/src/generate.rs`) to find
+  the real current API: a `Generate` trait (re-exported when the
+  `rand_core` feature is active, which `chacha20poly1305`'s default
+  `getrandom` feature enables transitively) with `Type::generate()` —
+  e.g. `XNonce::generate()`, `<[u8; 16]>::generate()` — using the system
+  CSPRNG internally, no explicit `OsRng` needed. `keyring` 4.2.0's default
+  `v1` feature was checked the same way (its own Cargo.toml on GitHub)
+  and already covers Windows/macOS/Linux Secret Service, so no extra
+  feature flags were needed there either.
 
 ## Approved deviations from SPEC.md
 

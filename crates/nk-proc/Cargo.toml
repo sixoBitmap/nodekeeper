@@ -4,3 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+hostname = "0.4"
+sysinfo = "0.39"
+
+[dev-dependencies]
+tempfile = "3"
