@@ -81,6 +81,21 @@ pub struct CommandSpec {
     pub redact: Vec<String>,
 }
 
+/// Tagging info for `Executor::record` — the same shape as `CommandSpec`
+/// minus the parts specific to spawning a real child process (`program`/
+/// `args`/`stdin`), since `record` wraps an arbitrary async operation
+/// instead (typically an RPC call).
+pub struct RecordSpec {
+    pub environment: String,
+    pub source: CommandSource,
+    pub triggering_action: String,
+    /// What's shown for this operation — for an RPC call, the
+    /// equivalent bitcoin-cli invocation (docs/SPEC.md item 7).
+    pub command_display: String,
+    pub redact: Vec<String>,
+    pub sensitivity: Sensitivity,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputStream {

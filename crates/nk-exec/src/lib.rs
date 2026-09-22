@@ -11,6 +11,6 @@ pub mod types;
 
 pub use executor::{ExecError, Executor};
 pub use types::{
-    CommandId, CommandSource, CommandSpec, ExecEvent, ExecOutcome, OutputStream, Sensitivity,
-    SENSITIVE_OUTPUT_PLACEHOLDER,
+    CommandId, CommandSource, CommandSpec, ExecEvent, ExecOutcome, OutputStream, RecordSpec,
+    Sensitivity, SENSITIVE_OUTPUT_PLACEHOLDER,
 };

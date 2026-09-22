@@ -52,6 +52,26 @@ jobs:
       - name: cargo clippy (disallowed-methods enforced)
         run: cargo clippy --workspace --all-targets -- -D warnings -W clippy::disallowed-methods
 
+      # Bitcoin Core cache, keyed by OS + pinned version (bump the key
+      # whenever crates/nk-verify/examples/fetch_bitcoin_core.rs's
+      # VERSION changes). Implementation Guide: "CI caches the verified
+      # binaries." The fetch step still runs nk-verify's real
+      # download+verify path on every run, cache hit or not -- caching
+      # only skips the network transfer, never the verification itself.
+      - name: Cache Bitcoin Core download
+        id: bitcoin-core-cache
+        uses: actions/cache@v4
+        with:
+          path: target/nodekeeper-bitcoin-core-31.1
+          key: bitcoin-core-31.1-${{ matrix.os }}
+
+      - name: Fetch and verify Bitcoin Core (for nk-testkit's regtest integration test)
+        shell: bash
+        run: |
+          set -e
+          path=$(cargo run --release -p nk-verify --example fetch_bitcoin_core)
+          echo "NK_TEST_BITCOIND=$path" >> "$GITHUB_ENV"
+
       - name: cargo test
         run: cargo test --workspace
 

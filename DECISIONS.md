@@ -563,6 +563,47 @@ built-in `StandardPolicy`) — noted here so a future review of
 `nk-verify` knows to look at that code carefully rather than assume a
 library handled it.
 
+## Phase 2 — bitcoin.conf network-specific settings need a [section] (2026-09-23)
+
+Caught by `nk-testkit`'s real end-to-end test failing with a startup
+timeout, not by inspection. The first version of
+`nk-core::bitcoin_conf::generate_bitcoin_conf` put every setting
+(`txindex`, `prune`, `server`, `dbcache`, `rpcbind`, `rpcallowip`,
+`rpcport`, `port`) at the top level of the file. Reproduced directly
+against real `bitcoind` 31.1 (not just read from the test failure) to
+find the actual cause:
+```
+Error: Config setting for -port only applied on regtest network when in [regtest] section.
+Config setting for -rpcbind only applied on regtest network when in [regtest] section.
+Config setting for -rpcport only applied on regtest network when in [regtest] section.
+```
+This is a **fatal startup error** in 31.1, not a warning — bitcoind
+refuses to start at all. It happens even though the network is already
+selected via the `-regtest` CLI flag; `bitcoin.conf`'s per-network
+settings apparently aren't associated with the CLI-selected chain unless
+they're explicitly inside that chain's `[section]`. `txindex`/`prune`/
+`server`/`dbcache` are *not* network-specific and stayed fine at the top
+level (confirmed by removing the section entirely and checking only
+those four applied with no complaint).
+
+Fixed by adding every network-specific setting under `[<section>]`, and
+checked live which section name each chain actually needs rather than
+guessing — in particular, mainnet's section is **`[main]`, not
+`[mainnet]`** (tested directly: `[main]` with a custom `rpcport`
+actually bound there and answered RPC; the section name doesn't follow
+the same naming as everywhere else in the codebase, where mainnet's
+`dir_name()` is `"mainnet"`). `Chain::conf_section_name()` now holds this
+mapping in one place. `generate_bitcoin_conf`'s signature changed to take
+`Chain` plus the RPC/P2P ports (previously ports were appended by
+`nk-testkit` as a separate string concatenation, which is exactly how
+this bug could have shipped unnoticed — folding port generation into the
+same function that knows about sectioning removes that seam).
+
+This is exactly why `nk-testkit`'s real bitcoind test exists per the
+spec, rather than trusting a conf-generator's unit tests (which the
+first, broken version also passed — they only checked "does the string
+contain this line," not "does a real bitcoind accept this file").
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

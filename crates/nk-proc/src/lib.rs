@@ -6,6 +6,9 @@
 //! directly (along with `nk-exec`).
 #![allow(clippy::disallowed_methods)]
 
+pub mod bitcoind;
 pub mod lock;
+mod process_check;
 
+pub use bitcoind::{detect_running_bitcoind, BitcoindError, BitcoindProcess};
 pub use lock::{LockError, SingleInstanceLock};

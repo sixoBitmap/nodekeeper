@@ -3,11 +3,11 @@
 //! including the same portable drive opened from two machines
 //! (docs/SPEC.md Foundation C).
 
+use crate::process_check::process_is_alive;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use sysinfo::{Pid, System};
 use thiserror::Error;
 
 const LOCK_FILE_NAME: &str = ".nodekeeper.lock";
@@ -177,12 +177,6 @@ fn now_unix() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-}
-
-fn process_is_alive(pid: u32) -> bool {
-    let mut sys = System::new();
-    sys.refresh_all();
-    sys.process(Pid::from_u32(pid)).is_some()
 }
 
 #[cfg(test)]

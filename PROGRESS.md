@@ -311,40 +311,73 @@ commit -> tick):
       stdin-passed secrets never appear in the command display; a
       command that never gets stdin input doesn't hang waiting for it
 
-`nk-rpc` (Bitcoin Core JSON-RPC client)
-- [ ] Minimal JSON-RPC client over HTTP with cookie auth, calls routed
-      through nk-exec (tagged as RPC, shown as the equivalent
-      bitcoin-cli command per docs/SPEC.md item 7)
-- [ ] Enough methods for Phase 2: `stop`, `generatetoaddress`,
-      `getnewaddress`, `getblockchaininfo`
+`nk-rpc` (Bitcoin Core JSON-RPC client) — **done**
+- [x] Minimal JSON-RPC 1.0 client over HTTP with cookie auth (parses the
+      real `__cookie__:<password>` file format), calls routed through
+      `nk-exec`'s new `record()` (tagged as RPC, shown as the equivalent
+      bitcoin-cli command per docs/SPEC.md item 7 — e.g. `bitcoin-cli
+      -regtest generatetoaddress 1 <address>`, with the chain flag
+      correctly omitted for mainnet)
+- [x] Enough methods for Phase 2: `stop`, `generate_to_address`,
+      `get_new_address`, `get_blockchain_info`, plus a raw `call()` escape
+      hatch for anything not wrapped yet
+- [x] Extended `nk-exec::Executor` with `record()`: the same tagged/
+      redacted event-stream treatment as a spawned command, for
+      operations (like an RPC call) that don't spawn a child process.
+      Bundled its parameters into a `RecordSpec` struct after clippy
+      flagged the first version for too many function arguments
 
-`nk-proc` (process manager)
-- [ ] Spawns bitcoind as a tracked child process via nk-exec, writes a
-      PID file per environment
-- [ ] Detects an already-running bitcoind on the same data directory
-      (cookie file present + authenticates) and offers to attach;
-      refuses to start a second one on the same data dir
-- [ ] Graceful stop: RPC `stop`, then wait for process exit (configurable
-      timeout)
-- [ ] Tests: a pre-existing bitcoind on the same data dir is detected;
-      never starts two on the same data dir
+`nk-proc` (process manager) — **done**
+- [x] Spawns bitcoind as a tracked child process (long-lived daemon
+      lifecycle is nk-proc's own direct responsibility, distinct from
+      nk-exec's short-lived one-shot commands/RPC calls — see
+      ARCHITECTURE.md); passes only `-datadir` and the chain flag, since
+      everything else comes from the generated `bitcoin.conf`
+- [x] Detects an already-running bitcoind on the same data directory via
+      its own `bitcoind.pid` file (confirmed live: plain numeric PID)
+      plus a liveness check, refusing to start a second one. **Narrower
+      than the spec's full "offer to attach" flow**: that needs a UI
+      decision (attach vs. refuse) that doesn't exist before Phase 3, and
+      the spec's "cookie authenticates" check is naturally an RPC call
+      (now available via nk-rpc) — Phase 2 built the detection primitive
+      the later UI flow will call into, not the full attach decision
+- [x] Graceful stop: RPC `stop` (via nk-rpc), then wait for the process
+      to exit with a caller-supplied timeout; a force-kill path
+      (`kill_sync`) exists separately for cleanup-only use (e.g. test
+      teardown after a panic), never as the primary stop path
+- [x] Tests: a pre-existing (live) bitcoind is detected; a dead process's
+      leftover pid file is correctly *not* detected as running
 
-`nk-testkit`
-- [ ] Starts real bitcoind in a temp dir on random free ports (downloaded
-      + verified via nk-verify, cached for CI), can mine blocks, always
-      tears down (even on panic/test failure)
-- [ ] Minimal regtest start + mine 101 blocks + stop cleanly, as an
-      integration test other crates' tests can reuse
+`nk-testkit` — **done**
+- [x] Starts real bitcoind in a temp dir on random free ports, can mine
+      blocks (creating a wallet first if needed), always tears down —
+      `Drop` force-kills if `stop()` was never called, proven with a test
+      that checks the OS process list after an un-stopped fixture drops
+- [x] Real regtest start + mine 101 blocks + stop cleanly integration
+      test — the literal Phase 2 [CI] acceptance criterion, gated behind
+      an `NK_TEST_BITCOIND` env var (path to a real bitcoind) so
+      `cargo test` doesn't require a pre-staged binary on every dev
+      machine; skips with a clear message when unset rather than failing
 
 CI
-- [ ] Cache verified Bitcoin Core binaries in CI (keyed by OS + version)
-      so every run doesn't re-download
+- [x] `crates/nk-verify/examples/fetch_bitcoin_core.rs`: a CI helper that
+      calls nk-verify's *real* download-and-verify path (not a bash
+      reimplementation) for the current platform, extracts `bitcoind`,
+      and sets `NK_TEST_BITCOIND` — wired into `ci.yml` before `cargo
+      test`, with an `actions/cache` step (keyed by OS) so most runs skip
+      the network transfer entirely (the helper checks for an already-
+      extracted binary from a prior run and skips re-verifying if found)
 
 Acceptance criteria (from docs/SPEC.md Phase 2 "Done when"):
-- [ ] [CI] real Bitcoin Core binaries download and verify with 3+ pinned
-      signatures; a tampered file is rejected
-- [ ] [CI] regtest bitcoind starts, mines 101 blocks, and stops cleanly
-- [ ] [CI] redaction unit tests pass; a pre-existing bitcoind is detected
+- [x] [CI] real Bitcoin Core binaries download and verify with 3+ pinned
+      signatures; a tampered file is rejected — passes locally against
+      the live bitcoincore.org release (7-11 valid signatures found
+      depending on run); CI wiring added, not yet confirmed by an actual
+      GitHub Actions run
+- [x] [CI] regtest bitcoind starts, mines 101 blocks, and stops cleanly —
+      passes locally with a real bitcoind; same CI-confirmation caveat
+- [x] [CI] redaction unit tests pass; a pre-existing bitcoind is detected
+      — both pass locally
 - [ ] [MANUAL] mainnet bitcoind starts, connects to peers, and stops
       cleanly (no full sync required)
 - [ ] [MANUAL] I have checked every pinned builder-key fingerprint

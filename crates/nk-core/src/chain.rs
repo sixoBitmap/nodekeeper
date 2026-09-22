@@ -48,6 +48,34 @@ impl Chain {
         }
     }
 
+    /// The `bitcoin.conf` section name for this chain's network-specific
+    /// settings (`rpcbind`, `rpcallowip`, `rpcport`, `port`, ...) —
+    /// confirmed live (not assumed): bitcoind 31.1 treats these settings
+    /// as **errors at startup**, not mere warnings, when they're at the
+    /// top level instead of under the right `[section]`, even though the
+    /// network itself is selected via a CLI flag (see DECISIONS.md).
+    /// Unlike `data_subdir`, mainnet *does* have one here — `[main]`,
+    /// also confirmed live, not `[mainnet]`.
+    pub fn conf_section_name(self) -> &'static str {
+        match self {
+            Chain::Mainnet => "main",
+            Chain::Regtest => "regtest",
+            Chain::Signet => "signet",
+            Chain::Testnet4 => "testnet4",
+        }
+    }
+
+    /// The `bitcoind`/`bitcoin-cli` network-selection flag for this
+    /// chain. `None` for mainnet, which has no flag (it's the default).
+    pub fn bitcoin_cli_flag(self) -> Option<&'static str> {
+        match self {
+            Chain::Mainnet => None,
+            Chain::Regtest => Some("-regtest"),
+            Chain::Signet => Some("-signet"),
+            Chain::Testnet4 => Some("-testnet4"),
+        }
+    }
+
     pub fn default_label(self) -> &'static str {
         match self {
             Chain::Mainnet => "Mainnet",
@@ -97,6 +125,21 @@ mod tests {
     fn every_chain_has_a_unique_dir_name() {
         let names: std::collections::HashSet<_> = Chain::ALL.iter().map(|c| c.dir_name()).collect();
         assert_eq!(names.len(), Chain::ALL.len());
+    }
+
+    #[test]
+    fn conf_section_names_are_all_distinct_and_mainnet_is_main_not_mainnet() {
+        assert_eq!(Chain::Mainnet.conf_section_name(), "main");
+        let names: std::collections::HashSet<_> =
+            Chain::ALL.iter().map(|c| c.conf_section_name()).collect();
+        assert_eq!(names.len(), Chain::ALL.len());
+    }
+
+    #[test]
+    fn only_mainnet_has_no_cli_flag() {
+        for chain in Chain::ALL {
+            assert_eq!(chain.bitcoin_cli_flag().is_none(), chain == Chain::Mainnet);
+        }
     }
 
     #[test]

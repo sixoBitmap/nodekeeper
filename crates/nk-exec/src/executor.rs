@@ -4,7 +4,7 @@
 
 use crate::redact::redact;
 use crate::types::{
-    CommandId, CommandSpec, ExecEvent, ExecOutcome, OutputStream, Sensitivity,
+    CommandId, CommandSpec, ExecEvent, ExecOutcome, OutputStream, RecordSpec, Sensitivity,
     SENSITIVE_OUTPUT_PLACEHOLDER,
 };
 use std::process::Stdio;
@@ -116,6 +116,54 @@ impl Executor {
             stderr: stderr_result?,
             duration,
         })
+    }
+
+    /// For operations that don't spawn a child process (an RPC call, over
+    /// HTTP, not a subprocess) but still need to appear in the Live
+    /// Command Monitor exactly like a spawned command would.
+    /// `command_display` is what's shown for it — for RPC calls, the
+    /// equivalent bitcoin-cli invocation (docs/SPEC.md item 7: "RPC
+    /// calls shown as their equivalent bitcoin-cli command so users can
+    /// learn them").
+    pub async fn record<F, Fut, E>(&self, spec: RecordSpec, op: F) -> Result<serde_json::Value, E>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<serde_json::Value, E>>,
+        E: std::fmt::Display,
+    {
+        let id = CommandId::new();
+        let start = Instant::now();
+        self.emit(ExecEvent::Started {
+            id,
+            environment: spec.environment,
+            source: spec.source,
+            triggering_action: spec.triggering_action,
+            command_display: redact(&spec.command_display, &spec.redact),
+        });
+
+        let result = op().await;
+        let duration = start.elapsed();
+
+        let (chunk, exit_code) = match &result {
+            Ok(value) => (value.to_string(), Some(0)),
+            Err(e) => (format!("error: {e}"), Some(1)),
+        };
+        let chunk = match spec.sensitivity {
+            Sensitivity::Sensitive => SENSITIVE_OUTPUT_PLACEHOLDER.to_string(),
+            Sensitivity::Normal => redact(&chunk, &spec.redact),
+        };
+        self.emit(ExecEvent::Output {
+            id,
+            stream: OutputStream::Stdout,
+            chunk,
+        });
+        self.emit(ExecEvent::Finished {
+            id,
+            exit_code,
+            duration_ms: duration.as_millis().try_into().unwrap_or(u64::MAX),
+        });
+
+        result
     }
 
     fn emit(&self, event: ExecEvent) {
@@ -309,6 +357,50 @@ mod tests {
                 assert!(!command_display.contains("secret-mnemonic-word"));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn record_emits_the_same_event_shape_as_a_spawned_command() {
+        let executor = Executor::new();
+        let mut rx = executor.subscribe();
+
+        let result: Result<serde_json::Value, String> = executor
+            .record(
+                RecordSpec {
+                    environment: "regtest".to_string(),
+                    source: CommandSource::Rpc,
+                    triggering_action: "mine blocks".to_string(),
+                    command_display: "bitcoin-cli -regtest generatetoaddress 1 bcrt1qexample"
+                        .to_string(),
+                    redact: vec![],
+                    sensitivity: Sensitivity::Normal,
+                },
+                || async { Ok(serde_json::json!(["blockhash123"])) },
+            )
+            .await;
+        assert!(result.is_ok());
+
+        let mut saw_started = false;
+        let mut saw_finished_ok = false;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                ExecEvent::Started {
+                    source,
+                    command_display,
+                    ..
+                } => {
+                    assert_eq!(source, CommandSource::Rpc);
+                    assert!(command_display.contains("generatetoaddress"));
+                    saw_started = true;
+                }
+                ExecEvent::Finished { exit_code, .. } => {
+                    assert_eq!(exit_code, Some(0));
+                    saw_finished_ok = true;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_started && saw_finished_ok);
     }
 
     #[tokio::test]

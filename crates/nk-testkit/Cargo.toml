@@ -4,3 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+serde_json = { workspace = true }
+nk-core = { workspace = true }
+nk-exec = { workspace = true }
+nk-proc = { workspace = true }
+nk-rpc = { workspace = true }
+tempfile = "3"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+sysinfo = "0.39"

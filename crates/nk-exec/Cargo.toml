@@ -10,6 +10,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["process", "io-std", "sync", "time"] }
 tracing = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 ts-rs = { version = "12", features = ["uuid-impl"] }
 zeroize = "1"
 uuid = { version = "1", features = ["v4", "serde"] }

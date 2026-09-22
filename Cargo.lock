@@ -3126,6 +3126,7 @@ name = "nk-exec"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -3143,14 +3144,27 @@ name = "nk-proc"
 version = "0.1.0"
 dependencies = [
  "hostname",
+ "nk-core",
+ "nk-rpc",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]
 name = "nk-rpc"
 version = "0.1.0"
+dependencies = [
+ "nk-core",
+ "nk-exec",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+]
 
 [[package]]
 name = "nk-secrets"
@@ -3177,6 +3191,17 @@ dependencies = [
 [[package]]
 name = "nk-testkit"
 version = "0.1.0"
+dependencies = [
+ "nk-core",
+ "nk-exec",
+ "nk-proc",
+ "nk-rpc",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+]
 
 [[package]]
 name = "nk-verify"
