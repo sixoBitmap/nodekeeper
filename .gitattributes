@@ -1,0 +1,6 @@
+# Pinned/fixture data whose exact bytes matter for security verification
+# (PGP signatures, checksums) must never be line-ending-normalized —
+# a CRLF/LF conversion on checkout wouldn't break parsing, but there's no
+# reason to risk it for files this security-sensitive.
+crates/nk-verify/pinned-keys/** -text
+crates/nk-verify/test-fixtures/** -text

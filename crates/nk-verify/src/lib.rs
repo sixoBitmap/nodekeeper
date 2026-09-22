@@ -3,3 +3,9 @@
 //!
 //! See `docs/SPEC.md` Foundation "Bitcoin Core verification" / "ord
 //! verification" and `DECISIONS.md` for pinned values and their sources.
+
+pub mod armor;
+pub mod bitcoin_core;
+pub mod download;
+pub mod pinned_keys;
+pub mod verify;

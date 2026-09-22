@@ -237,22 +237,39 @@ Acceptance criteria (from docs/SPEC.md Phase 1 "Done when"):
 In progress. Tasks (one at a time: implement -> test -> quality gate ->
 commit -> tick):
 
-`nk-verify` (Bitcoin Core download + verification)
-- [ ] Fetch bitcoin-core/guix.sigs builder keys fresh (don't reuse Phase
-      0's spike copies — re-verify current as of Phase 2), bundle into
-      one embedded (`include_bytes!`) keyring file, source + fetch date
-      recorded in DECISIONS.md
-- [ ] Download a Bitcoin Core release asset by URL, compute SHA-256
-- [ ] Verify SHA256SUMS contains the expected hash for the downloaded
+`nk-verify` (Bitcoin Core download + verification) — **done**
+- [x] Fetch bitcoin-core/guix.sigs builder keys fresh (39 keys; not reused
+      from Phase 0's spike copies), bundled into one embedded
+      (`include_bytes!`) keyring file, source + fetch date recorded in
+      DECISIONS.md
+- [x] Download a Bitcoin Core release asset by URL, SHA-256 computed
+      incrementally as it streams to disk
+- [x] Verify SHA256SUMS contains the expected hash for the downloaded
       file
-- [ ] Verify SHA256SUMS.asc against the embedded builder keys via
-      sequoia-openpgp (pure-Rust `crypto-rust` backend, not `nettle` —
-      must work on all 3 OSes without external gpg), requiring >=3 valid
-      signatures from *distinct* pinned keys
-- [ ] Fail closed on every verification error (missing sig, <3 valid
-      sigs, hash mismatch, corrupt download) with a clear typed error
-- [ ] Tests: a real download verifies successfully; a tampered/corrupted
-      file is rejected; too few valid signatures is rejected
+- [x] Verify SHA256SUMS.asc against the embedded builder keys, requiring
+      >=3 valid signatures from *distinct* pinned keys. **STOP AND ASK**:
+      sequoia-openpgp's pure-Rust backend (which the spec names
+      explicitly) turned out to be flagged "not considered production
+      ready" by its own maintainers and wouldn't even compile without an
+      experimental opt-in — presented the trade-offs rather than picking
+      unilaterally; switched to the `pgp` crate (rpgp) per the user's
+      choice. Full reasoning in DECISIONS.md. Also discovered (and
+      documented, and handled gracefully rather than crashing on) a real
+      rpgp limitation: it can't parse one pinned key's `secp256k1` curve
+- [x] Fail closed on every verification error (missing sig, <3 valid
+      sigs, hash mismatch, corrupt download, unparseable pinned-key
+      bundle) with a clear typed error
+- [x] Tests: **a real download of the live Bitcoin Core 31.1 release
+      verifies successfully end-to-end** (network test, not mocked) with
+      >=3 valid signatures found; a tampered/corrupted file is rejected;
+      too few valid signatures is rejected; a filename missing from
+      SHA256SUMS is rejected. Also found and fixed a real bug in my own
+      first implementation attempt: `pgp`'s `from_armor_many` silently
+      parses only the *first* block of a multi-block concatenated file
+      (1 of 38 keys, no error) — confirmed empirically with a throwaway
+      test before trusting it, not from documentation, since Bitcoin
+      Core's own `SHA256SUMS.asc` and this crate's pinned-key bundle are
+      both exactly that shape (many single-item blocks concatenated)
 
 `nk-core` (config generation)
 - [ ] Generate `bitcoin.conf` per environment: txindex=1, prune=0,

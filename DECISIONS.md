@@ -485,6 +485,84 @@ Second run (`35779301209`): green on windows-latest, macos-latest, and
 ubuntu-latest — every step, including the full `tauri build` on each OS.
 https://github.com/sixoBitmap/nodekeeper/actions/runs/35779301209
 
+## Phase 2 — pinned Bitcoin Core builder keys (2026-09-22)
+
+`crates/nk-verify/pinned-keys/bitcoin-core-builder-keys.gpg` is 39 builder
+public keys, fetched fresh for Phase 2 (not reused from the Phase 0 spike
+copies, to make sure the pinned set is current as of when it's actually
+being embedded into the app):
+```
+curl -s https://api.github.com/repos/bitcoin-core/guix.sigs/contents/builder-keys
+# -> download_url of every entry, concatenated into one file
+```
+Source: https://github.com/bitcoin-core/guix.sigs/tree/main/builder-keys
+(commit at fetch time not separately pinned — see the note below).
+Sanity-checked by importing into a fresh, throwaway GPG keyring: 39
+entries processed, 38 distinct keys (one file maps to a key already
+covered by another file's cert — not a problem, `CertParser` doesn't
+mind duplicates and the signature-counting logic in nk-verify counts
+distinct key fingerprints, not files). This exact file is what
+`nk-verify` embeds via `include_bytes!` and verifies Bitcoin Core release
+signatures against.
+
+**Please independently check these against bitcoin-core/guix.sigs from a
+separate machine or browser** — this is the Phase 2 [MANUAL] acceptance
+criterion ("I have checked every pinned builder-key fingerprint"). The
+fingerprints actually embedded are listed by running (from
+`crates/nk-verify/pinned-keys/`): `gpg --with-colons --show-keys
+bitcoin-core-builder-keys.gpg | grep ^fpr`.
+
+**Not pinned to a specific guix.sigs commit**: the fetch above always
+gets the *current* builder-keys directory contents, not a hash-pinned
+snapshot. This matches the spec's "PINNED inside Nodekeeper... updated
+only through Nodekeeper updates" in spirit (the file is committed to
+this repo and only changes when a human updates it and ships a new
+Nodekeeper release), but there's no cryptographic proof this fetch
+wasn't tampered with in transit beyond GitHub's own TLS — recording it
+here specifically so it's easy to re-derive and re-check.
+
+## Phase 2 — PGP library: rpgp instead of sequoia-openpgp (2026-09-22)
+
+**STOP AND ASK, resolved.** The spec calls for "Sequoia-PGP with a
+pure-Rust crypto backend... (or another library that works on all three
+OSes without an external gpg)". Tried this first, via `cargo build`, not
+just reading docs:
+```
+sequoia-openpgp = { version = "2", default-features = false, features = ["crypto-rust"] }
+```
+Build failed with:
+```
+Selected cryptographic backend: RustCrypto
+The cryptographic backend RustCrypto is not considered production ready.
+If you know what you are doing, you can opt-in to using experimental
+cryptographic backends using the feature flag
+    allow-experimental-crypto
+```
+Sequoia's *default* backend (`crypto-nettle`) is production-ready but
+needs system `nettle`+`gmp` C libraries — fine on Linux, uncertain-to-
+awkward on Windows (no standard system package; would need vcpkg or a
+vendored build) — the same kind of cross-platform bundling problem the
+spec is explicitly trying to avoid by asking for pure-Rust in the first
+place. `crypto-openssl` avoids the *system*-library problem (OpenSSL can
+be statically vendored) but adds a large C dependency to the supply
+chain for exactly the kind of security-critical code the app leans on
+most.
+
+Presented the trade-offs (rpgp / vendored-OpenSSL sequoia / experimental
+pure-Rust sequoia anyway) rather than picking unilaterally, since this
+gates Bitcoin Core binary verification — a fail-closed security
+mechanism, not a cosmetic choice. **Decision: use the `pgp` crate
+(rpgp)** — pure Rust, no C dependencies, ~6.3M downloads vs sequoia's
+~1.9M (crates.io, checked same day), no "not production ready"
+disclaimer. Trade-off accepted knowingly: rpgp is lower-level than
+sequoia's policy-based verifier (its own docs: "requires... at least a
+basic understanding of cryptography"), so `nk-verify`'s verification
+logic carries more of the correctness burden itself (e.g. explicitly
+checking the signature's target/expiry, not getting that from a
+built-in `StandardPolicy`) — noted here so a future review of
+`nk-verify` knows to look at that code carefully rather than assume a
+library handled it.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
