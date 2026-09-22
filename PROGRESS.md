@@ -234,7 +234,95 @@ Acceptance criteria (from docs/SPEC.md Phase 1 "Done when"):
 
 ## Phase 2 — Process manager, executor, installer
 
-Not started. See docs/SPEC.md Phase 2.
+In progress. Tasks (one at a time: implement -> test -> quality gate ->
+commit -> tick):
+
+`nk-verify` (Bitcoin Core download + verification)
+- [ ] Fetch bitcoin-core/guix.sigs builder keys fresh (don't reuse Phase
+      0's spike copies — re-verify current as of Phase 2), bundle into
+      one embedded (`include_bytes!`) keyring file, source + fetch date
+      recorded in DECISIONS.md
+- [ ] Download a Bitcoin Core release asset by URL, compute SHA-256
+- [ ] Verify SHA256SUMS contains the expected hash for the downloaded
+      file
+- [ ] Verify SHA256SUMS.asc against the embedded builder keys via
+      sequoia-openpgp (pure-Rust `crypto-rust` backend, not `nettle` —
+      must work on all 3 OSes without external gpg), requiring >=3 valid
+      signatures from *distinct* pinned keys
+- [ ] Fail closed on every verification error (missing sig, <3 valid
+      sigs, hash mismatch, corrupt download) with a clear typed error
+- [ ] Tests: a real download verifies successfully; a tampered/corrupted
+      file is rejected; too few valid signatures is rejected
+
+`nk-core` (config generation)
+- [ ] Generate `bitcoin.conf` per environment: txindex=1, prune=0,
+      server=1, RPC bound to 127.0.0.1 only, cookie auth (no explicit
+      rpcuser/rpcpassword), dbcache sized to available RAM (accounting
+      for other running environments — reuse `system_check`'s memory
+      numbers)
+- [ ] Tests: generated conf has every required line; dbcache sizing
+      respects a caller-supplied "already reserved by other
+      environments" amount
+
+`nk-exec` (central command executor)
+- [ ] Argument-array command execution (never shell-interpolated
+      strings) — the ONLY place besides nk-proc allowed to spawn
+      processes (already enforced by the disallowed-methods check from
+      Phase 1)
+- [ ] Tags every command with environment, source, triggering action
+- [ ] Redaction: a pluggable set of secret patterns scrubbed from
+      logged/stored output before it leaves the executor
+- [ ] Sensitive-output channel: a way to mark a command's output as
+      sensitive so it's routed away from normal logging entirely (full
+      wiring to a seed-view UI is Phase 5; this phase just needs the
+      mechanism and its tests)
+- [ ] Zeroizes secret inputs after use
+- [ ] Streams structured events (tagged command start/output/exit) via a
+      channel — the Live Command Monitor UI (Phase 3) will consume this;
+      Phase 2 only needs the producer side and a test double consumer
+- [ ] Tests: redaction of every secret type; sensitive-output never
+      appears in normal event stream
+
+`nk-rpc` (Bitcoin Core JSON-RPC client)
+- [ ] Minimal JSON-RPC client over HTTP with cookie auth, calls routed
+      through nk-exec (tagged as RPC, shown as the equivalent
+      bitcoin-cli command per docs/SPEC.md item 7)
+- [ ] Enough methods for Phase 2: `stop`, `generatetoaddress`,
+      `getnewaddress`, `getblockchaininfo`
+
+`nk-proc` (process manager)
+- [ ] Spawns bitcoind as a tracked child process via nk-exec, writes a
+      PID file per environment
+- [ ] Detects an already-running bitcoind on the same data directory
+      (cookie file present + authenticates) and offers to attach;
+      refuses to start a second one on the same data dir
+- [ ] Graceful stop: RPC `stop`, then wait for process exit (configurable
+      timeout)
+- [ ] Tests: a pre-existing bitcoind on the same data dir is detected;
+      never starts two on the same data dir
+
+`nk-testkit`
+- [ ] Starts real bitcoind in a temp dir on random free ports (downloaded
+      + verified via nk-verify, cached for CI), can mine blocks, always
+      tears down (even on panic/test failure)
+- [ ] Minimal regtest start + mine 101 blocks + stop cleanly, as an
+      integration test other crates' tests can reuse
+
+CI
+- [ ] Cache verified Bitcoin Core binaries in CI (keyed by OS + version)
+      so every run doesn't re-download
+
+Acceptance criteria (from docs/SPEC.md Phase 2 "Done when"):
+- [ ] [CI] real Bitcoin Core binaries download and verify with 3+ pinned
+      signatures; a tampered file is rejected
+- [ ] [CI] regtest bitcoind starts, mines 101 blocks, and stops cleanly
+- [ ] [CI] redaction unit tests pass; a pre-existing bitcoind is detected
+- [ ] [MANUAL] mainnet bitcoind starts, connects to peers, and stops
+      cleanly (no full sync required)
+- [ ] [MANUAL] I have checked every pinned builder-key fingerprint
+      against bitcoin-core/guix.sigs from a separate machine or browser
+- [ ] Security self-review completed (go through SECURITY RULES line by
+      line, point to the code/test enforcing each, list any gaps)
 
 ## Phase 3 — Dashboard and monitor
 
