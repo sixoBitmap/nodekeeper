@@ -107,7 +107,28 @@ secrecy, keyring, rusqlite (+ migration tool), tauri-plugin-updater.
 Frontend: Vite, TanStack Query, Zustand, react-i18next, Vitest, Testing
 Library. Exact versions to be confirmed and recorded in DECISIONS.md.
 
+## Phase 0 spike results (summary)
+
+Full detail and exact commands in DECISIONS.md. Key confirmations: ord
+wallet commands work normally against an encrypted Core wallet via the
+standard `walletpassphrase` RPC (no special handling needed); ord shuts down
+cleanly on Windows via `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK_EVENT`
+(macOS/Linux SIGINT still needs a CI check); ord server binds `0.0.0.0` by
+default so `nk-ord`'s server-launch config must always pass `--address
+127.0.0.1 --http --http-port <port>` together; `--dry-run` exists on both
+`wallet send` and `wallet inscribe`; reinscribe (single + batch) works as
+documented; the index-option -> feature mapping in Foundation F is
+confirmed exactly, except rune listing fails *soft* (empty, not an error)
+without `index-runes`, so `nk-ord`/the UI must gate it proactively rather
+than relying on ord's own error.
+
+Two approved deviations from the spec came out of this (see DECISIONS.md
+"Approved deviations"): **no BIP39-passphrase support** anywhere (ord only
+accepts it via argv, which the security rules forbid for secrets), and
+**Windows will be code-signed, macOS will not** (for now) — the macOS
+first-launch flow must handle Gatekeeper + quarantine-attribute removal.
+
 ## Open questions
 
-Tracked in DECISIONS.md as VERIFY items land during the Phase 0 feasibility
-spike.
+None blocking Phase 1. Future VERIFY items (e.g. macOS/Linux SIGINT
+behavior) tracked in DECISIONS.md as they come up.

@@ -5,9 +5,9 @@ sources, and any approved deviation from docs/SPEC.md.
 
 ## Status
 
-Phase 0 feasibility spike: **complete**. Two items need a decision from the
-project owner before Phase 1 can proceed safely (see "STOP AND ASK" below).
-Everything else either confirms the spec as written or needs no change.
+Phase 0 feasibility spike: **complete and approved**. Both STOP AND ASK
+items below were decided by the project owner on 2026-09-22; see "Approved
+deviations" at the end of this file.
 
 Spike environment: Windows 11, done in `spikes/` (throwaway, not committed —
 see `.gitignore`). Binaries used: **Bitcoin Core 31.1** (win64),
@@ -229,7 +229,7 @@ nk-proc's process tracking and single-instance locking entirely.
 - `ord wallet send`'s real (non-dry-run) response includes a `"psbt"` field
   even after broadcasting — useful for a "technical details" panel.
 
-## STOP AND ASK — decisions needed before Phase 1
+## STOP AND ASK — decisions (resolved 2026-09-22, see Approved deviations)
 
 ### A. BIP39 passphrase can only be passed to ord via a CLI argument
 `ord wallet create --passphrase <PASSPHRASE>` and
@@ -282,4 +282,27 @@ designed correctly starting in Phase 1.
 
 ## Approved deviations from SPEC.md
 
-None yet — pending your answers to A and B above.
+Decided by the project owner on 2026-09-22:
+
+- **A. BIP39 passphrase: not supported.** Nodekeeper will not surface a
+  BIP39-passphrase field anywhere in the UI (wallet create, restore, or
+  elsewhere). Only the plain mnemonic (via `--from stdin`) and the separate
+  Bitcoin Core wallet-encryption passphrase (via RPC `walletpassphrase`,
+  never argv) are supported, both fully honoring the "secrets never via
+  argv" rule with no exceptions. This is a deviation from the spec's implied
+  assumption that the BIP39 passphrase is a supported, UI-exposed feature
+  (spec item 3: "clearly distinguish the encryption password from an
+  optional BIP39 passphrase") — it is now simply not offered. `nk-ord`
+  should not expose a passphrase parameter on its wallet-create/restore
+  wrappers, and `ord wallet create`/`restore` are always invoked without
+  `--passphrase` (equivalent to the ord default of `""`).
+- **B. Code signing: Windows yes, macOS no (for now).**
+  - Windows: Nodekeeper will be code-signed. Phase 1's installer/build setup
+    should assume a signing step exists in CI (cert details/secrets TBD
+    when that's set up — do not block Phase 1 on acquiring the actual
+    certificate, but design the packaging pipeline in Phase 10 to sign).
+  - macOS: unsigned for now. The macOS first-launch flow (Phase 1 onward,
+    and specifically the portable-mode App Translocation handling in
+    Phase 9) must guide users through Gatekeeper's unsigned-app warning and
+    quarantine-attribute removal (`xattr -dr com.apple.quarantine`), per
+    spec item 12. Revisit if an Apple Developer ID is obtained later.

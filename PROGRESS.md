@@ -34,12 +34,11 @@ Tasks:
 - [x] Record all VERIFY results in DECISIONS.md with exact commands + output
 - [x] Present summary, ask code-signing question, flag spec conflicts
       (see DECISIONS.md "STOP AND ASK")
-- [ ] [MANUAL] User has read DECISIONS.md, answered the two STOP AND ASK
-      items (BIP39 passphrase handling; code signing), approved
+- [x] [MANUAL] User has read DECISIONS.md, answered the two STOP AND ASK
+      items (BIP39 passphrase: not supported; code signing: Windows yes,
+      macOS no for now), approved
 
-Done when: every VERIFY item above has an answer or is explicitly marked
-"needs CI/Windows" (macOS/Linux SIGINT is the one item marked that way);
-user has approved.
+**Phase 0 complete (2026-09-22).** Next: begin Phase 1 task breakdown.
 
 ## Phase 1 — Foundation
 
