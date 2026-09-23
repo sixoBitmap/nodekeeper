@@ -407,7 +407,89 @@ Acceptance criteria (from docs/SPEC.md Phase 2 "Done when"):
 
 ## Phase 3 — Dashboard and monitor
 
-Not started. See docs/SPEC.md Phase 3.
+In progress. Tasks (one at a time: implement -> test -> quality gate ->
+commit -> tick):
+
+Backend — monitor history (docs/SPEC.md item 7)
+- [ ] `nk-store`: `command_history` migration + insert/query/export,
+      capped per environment (spec: "e.g. last 5,000 entries"), tested
+      (round-trip, cap/pruning, reopen keeps data)
+- [ ] Wire `nk-exec`'s `ExecEvent` broadcast into `nk-store`: a
+      subscriber task that persists Started/Output/Finished rows —
+      safe by construction since the broadcast stream is already
+      redacted/placeholder'd before this layer ever sees it (Phase 2)
+- [ ] Mark background-polling events so the UI can hide them by default
+      (spec: "Background polling is hidden by default with a Show
+      background polling toggle")
+
+Backend — plain-language errors (item 8, [CI] "a busy port produces the
+friendly error")
+- [ ] Typed error-code enum (PORT_IN_USE, DISK_FULL, INDEX_BEHIND,
+      INDEX_OPTION_DISABLED, WALLET_LOCKED, RPC_WARMING_UP,
+      ORD_NOT_SYNCED, BINARY_NOT_VERIFIED), TS-exported
+- [ ] `nk-proc::BitcoindProcess::start` distinguishes "port already in
+      use" from other spawn failures and returns the typed error;
+      tested by binding the target port first and asserting the typed
+      error comes back
+- [ ] Frontend: i18n message + "What to do" action per error code,
+      wired into the existing `ErrorPanel` (Phase 1)
+
+Backend — dashboard status
+- [ ] `nk-rpc`: peer count (`getnetworkinfo`) and mempool
+      (`getmempoolinfo`) methods, alongside the existing
+      `get_blockchain_info` — field names VERIFY'd live against a real
+      regtest node (see DECISIONS.md), not assumed
+- [ ] `nk-core`: disk-usage helper (used-by-data-dir + free-on-volume),
+      reusing `sysinfo` the same way `system_check` already does
+- [ ] `nk-proc`: track each running process's start time for uptime
+- [ ] A status aggregator (src-tauri command, composing the above) —
+      integration-tested via nk-testkit against a real regtest node
+
+Backend — log viewer (item 2: "never load a whole file")
+- [ ] `nk-core` (or a small new module): tail-from-end file reader
+      (seek, not full read), plus search/filter over the tailed window;
+      tested against files larger than the tail window
+
+Backend — process manager wiring for the dashboard
+- [ ] src-tauri app state: running processes per environment + one
+      shared `Executor` instance whose broadcast stream feeds both the
+      history persistence above and the frontend event bridge below
+- [ ] Tauri commands: start/stop/restart per environment, status query
+- [ ] Background task bridging `Executor` events to the frontend
+      (Tauri's event system) for the Live Command Monitor
+
+Frontend — Live Command Monitor (item 7)
+- [ ] Resizable bottom drawer: show/hide (top-bar toggle + keyboard
+      shortcut), remembered size/state, pulsing activity indicator when
+      hidden and commands run
+- [ ] Entry list: timestamp, environment tag (color + text), source,
+      full command, status, duration, exit code, expandable live output
+- [ ] Filters: environment, source, status, text search; background
+      polling hidden by default with a toggle
+- [ ] Per-entry: copy command, "Open in console" (pre-fill only, no
+      execution — the console itself is Phase 7), copy output
+- [ ] Panel controls: pause/resume auto-scroll, clear view, export to
+      text file
+- [ ] Pop-out into its own window (VERIFY Tauri 2's multi-window
+      approach)
+- [ ] "Learn mode": `ConfirmDialog` also shows the exact command that
+      will run
+
+Frontend — Dashboard (item 2)
+- [ ] Bitcoin Core panel: block height vs header height, verification
+      progress %, ETA, peers, mempool, disk used, uptime
+- [ ] Status badges with text labels (Syncing / Indexing / Ready)
+- [ ] Start / stop / restart controls wired to the process manager
+- [ ] Log viewer: tail + page, search/filter, never loads a whole file
+- [ ] Disk monitor: projected usage including the (future) ord index,
+      warns well before free space gets low
+
+Acceptance criteria (from docs/SPEC.md Phase 3 "Done when"):
+- [ ] [CI] every command from Phase 2 is recorded by the monitor
+      backend; secrets are redacted in records and exports
+- [ ] [CI] a busy port produces the friendly error
+- [ ] [MANUAL] a large debug.log opens instantly; show/hide and pop-out
+      work
 
 ## Phase 4 — ord integration
 

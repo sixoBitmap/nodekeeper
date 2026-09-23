@@ -645,6 +645,32 @@ including the real regtest bitcoind spawn, passed. Pushed and confirmed
 green on all 3 OSes: run `35795672861`, with `cargo test` actually
 executing (not skipping) the real regtest integration test on every OS.
 
+## Phase 3 — VERIFY: dashboard RPC field names (2026-09-23)
+
+Before writing the dashboard status aggregator, checked the real RPC
+response shapes against a throwaway regtest `bitcoind` 31.1 (started
+manually, cookie-authenticated `bitcoin-cli`, torn down after) rather
+than assuming field names from memory:
+
+`getblockchaininfo`: `blocks`, `headers`, `verificationprogress`,
+`initialblockdownload` (bool), `size_on_disk`, `pruned`, `warnings`
+(array). No `connections` field here (confirmed — it's on
+`getnetworkinfo`, not `getblockchaininfo`, in 31.1).
+
+`getnetworkinfo`: `connections`, `connections_in`, `connections_out`.
+
+`getmempoolinfo`: `size` (tx count), `bytes`, `usage`, plus fee-related
+fields not needed for the dashboard.
+
+These three RPCs together cover docs/SPEC.md item 2's dashboard fields:
+block height vs header height (`blocks`/`headers`), verification
+progress % (`verificationprogress`), peers (`getnetworkinfo`'s
+`connections`), mempool (`getmempoolinfo`'s `size`/`bytes`), disk used
+(`size_on_disk`, though the spec also wants *projected* usage including
+the ord index, which isn't an RPC field — computed separately from the
+filesystem). Uptime isn't an RPC field either — tracked by nk-proc from
+the process's own start time.
+
 ## Phase 2 — security self-review (2026-09-23)
 
 Per CLAUDE.md/docs/SPEC.md's "Security self-review at the end of Phases 2,
