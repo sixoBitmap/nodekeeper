@@ -20,6 +20,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Working hypothesis (not yet confirmed -- see DECISIONS.md) for
+      # repeated windows-latest-only `cargo test` flakiness (nk-testkit's
+      # real-bitcoind tests intermittently exceeding a 60s-per-phase
+      # startup timeout, even under `#[serial]`-enforced single-instance
+      # execution, which rules out cross-binary process concurrency as
+      # the cause). Windows Defender's real-time scan of a freshly-
+      # extracted, freshly-executed bitcoind.exe is a well-documented
+      # source of exactly this kind of first-run latency on Windows CI
+      # runners. Excluding the whole checkout (covers both the extracted
+      # binary and cargo's own build output) before anything is written
+      # to disk.
+      - name: Exclude repo from Windows Defender scanning
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+
       - name: Install Linux Tauri/webkit build deps
         if: matrix.os == 'ubuntu-latest'
         run: |

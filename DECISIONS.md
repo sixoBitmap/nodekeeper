@@ -645,6 +645,48 @@ including the real regtest bitcoind spawn, passed. Pushed and confirmed
 green on all 3 OSes: run `35795672861`, with `cargo test` actually
 executing (not skipping) the real regtest integration test on every OS.
 
+## Phase 3 — windows-latest CI flakiness, take 4: reconsidering the diagnosis (2026-09-23)
+
+CI run 35916368300 hit the exact same `Bitcoind(StartupTimeout)` failure
+a fourth time, on windows-latest only, *despite* the `#[serial(real_
+bitcoind)]` tagging from the previous fix (which was confirmed CI-green
+twice already, on runs 35908060500 and 35914261232 -- so it isn't that
+the tagging silently regressed).
+
+Re-examined the timing rather than pushing another timeout increase:
+the failing test (`a_fixture_dropped_without_stop_does_not_leave_an_
+orphan`) took ~63 seconds to fail, but `cargo test --workspace`'s own
+console output shows each test *binary* running to completion before
+the next one's "Running unittests" line appears -- no interleaving.
+That's consistent with cargo's actual default behavior (test binaries
+run sequentially, not concurrently; only tests *within* one binary run
+in parallel by default) -- which means the "4 concurrent bitcoind
+processes competing for CPU" theory behind the last two fixes was
+likely never the real mechanism, even though `#[serial]` tagging
+happened to make the CI pass twice (plausibly by coincidence, or by
+narrowing a real but different race, e.g. port allocation timing).
+
+Tried to confirm directly: ran the full local workspace suite while
+sampling `Get-Process bitcoind` every 1.5s in parallel. Never observed
+more than 0-1 processes at a time locally -- but this machine has never
+reproduced the failure at all, so a clean local sample doesn't rule out
+real concurrency on a slower CI runner either. Inconclusive by itself.
+
+New working hypothesis, matching the actual symptom better (a fixed,
+large, intermittent per-run latency spike specific to windows-latest,
+not scaling with how many *other* bitcoind processes happen to be
+running): Windows Defender's real-time scan of a freshly-extracted,
+freshly-executed `bitcoind.exe` is a well-documented source of exactly
+this kind of first-run latency on GitHub-hosted Windows runners.
+Genuinely untested until now -- added a Windows-only CI step
+(`Add-MpPreference -ExclusionPath`) excluding the whole checkout before
+anything is written to disk, and left the existing 60s-per-phase
+timeout and `#[serial]` tagging in place rather than removing them (no
+evidence they're actively harmful, even if the concurrency theory
+behind them turns out to have been the wrong mechanism). **Recorded as
+a hypothesis being tested, not a confirmed fix** -- will update this
+entry once (if) a run actually confirms it.
+
 ## Phase 3 — VERIFY: debug.log's location (2026-09-23)
 
 Before wiring the log viewer's Tauri commands, checked live (throwaway
