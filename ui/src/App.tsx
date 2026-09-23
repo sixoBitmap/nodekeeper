@@ -6,6 +6,7 @@ import { DashboardScreen } from "@/components/DashboardScreen";
 import { EnvBanner } from "@/components/EnvBanner";
 import { EnvironmentSwitcher } from "@/components/EnvironmentSwitcher";
 import { FirstRunDisclaimer } from "@/components/FirstRunDisclaimer";
+import { LiveCommandMonitor } from "@/components/LiveCommandMonitor";
 import { SystemCheckScreen } from "@/components/SystemCheckScreen";
 import { selectedEnvironment, useEnvironmentStore } from "@/store/environment";
 import { useThemeStore } from "@/store/theme";
@@ -69,6 +70,7 @@ function App() {
           <SystemCheckScreen onContinue={() => setPastSystemCheck(true)} />
         )}
       </main>
+      <LiveCommandMonitor />
     </div>
   );
 }

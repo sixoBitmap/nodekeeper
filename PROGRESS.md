@@ -514,21 +514,60 @@ Backend — process manager wiring for the dashboard
       events, the same mistake the history bridge already avoided
 
 Frontend — Live Command Monitor (item 7)
-- [ ] Resizable bottom drawer: show/hide (top-bar toggle + keyboard
+- [x] Resizable bottom drawer: show/hide (top-bar toggle + keyboard
       shortcut), remembered size/state, pulsing activity indicator when
-      hidden and commands run
-- [ ] Entry list: timestamp, environment tag (color + text), source,
-      full command, status, duration, exit code, expandable live output
-- [ ] Filters: environment, source, status, text search; background
-      polling hidden by default with a toggle
-- [ ] Per-entry: copy command, "Open in console" (pre-fill only, no
-      execution — the console itself is Phase 7), copy output
-- [ ] Panel controls: pause/resume auto-scroll, clear view, export to
-      text file
-- [ ] Pop-out into its own window (VERIFY Tauri 2's multi-window
-      approach)
-- [ ] "Learn mode": `ConfirmDialog` also shows the exact command that
-      will run
+      hidden and commands run — `LiveCommandMonitor`/`store/monitor.ts`.
+      Show/hide state and height persisted via `get_setting`/
+      `set_setting` (`monitor_visible`/`monitor_height_px`); shortcut is
+      Ctrl/Cmd+\` (backtick); drag the top edge to resize
+- [x] Entry list: timestamp, environment tag (text only — see note
+      below), source, full command, status, duration, exit code,
+      expandable live output — hydrated from `list_command_history` on
+      open, then kept live via the `exec-event` Tauri event bridge
+      (Started/Output/Finished merged by command id)
+- [x] Filters: environment, source, status, text search — all real and
+      working. "Background polling hidden by default with a toggle":
+      the toggle exists but currently has nothing to filter, since
+      nothing in the app tags any command as background yet (no
+      periodic poller goes through the central executor today — the
+      Dashboard's own polling calls `node_status` directly, bypassing
+      nk-exec entirely). A real gap, tracked here, not a decorative
+      control pretending to work
+- [x] Per-entry: copy command, copy output — both wired to the
+      clipboard. **"Open in console" intentionally omitted**: it's
+      meant to pre-fill a console tab, and there's no console to
+      pre-fill until Phase 7 builds one; a disabled placeholder button
+      felt more like a half-finished stub than an honest gap, so it's
+      just not there yet
+- [x] Panel controls: pause/resume auto-scroll, clear view, export to
+      text file — export uses a client-side Blob download (no backend
+      involved, nothing to redact beyond what's already redacted)
+- [ ] Pop-out into its own window — **deferred, not attempted**: needs
+      a routing split (a window-type flag so a popped-out window renders
+      only the monitor, not the full app shell) and a Tauri capabilities
+      change (window creation) that haven't been verified against Tauri
+      2's actual multi-window API. Scoped out rather than rushed
+- [ ] "Learn mode": `ConfirmDialog` already supports it (`learnMode`/
+      `command` props, Phase 1) but nothing calls `ConfirmDialog` with a
+      real command yet — no fund-moving action exists until Phase 5+.
+      Nothing to wire this into yet, not a missed step
+
+Environment tag color: shown as plain text, not color-coded per chain.
+An entry's `environment` field is a free-text label (users can rename
+an environment, e.g. "Dev Box" — Foundation A), not a `Chain` value, so
+there's no reliable way to map it back to `chainBgClass` without
+threading the actual `Chain` through the event/history schema, which
+isn't there today. Showing a wrong color would be worse than showing
+no color.
+
+Verified in the browser (dev server, mocked IPC): opened the drawer via
+the toggle, all filter controls render and respond, "No commands yet"
+shows correctly (mocked history is empty), pause/resume auto-scroll
+toggles its own label. The live `exec-event` subscription itself can't
+be exercised in the browser preview (no real Tauri backend) — it fails
+closed with a caught, logged warning (`dev-tauri-mock: no mock for IPC
+command "plugin:event|listen"`) rather than crashing the panel; actual
+live-event behavior needs a real Tauri app run to verify, not done yet.
 
 Frontend — Dashboard (item 2)
 - [x] Bitcoin Core panel: block height vs header height, verification

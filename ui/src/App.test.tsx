@@ -31,6 +31,8 @@ function mockInvoke(disclaimerAcknowledged: boolean) {
         return Promise.resolve(ENVIRONMENTS);
       case "system_check":
         return Promise.resolve(SYSTEM_CHECK);
+      case "list_command_history":
+        return Promise.resolve([]);
       default:
         return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
     }

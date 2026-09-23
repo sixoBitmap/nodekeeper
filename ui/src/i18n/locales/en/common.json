@@ -124,5 +124,21 @@
     "loadOlder": "Load older",
     "empty": "No log output yet.",
     "noMatches": "No matching lines."
+  },
+  "monitor": {
+    "toggle": "Command Monitor",
+    "searchPlaceholder": "Search commands",
+    "allEnvironments": "All environments",
+    "allSources": "All sources",
+    "allStatuses": "All statuses",
+    "showBackgroundPolling": "Show background polling",
+    "pauseAutoScroll": "Pause auto-scroll",
+    "resumeAutoScroll": "Resume auto-scroll",
+    "clear": "Clear",
+    "export": "Export",
+    "empty": "No commands yet.",
+    "copyCommand": "Copy command",
+    "copyOutput": "Copy output",
+    "noOutput": "(no output)"
   }
 }

@@ -345,5 +345,6 @@ mod tests {
         node_manager::NodeStatus::export_all(&config).unwrap();
         nk_core::log_tail::LogWindow::export_all(&config).unwrap();
         nk_store::CommandHistoryEntry::export_all(&config).unwrap();
+        nk_exec::ExecEvent::export_all(&config).unwrap();
     }
 }
