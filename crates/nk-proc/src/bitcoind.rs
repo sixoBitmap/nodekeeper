@@ -116,6 +116,15 @@ impl BitcoindProcess {
     /// one call so real app code and test fixtures don't each duplicate
     /// it — shared by `nk-testkit`'s `RegtestFixture` and the real app's
     /// dashboard start control.
+    ///
+    /// `ready_timeout` applies separately to *each* phase (cookie
+    /// appearing, then RPC responding), not to their sum — under load
+    /// (e.g. several regtest fixtures starting concurrently in CI) the
+    /// cookie can legitimately take close to the full budget to appear,
+    /// which would otherwise leave the RPC-ready wait starved of time
+    /// it needs. A single shared deadline here previously halved the
+    /// real-world budget this had before the two phases were
+    /// consolidated into one function, and broke CI (see DECISIONS.md).
     #[allow(clippy::too_many_arguments)]
     pub async fn start_and_wait_ready(
         binary_path: &Path,
@@ -126,11 +135,11 @@ impl BitcoindProcess {
         ready_timeout: Duration,
     ) -> Result<(Self, nk_rpc::RpcClient), BitcoindError> {
         let process = Self::start(binary_path, environment).await?;
-        let deadline = tokio::time::Instant::now() + ready_timeout;
 
+        let cookie_deadline = tokio::time::Instant::now() + ready_timeout;
         let cookie_path = environment.bitcoin_cookie_path();
         while !cookie_path.exists() {
-            if tokio::time::Instant::now() >= deadline {
+            if tokio::time::Instant::now() >= cookie_deadline {
                 return Err(BitcoindError::StartupTimeout);
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -144,11 +153,12 @@ impl BitcoindProcess {
             environment.chain,
         )?;
 
+        let rpc_deadline = tokio::time::Instant::now() + ready_timeout;
         loop {
             if rpc.get_blockchain_info().await.is_ok() {
                 return Ok((process, rpc));
             }
-            if tokio::time::Instant::now() >= deadline {
+            if tokio::time::Instant::now() >= rpc_deadline {
                 return Err(BitcoindError::StartupTimeout);
             }
             tokio::time::sleep(Duration::from_millis(200)).await;

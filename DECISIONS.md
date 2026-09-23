@@ -686,6 +686,29 @@ building the full wizard first — set the setting manually (e.g. to the
 path `fetch_bitcoin_core` prints) until a real wizard screen exists to
 write it.
 
+**CI-only bug found via the real CI run** (not caught locally — passed
+every local run on this machine): the consolidation above quietly
+halved a timeout budget. The original `nk-testkit` code gave the
+cookie-file wait its own 30s deadline and the RPC-ready wait its own
+*separate* 30s deadline (up to 60s combined, worst case). The
+consolidated `start_and_wait_ready` computed one shared deadline up
+front and reused it for both phases — up to 30s combined instead of 60s.
+Never showed up locally (this machine is fast enough, and rarely runs
+more than one regtest fixture at a time), but CI runs `cargo test
+--workspace` with multiple crates' real-bitcoind tests in parallel
+(now 4 concurrent `bitcoind` starts across `nk-testkit`'s 3 tests plus
+`node_manager`'s new one, up from 3), and macOS/Windows runners hit the
+new, tighter 30s combined budget: `panicked ... bitcoind should start:
+Bitcoind(StartupTimeout)` (`nk-testkit/src/lib.rs:150` on macOS,
+`:216` on Windows) — ubuntu-latest's job passed fully, only macOS/
+Windows failed, consistent with a timing-margin issue rather than a
+logic bug. Fixed by giving each phase its own independent deadline
+again (see the updated doc comment on `start_and_wait_ready`), restoring
+the original 60s worst-case combined budget. This is exactly the kind
+of failure mode `DECISIONS.md`'s house rule already exists for: verify
+against the real, contended CI environment, not just a fast local
+machine running one thing at a time.
+
 ## Phase 3 — VERIFY: dashboard RPC field names (2026-09-23)
 
 Before writing the dashboard status aggregator, checked the real RPC
