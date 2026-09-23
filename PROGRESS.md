@@ -541,8 +541,18 @@ Frontend — Dashboard (item 2)
 
 Acceptance criteria (from docs/SPEC.md Phase 3 "Done when"):
 - [ ] [CI] every command from Phase 2 is recorded by the monitor
-      backend; secrets are redacted in records and exports
-- [ ] [CI] a busy port produces the friendly error
+      backend; secrets are redacted in records and exports — the
+      *recording* half is done and CI-tested (`nk_store::
+      history_bridge`'s tests prove a full command lifecycle is
+      persisted, and that a `Sensitivity::Sensitive` command's real
+      output never reaches `command_history`, only the placeholder).
+      Left unchecked because "exports" isn't built yet — the Live
+      Command Monitor's export-to-text-file control doesn't exist
+      until the frontend task below does
+- [x] [CI] a busy port produces the friendly error —
+      `nk-proc::bitcoind::tests::starting_with_a_busy_rpc_port_fails_
+      with_the_friendly_error`, part of every `cargo test --workspace`
+      run, confirmed on all 3 OSes
 - [ ] [MANUAL] a large debug.log opens instantly; show/hide and pop-out
       work
 
