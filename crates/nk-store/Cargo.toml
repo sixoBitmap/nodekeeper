@@ -9,6 +9,8 @@ publish.workspace = true
 rusqlite = { version = "0.40", features = ["bundled"] }
 rusqlite_migration = "2"
 thiserror = { workspace = true }
+serde = { workspace = true }
+ts-rs = "12"
 
 [dev-dependencies]
 tempfile = "3"
