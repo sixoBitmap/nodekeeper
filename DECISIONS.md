@@ -645,6 +645,18 @@ including the real regtest bitcoind spawn, passed. Pushed and confirmed
 green on all 3 OSes: run `35795672861`, with `cargo test` actually
 executing (not skipping) the real regtest integration test on every OS.
 
+## Phase 3 — VERIFY: debug.log's location (2026-09-23)
+
+Before wiring the log viewer's Tauri commands, checked live (throwaway
+regtest `bitcoind` 31.1, started manually, inspected its data
+directory, torn down after) rather than assuming: `debug.log` lives at
+`<-datadir>/<chain-subdir>/debug.log` — the exact same directory as
+`.cookie`, `bitcoind.pid`, and `wallets/` (i.e. `Environment::
+bitcoin_chain_dir()`, already resolved correctly for every chain
+including mainnet's no-subfolder case). Added
+`Environment::bitcoin_debug_log_path()` alongside the existing
+`bitcoin_cookie_path()` or that basis.
+
 ## Phase 3 — real app process-manager wiring (2026-09-23)
 
 Built `src-tauri::node_manager::NodeManager`, the real (not test-only)

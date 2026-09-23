@@ -88,6 +88,15 @@ impl From<String> for TypedError {
     }
 }
 
+impl From<std::io::Error> for TypedError {
+    fn from(e: std::io::Error) -> Self {
+        TypedError {
+            code: None,
+            message: e.to_string(),
+        }
+    }
+}
+
 /// The settings key an (eventual) setup wizard writes once it downloads
 /// and verifies a Bitcoin Core binary into a real install location —
 /// see `node_manager`'s doc comment for why start/stop reads this
@@ -178,6 +187,68 @@ fn is_node_running(chain: Chain, node_manager: tauri::State<'_, NodeManager>) ->
     node_manager.is_running(chain)
 }
 
+/// Default tail/page window: generous enough to show a useful amount of
+/// recent log context without ever reading more of a (possibly
+/// multi-GB) file than this (docs/SPEC.md item 2: "never load a whole
+/// file").
+const DEFAULT_LOG_WINDOW_BYTES: u64 = 256 * 1024;
+
+#[tauri::command]
+fn tail_debug_log(chain: Chain) -> Result<nk_core::log_tail::LogWindow, TypedError> {
+    let environment = Environment::new_default(chain, data_root());
+    nk_core::log_tail::tail(
+        &environment.bitcoin_debug_log_path(),
+        DEFAULT_LOG_WINDOW_BYTES,
+    )
+    .map_err(TypedError::from)
+}
+
+/// Scrolls further back ("load older") from a previous `tail_debug_log`
+/// or `page_debug_log_before` call's `start_offset`.
+#[tauri::command]
+fn page_debug_log_before(
+    chain: Chain,
+    end_offset: u64,
+) -> Result<nk_core::log_tail::LogWindow, TypedError> {
+    let environment = Environment::new_default(chain, data_root());
+    nk_core::log_tail::page_before(
+        &environment.bitcoin_debug_log_path(),
+        end_offset,
+        DEFAULT_LOG_WINDOW_BYTES,
+    )
+    .map_err(TypedError::from)
+}
+
+const MAX_LOG_SEARCH_MATCHES: usize = 500;
+
+#[tauri::command]
+fn search_debug_log(chain: Chain, query: String) -> Result<Vec<String>, TypedError> {
+    let environment = Environment::new_default(chain, data_root());
+    nk_core::log_tail::search(
+        &environment.bitcoin_debug_log_path(),
+        &query,
+        MAX_LOG_SEARCH_MATCHES,
+    )
+    .map_err(TypedError::from)
+}
+
+const DEFAULT_HISTORY_LIMIT: u32 = 500;
+
+/// Rolling command history for the Live Command Monitor (docs/SPEC.md
+/// item 7). `environment` filters to one environment's commands, or
+/// `None` for every environment.
+#[tauri::command]
+fn list_command_history(
+    store: tauri::State<Arc<Mutex<Store>>>,
+    environment: Option<String>,
+) -> Result<Vec<nk_store::CommandHistoryEntry>, TypedError> {
+    store
+        .lock()
+        .unwrap()
+        .list_command_history(environment.as_deref(), DEFAULT_HISTORY_LIMIT)
+        .map_err(|e| TypedError::from(e.to_string()))
+}
+
 /// Placeholder (see `list_default_environments`'s doc comment for the
 /// same caveat): proper OS-specific app-data-dir resolution, and
 /// portable-vs-installed mode, are a later-phase concern.
@@ -245,6 +316,10 @@ pub fn run() {
             restart_node,
             node_status,
             is_node_running,
+            tail_debug_log,
+            page_debug_log_before,
+            search_debug_log,
+            list_command_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -268,5 +343,7 @@ mod tests {
         AppErrorCode::export_all(&config).unwrap();
         TypedError::export_all(&config).unwrap();
         node_manager::NodeStatus::export_all(&config).unwrap();
+        nk_core::log_tail::LogWindow::export_all(&config).unwrap();
+        nk_store::CommandHistoryEntry::export_all(&config).unwrap();
     }
 }

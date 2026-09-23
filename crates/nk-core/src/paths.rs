@@ -29,6 +29,13 @@ impl Environment {
         self.bitcoin_chain_dir().join("wallets")
     }
 
+    /// bitcoind's log file (docs/SPEC.md item 2's log viewer) — the same
+    /// directory as `.cookie`/`bitcoind.pid`/`wallets/` (confirmed live
+    /// — DECISIONS.md).
+    pub fn bitcoin_debug_log_path(&self) -> PathBuf {
+        self.bitcoin_chain_dir().join("debug.log")
+    }
+
     /// Directory to pass as ord's `--data-dir`.
     pub fn ord_datadir_arg(&self) -> PathBuf {
         self.data_root.join("ord")
@@ -110,6 +117,10 @@ mod tests {
         assert_eq!(
             e.bitcoin_cookie_path(),
             Path::new("/data/mainnet/bitcoin/.cookie")
+        );
+        assert_eq!(
+            e.bitcoin_debug_log_path(),
+            Path::new("/data/mainnet/bitcoin/debug.log")
         );
         assert_eq!(e.ord_index_dir(), Path::new("/data/mainnet/ord"));
     }
