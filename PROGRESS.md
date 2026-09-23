@@ -503,11 +503,15 @@ Backend — process manager wiring for the dashboard
       correctly reports `NotRunning`, not stale data
 - [x] Background task persisting `Executor` events into `command_history`
       — spawned once in `run()`'s `.setup()` hook via `nk_store::
-      persist_exec_events` (the previous commit's bridge). **Not yet
-      done**: re-emitting `ExecEvent`s as Tauri events for the frontend
-      to subscribe to live (the Live Command Monitor UI itself needs
-      this, and doesn't exist yet) — only the history-persistence side
-      of "bridging to the frontend" is wired so far
+      persist_exec_events`
+- [x] Background task re-emitting `ExecEvent`s as Tauri events
+      (`app_handle.emit("exec-event", event)`) for the (still to be
+      built) Live Command Monitor UI to `listen()` for — a second task
+      subscribed to the same shared `Executor`, spawned alongside the
+      history-persistence one. Correctly distinguishes a lagged
+      receiver (keep forwarding what arrives next) from a closed one
+      (stop) rather than silently dying on the first missed burst of
+      events, the same mistake the history bridge already avoided
 
 Frontend — Live Command Monitor (item 7)
 - [ ] Resizable bottom drawer: show/hide (top-bar toggle + keyboard

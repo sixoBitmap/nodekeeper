@@ -7,6 +7,7 @@ use nk_store::Store;
 use node_manager::{NodeManager, NodeManagerError};
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
+use tauri::Emitter;
 use ts_rs::TS;
 
 /// Runs the setup-wizard system check (OS/CPU/RAM/disk) for the given data
@@ -199,7 +200,7 @@ pub fn run() {
         .manage(store.clone())
         .manage(executor.clone())
         .manage(node_manager)
-        .setup(move |_app| {
+        .setup(move |app| {
             // Feeds every command the Live Command Monitor will show
             // (Phase 3) into the rolling history table (docs/SPEC.md
             // item 7) — started once, for the app's lifetime, alongside
@@ -209,6 +210,29 @@ pub fn run() {
                 store.clone(),
                 executor.subscribe(),
             ));
+
+            // Live feed for the Live Command Monitor UI itself: every
+            // ExecEvent re-emitted as a Tauri event, for the frontend to
+            // `listen("exec-event", ...)`. Already redacted/placeholder'd
+            // by nk-exec (Phase 2) before it ever reaches this stream --
+            // nothing more to withhold at this layer.
+            let app_handle = app.handle().clone();
+            let mut frontend_events = executor.subscribe();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    match frontend_events.recv().await {
+                        Ok(event) => {
+                            let _ = app_handle.emit("exec-event", event);
+                        }
+                        // A slow/absent listener missed some events --
+                        // keep forwarding what arrives next rather than
+                        // giving up on the stream entirely.
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

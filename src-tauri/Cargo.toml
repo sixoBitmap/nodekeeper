@@ -30,6 +30,7 @@ nk-store = { workspace = true }
 nk-exec = { workspace = true }
 nk-proc = { workspace = true }
 nk-rpc = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
