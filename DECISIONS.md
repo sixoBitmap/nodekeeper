@@ -683,9 +683,17 @@ Genuinely untested until now -- added a Windows-only CI step
 anything is written to disk, and left the existing 60s-per-phase
 timeout and `#[serial]` tagging in place rather than removing them (no
 evidence they're actively harmful, even if the concurrency theory
-behind them turns out to have been the wrong mechanism). **Recorded as
-a hypothesis being tested, not a confirmed fix** -- will update this
-entry once (if) a run actually confirms it.
+behind them turns out to have been the wrong mechanism).
+
+**Confirmed**: pushed and watched CI run 35918056335 — green on all 3
+OSes. windows-latest's job finished in 6m31s, down from the 8-18 minute
+range every previous run in this saga took (including the successful
+ones), consistent with the Defender real-time scan being the actual
+overhead removed. This is the real fix; the `#[serial]` tagging and
+60s timeout from the earlier attempts are left in place as reasonable
+belt-and-suspenders (neither is harmful, and the timeout is still a
+sane bound for genuinely slow environments), but the Defender exclusion
+is what actually resolved the four-attempt saga.
 
 ## Phase 3 — VERIFY: debug.log's location (2026-09-23)
 
