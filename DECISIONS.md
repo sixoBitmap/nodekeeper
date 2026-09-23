@@ -744,7 +744,11 @@ compile itself, still competing with the first serialized test) — a
 second run moments later, nothing else competing, passed all 3
 `nk-testkit` tests in 7.79s — sequential is noticeably slower per run
 than the original concurrent version, but actually reliable, which
-concurrent-but-flaky wasn't. Pushed for a fourth CI verification.
+concurrent-but-flaky wasn't. **Confirmed**: pushed and watched a fourth
+CI run (35908060500) — green on all 3 OSes, windows-latest's job
+taking 18m13s (up from ~7-8m when concurrent, the expected cost of
+serializing 4 real bitcoind lifecycles instead of racing them), but
+reliably so.
 
 ## Phase 3 — VERIFY: dashboard RPC field names (2026-09-23)
 
