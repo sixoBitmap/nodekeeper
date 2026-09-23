@@ -428,13 +428,20 @@ Backend — monitor history (docs/SPEC.md item 7)
 
 Backend — plain-language errors (item 8, [CI] "a busy port produces the
 friendly error")
-- [ ] Typed error-code enum (PORT_IN_USE, DISK_FULL, INDEX_BEHIND,
+- [x] Typed error-code enum (PORT_IN_USE, DISK_FULL, INDEX_BEHIND,
       INDEX_OPTION_DISABLED, WALLET_LOCKED, RPC_WARMING_UP,
-      ORD_NOT_SYNCED, BINARY_NOT_VERIFIED), TS-exported
-- [ ] `nk-proc::BitcoindProcess::start` distinguishes "port already in
-      use" from other spawn failures and returns the typed error;
-      tested by binding the target port first and asserting the typed
-      error comes back
+      ORD_NOT_SYNCED, BINARY_NOT_VERIFIED), TS-exported —
+      `nk_core::AppErrorCode`; a code carries no message text itself,
+      the frontend owns code -> i18n mapping (next task). Serde's
+      `SCREAMING_SNAKE_CASE` wire format pinned by a test against the
+      spec's exact literal names rather than trusted blindly
+- [x] `nk-proc::BitcoindProcess::start` distinguishes "port already in
+      use" from other spawn failures and returns the typed error — a
+      pre-flight bind check on the RPC/P2P ports *before* spawning
+      (deterministic, not a race against bitcoind's own stderr);
+      tested by binding the target port first with a nonexistent
+      binary path and asserting `PortInUse` comes back before any
+      spawn attempt
 - [ ] Frontend: i18n message + "What to do" action per error code,
       wired into the existing `ErrorPanel` (Phase 1)
 

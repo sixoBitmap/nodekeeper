@@ -5,7 +5,8 @@
 //! commands and RPC calls *against* an already-running node.
 
 use crate::process_check::process_is_alive;
-use nk_core::Environment;
+use nk_core::{AppErrorCode, Environment};
+use std::net::TcpListener;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -15,12 +16,32 @@ use thiserror::Error;
 pub enum BitcoindError {
     #[error("bitcoind is already running on this data directory (pid {pid})")]
     AlreadyRunning { pid: u32 },
+    /// Detected *before* spawning (docs/SPEC.md item 8's "port in use"
+    /// friendly error): a pre-flight bind check on the RPC/P2P port,
+    /// not a parse of bitcoind's own startup failure message, which
+    /// would mean spawning it first and racing its stderr against a
+    /// string pattern. Checking first is deterministic and testable
+    /// without a real bitcoind binary at all.
+    #[error("port {port} is already in use")]
+    PortInUse { port: u16 },
     #[error("failed to spawn bitcoind: {0}")]
     Spawn(std::io::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("bitcoind did not exit within the timeout after being asked to stop")]
     StopTimeout,
+}
+
+impl BitcoindError {
+    /// The shared plain-language error code this failure maps to, if
+    /// any (docs/SPEC.md item 8) — `None` for failures with no good
+    /// user-facing code, which stay backend-only technical detail.
+    pub fn code(&self) -> Option<AppErrorCode> {
+        match self {
+            Self::PortInUse { .. } => Some(AppErrorCode::PortInUse),
+            Self::AlreadyRunning { .. } | Self::Spawn(_) | Self::Io(_) | Self::StopTimeout => None,
+        }
+    }
 }
 
 pub struct BitcoindProcess {
@@ -44,6 +65,8 @@ impl BitcoindProcess {
         if let Some(pid) = detect_running_bitcoind(environment) {
             return Err(BitcoindError::AlreadyRunning { pid });
         }
+        check_port_available(environment.rpc_port)?;
+        check_port_available(environment.p2p_port)?;
 
         let datadir = environment.bitcoin_datadir_arg();
         std::fs::create_dir_all(&datadir)?;
@@ -108,6 +131,17 @@ pub fn detect_running_bitcoind(environment: &Environment) -> Option<u32> {
     process_is_alive(pid).then_some(pid)
 }
 
+/// A pre-flight-only check: binding and immediately dropping a listener
+/// tells us the port was free *at that instant*, not that it will still
+/// be free by the time bitcoind itself tries to bind it (there's an
+/// unavoidable TOCTOU gap either way) — good enough for the spec's
+/// "produces the friendly error" bar, not a hard guarantee.
+fn check_port_available(port: u16) -> Result<(), BitcoindError> {
+    TcpListener::bind(("127.0.0.1", port))
+        .map(|_listener| ())
+        .map_err(|_| BitcoindError::PortInUse { port })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,6 +166,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(detect_running_bitcoind(&env), None);
+    }
+
+    #[test]
+    fn port_in_use_maps_to_the_shared_error_code() {
+        let err = BitcoindError::PortInUse { port: 8332 };
+        assert_eq!(err.code(), Some(AppErrorCode::PortInUse));
+    }
+
+    #[test]
+    fn other_errors_have_no_shared_code() {
+        assert_eq!(BitcoindError::AlreadyRunning { pid: 1 }.code(), None);
+        assert_eq!(BitcoindError::StopTimeout.code(), None);
+    }
+
+    /// The Phase 3 [CI] acceptance criterion ("a busy port produces the
+    /// friendly error"): occupy the RPC port first, then attempt to
+    /// start bitcoind -- the pre-flight check must catch this *before*
+    /// ever trying to spawn a process, so a nonexistent binary path
+    /// still produces `PortInUse`, not a spawn failure.
+    #[tokio::test]
+    async fn starting_with_a_busy_rpc_port_fails_with_the_friendly_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut env = Environment::new_default(Chain::Regtest, dir.path());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        env.rpc_port = listener.local_addr().unwrap().port();
+
+        let result = BitcoindProcess::start(Path::new("this-binary-does-not-exist"), &env).await;
+
+        assert!(matches!(
+            result,
+            Err(BitcoindError::PortInUse { port }) if port == env.rpc_port
+        ));
+        drop(listener);
     }
 
     /// A PID that's real enough to have existed a moment ago but is
