@@ -13,6 +13,7 @@ function entry(overrides: Partial<MonitorEntry>): MonitorEntry {
     exitCode: 0,
     durationMs: 10,
     output: "",
+    background: false,
     ...overrides,
   };
 }
@@ -59,6 +60,17 @@ describe("filteredEntries", () => {
     ];
     const result = filteredEntries(entries, { ...NO_FILTERS, text: "WALLET" });
     expect(result.map((e) => e.id)).toEqual(["1"]);
+  });
+
+  it("hides background entries by default, and shows them when the toggle is on", () => {
+    const entries = [
+      entry({ id: "1", background: false }),
+      entry({ id: "2", background: true }),
+    ];
+    expect(filteredEntries(entries, NO_FILTERS).map((e) => e.id)).toEqual(["1"]);
+    expect(
+      filteredEntries(entries, { ...NO_FILTERS, showBackgroundPolling: true }).map((e) => e.id),
+    ).toEqual(["1", "2"]);
   });
 
   it("combines multiple active filters", () => {

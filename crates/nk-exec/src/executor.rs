@@ -55,6 +55,7 @@ impl Executor {
             source: spec.source,
             triggering_action: spec.triggering_action.clone(),
             command_display: redact(&display_command(&spec.program, &spec.args), &spec.redact),
+            background: spec.background,
         });
 
         let mut child = Command::new(&spec.program)
@@ -139,6 +140,7 @@ impl Executor {
             source: spec.source,
             triggering_action: spec.triggering_action,
             command_display: redact(&spec.command_display, &spec.redact),
+            background: spec.background,
         });
 
         let result = op().await;
@@ -244,6 +246,7 @@ mod tests {
             triggering_action: "test".to_string(),
             sensitivity: Sensitivity::Normal,
             redact: vec![],
+            background: false,
         }
     }
 
@@ -343,6 +346,7 @@ mod tests {
             triggering_action: "wallet restore".to_string(),
             sensitivity: Sensitivity::Normal,
             redact: vec![],
+            background: false,
         };
         let outcome = executor.execute(spec).await.unwrap();
         assert!(String::from_utf8_lossy(&outcome.stdout).contains("secret-mnemonic-word"));
@@ -374,6 +378,7 @@ mod tests {
                         .to_string(),
                     redact: vec![],
                     sensitivity: Sensitivity::Normal,
+                    background: false,
                 },
                 || async { Ok(serde_json::json!(["blockhash123"])) },
             )
@@ -401,6 +406,24 @@ mod tests {
             }
         }
         assert!(saw_started && saw_finished_ok);
+    }
+
+    #[tokio::test]
+    async fn the_background_flag_reaches_the_started_event() {
+        let executor = Executor::new();
+        let mut rx = executor.subscribe();
+        let mut spec = shell_spec("echo hi");
+        spec.background = true;
+        executor.execute(spec).await.unwrap();
+
+        let mut saw_background_started = false;
+        while let Ok(event) = rx.try_recv() {
+            if let ExecEvent::Started { background, .. } = event {
+                assert!(background);
+                saw_background_started = true;
+            }
+        }
+        assert!(saw_background_started);
     }
 
     #[tokio::test]

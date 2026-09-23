@@ -422,9 +422,16 @@ Backend — monitor history (docs/SPEC.md item 7)
       `Executor` (full lifecycle persisted; a `Sensitivity::Sensitive`
       command's real output never reaches history, only the
       placeholder; the task exits once the `Executor` is dropped)
-- [ ] Mark background-polling events so the UI can hide them by default
+- [x] Mark background-polling events so the UI can hide them by default
       (spec: "Background polling is hidden by default with a Show
-      background polling toggle")
+      background polling toggle") — `background: bool` threaded through
+      `CommandSpec`/`RecordSpec`/`ExecEvent::Started`/`command_history`;
+      the caller decides per call, since the same RPC method (e.g.
+      `getblockchaininfo`) is a meaningful one-off check in one context
+      and polling noise in another. Tagged `true`: the Dashboard's
+      3-second status poll (`NodeManager::status`) and
+      `start_and_wait_ready`'s internal readiness-poll loop. Tested that
+      the flag survives end to end (`nk-exec` -> `nk-store`)
 
 Backend — plain-language errors (item 8, [CI] "a busy port produces the
 friendly error")
@@ -528,18 +535,15 @@ Frontend — Live Command Monitor (item 7)
       expandable live output — hydrated from `list_command_history` on
       open, then kept live via the `exec-event` Tauri event bridge
       (Started/Output/Finished merged by command id)
-- [x] Filters: environment, source, status, text search — all real and
-      working. "Background polling hidden by default with a toggle":
-      the toggle exists but currently has nothing to filter. **Correction
-      to an earlier note here**: the Dashboard's polling does *not*
-      bypass nk-exec — `node_status`'s RPC calls go through the same
-      real, shared `Executor` `start_node` wired up, so every 3-second
-      poll (3 RPC calls: blockchain/network/mempool info) genuinely
-      appears in the monitor. The actual gap is narrower: nothing marks
-      those specific commands as "background" so the toggle could hide
-      them — expect a live, running node to make the monitor fairly
-      busy with polling entries every few seconds until that tagging
-      exists
+- [x] Filters: environment, source, status, text search, background
+      polling — all real and working now. The Dashboard's 3-second
+      status poll and `start_and_wait_ready`'s internal readiness loop
+      are both tagged `background: true` end to end (backend task
+      above) and hidden by default, matching the spec; the toggle
+      reveals them. `filteredEntries` also excludes background entries
+      from the "activity while hidden" pulse, for the same reason
+      they're hidden from the list — a running node would otherwise
+      make the indicator pulse almost constantly
 - [x] Per-entry: copy command, copy output — both wired to the
       clipboard. **"Open in console" intentionally omitted**: it's
       meant to pre-fill a console tab, and there's no console to

@@ -17,6 +17,7 @@ export interface MonitorEntry {
   exitCode: number | null;
   durationMs: number | null;
   output: string;
+  background: boolean;
 }
 
 export interface MonitorFilters {
@@ -25,13 +26,7 @@ export interface MonitorFilters {
   status: MonitorStatus | null;
   text: string;
   /** docs/SPEC.md item 7: "Background polling is hidden by default
-   * with a Show background polling toggle." Present for that reason,
-   * but currently has nothing to filter -- nothing in the app tags a
-   * command as background yet (no periodic poller goes through the
-   * central executor today; the Dashboard's own polling calls
-   * `node_status` directly, not via nk-exec). A real, not decorative,
-   * gap -- left for whenever something produces background-tagged
-   * commands, tracked in PROGRESS.md. */
+   * with a Show background polling toggle." */
   showBackgroundPolling: boolean;
 }
 
@@ -74,6 +69,7 @@ function historyEntryToMonitorEntry(h: CommandHistoryEntry): MonitorEntry {
     exitCode: h.exit_code,
     durationMs: h.duration_ms,
     output: h.output,
+    background: h.background,
   };
 }
 
@@ -143,12 +139,17 @@ function applyExecEvent(
   get: () => MonitorState,
   event: ExecEvent,
 ) {
-  const markActivityIfHidden = () => {
-    if (!get().visible) set({ hasActivityWhileHidden: true });
+  // Background events (e.g. the Dashboard's 3-second status poll) are
+  // deliberately excluded from the activity pulse too -- with a node
+  // running, they'd otherwise make the indicator pulse near-constantly,
+  // defeating its purpose as a "something happened" signal (the same
+  // reasoning as hiding them from the entry list by default).
+  const markActivityIfHidden = (background: boolean) => {
+    if (!background && !get().visible) set({ hasActivityWhileHidden: true });
   };
 
   if (event.type === "Started") {
-    markActivityIfHidden();
+    markActivityIfHidden(event.background);
     const entry: MonitorEntry = {
       id: event.id,
       environment: event.environment,
@@ -160,6 +161,7 @@ function applyExecEvent(
       exitCode: null,
       durationMs: null,
       output: "",
+      background: event.background,
     };
     set((s) => ({ entries: [...s.entries, entry] }));
     return;
@@ -173,7 +175,8 @@ function applyExecEvent(
   }
 
   // Finished
-  markActivityIfHidden();
+  const entry = get().entries.find((e) => e.id === event.id);
+  markActivityIfHidden(entry?.background ?? false);
   set((s) => ({
     entries: s.entries.map((e) =>
       e.id === event.id
@@ -191,6 +194,7 @@ function applyExecEvent(
 export function filteredEntries(entries: MonitorEntry[], filters: MonitorFilters): MonitorEntry[] {
   const text = filters.text.trim().toLowerCase();
   return entries.filter((e) => {
+    if (e.background && !filters.showBackgroundPolling) return false;
     if (filters.environment && e.environment !== filters.environment) return false;
     if (filters.source && e.source !== filters.source) return false;
     if (filters.status && e.status !== filters.status) return false;

@@ -12,7 +12,7 @@ export type ExecEvent = { "type": "Started", id: CommandId, environment: string,
  * The command and its arguments, redacted, for display —
  * exactly what "Learn mode" and "copy command" show.
  */
-command_display: string, } | { "type": "Output", id: CommandId, stream: OutputStream, 
+command_display: string, background: boolean, } | { "type": "Output", id: CommandId, stream: OutputStream, 
 /**
  * Redacted, or `SENSITIVE_OUTPUT_PLACEHOLDER` for a sensitive
  * command.

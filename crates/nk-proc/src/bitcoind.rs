@@ -155,7 +155,10 @@ impl BitcoindProcess {
 
         let rpc_deadline = tokio::time::Instant::now() + ready_timeout;
         loop {
-            if rpc.get_blockchain_info().await.is_ok() {
+            // background: true -- this readiness poll can repeat many
+            // times (every 200ms) during a slow startup and isn't
+            // itself a meaningful user-facing check (docs/SPEC.md item 7).
+            if rpc.get_blockchain_info(true).await.is_ok() {
                 return Ok((process, rpc));
             }
             if tokio::time::Instant::now() >= rpc_deadline {

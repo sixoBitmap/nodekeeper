@@ -89,11 +89,18 @@ impl RpcClient {
 
     /// Makes a raw JSON-RPC call. Prefer the typed methods below where
     /// one exists; this is here for RPCs Nodekeeper doesn't wrap yet.
+    /// `background` is docs/SPEC.md item 7's "Background polling is
+    /// hidden by default with a Show background polling toggle" — the
+    /// caller decides, since the same RPC method can be a meaningful
+    /// one-off check in one context and repetitive polling noise in
+    /// another (e.g. `getblockchaininfo` for a dashboard refresh vs. a
+    /// startup readiness check).
     pub async fn call(
         &self,
         method: &str,
         params: Vec<Value>,
         triggering_action: &str,
+        background: bool,
     ) -> Result<Value, RpcError> {
         let display = self.equivalent_bitcoin_cli(method, &params);
         let http = self.http.clone();
@@ -111,6 +118,7 @@ impl RpcClient {
                     command_display: display,
                     redact: vec![],
                     sensitivity: Sensitivity::Normal,
+                    background,
                 },
                 move || async move { do_call(http, url, user, password, method, params).await },
             )
@@ -121,7 +129,7 @@ impl RpcClient {
     /// RPC, then waiting for the process to exit (the waiting is
     /// nk-proc's job, not this call's).
     pub async fn stop(&self) -> Result<(), RpcError> {
-        self.call("stop", vec![], "stop node").await?;
+        self.call("stop", vec![], "stop node", false).await?;
         Ok(())
     }
 
@@ -135,6 +143,7 @@ impl RpcClient {
                 "generatetoaddress",
                 vec![json!(nblocks), json!(address)],
                 "mine blocks",
+                false,
             )
             .await?;
         serde_json::from_value(result).map_err(|e| RpcError::UnexpectedResponse(e.to_string()))
@@ -142,7 +151,7 @@ impl RpcClient {
 
     pub async fn get_new_address(&self) -> Result<String, RpcError> {
         let result = self
-            .call("getnewaddress", vec![], "get new address")
+            .call("getnewaddress", vec![], "get new address", false)
             .await?;
         result
             .as_str()
@@ -150,8 +159,8 @@ impl RpcClient {
             .ok_or_else(|| RpcError::UnexpectedResponse("expected a string address".to_string()))
     }
 
-    pub async fn get_blockchain_info(&self) -> Result<Value, RpcError> {
-        self.call("getblockchaininfo", vec![], "check sync status")
+    pub async fn get_blockchain_info(&self, background: bool) -> Result<Value, RpcError> {
+        self.call("getblockchaininfo", vec![], "check sync status", background)
             .await
     }
 
@@ -159,14 +168,15 @@ impl RpcClient {
     /// Field names VERIFY'd live against a real regtest node, not
     /// assumed (DECISIONS.md, Phase 3) — `connections` lives on
     /// `getnetworkinfo`, not `getblockchaininfo`.
-    pub async fn get_network_info(&self) -> Result<Value, RpcError> {
-        self.call("getnetworkinfo", vec![], "check peer count")
+    pub async fn get_network_info(&self, background: bool) -> Result<Value, RpcError> {
+        self.call("getnetworkinfo", vec![], "check peer count", background)
             .await
     }
 
     /// Mempool stats for the dashboard (docs/SPEC.md item 2: "mempool").
-    pub async fn get_mempool_info(&self) -> Result<Value, RpcError> {
-        self.call("getmempoolinfo", vec![], "check mempool").await
+    pub async fn get_mempool_info(&self, background: bool) -> Result<Value, RpcError> {
+        self.call("getmempoolinfo", vec![], "check mempool", background)
+            .await
     }
 
     fn equivalent_bitcoin_cli(&self, method: &str, params: &[Value]) -> String {

@@ -193,9 +193,12 @@ impl NodeManager {
             )
         }; // lock released before the .await calls below
 
-        let blockchain_info = rpc.get_blockchain_info().await?;
-        let network_info = rpc.get_network_info().await?;
-        let mempool_info = rpc.get_mempool_info().await?;
+        // background: true -- this is the Dashboard's periodic status
+        // poll (docs/SPEC.md item 7's "background polling"), called
+        // every few seconds for as long as a screen is open.
+        let blockchain_info = rpc.get_blockchain_info(true).await?;
+        let network_info = rpc.get_network_info(true).await?;
+        let mempool_info = rpc.get_mempool_info(true).await?;
 
         Ok(NodeStatus {
             blocks: blockchain_info

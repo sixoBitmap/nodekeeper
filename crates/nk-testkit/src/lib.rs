@@ -96,6 +96,7 @@ impl RegtestFixture {
                         "createwallet",
                         vec![serde_json::json!("test")],
                         "test setup",
+                        false,
                     )
                     .await?;
                 self.rpc.get_new_address().await?
@@ -169,7 +170,7 @@ mod tests {
 
         let info = fixture
             .rpc
-            .get_blockchain_info()
+            .get_blockchain_info(false)
             .await
             .expect("node should respond to RPC");
         assert_eq!(info.get("blocks").and_then(|v| v.as_u64()), Some(101));
@@ -198,7 +199,7 @@ mod tests {
 
         let network_info = fixture
             .rpc
-            .get_network_info()
+            .get_network_info(false)
             .await
             .expect("getnetworkinfo should succeed");
         assert!(network_info
@@ -208,7 +209,7 @@ mod tests {
 
         let mempool_info = fixture
             .rpc
-            .get_mempool_info()
+            .get_mempool_info(false)
             .await
             .expect("getmempoolinfo should succeed");
         assert!(mempool_info.get("size").and_then(|v| v.as_u64()).is_some());

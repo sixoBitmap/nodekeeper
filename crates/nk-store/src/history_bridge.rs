@@ -49,6 +49,7 @@ fn persist_one(store: &Store, event: ExecEvent) -> Result<(), crate::StoreError>
             source,
             triggering_action,
             command_display,
+            background,
         } => store.record_command_started(
             &id.0.to_string(),
             &environment,
@@ -56,10 +57,7 @@ fn persist_one(store: &Store, event: ExecEvent) -> Result<(), crate::StoreError>
             &triggering_action,
             &command_display,
             now_ms(),
-            // Background-polling tagging is wired in a later Phase 3
-            // task, once something actually produces background-tagged
-            // commands (see PROGRESS.md).
-            false,
+            background,
         ),
         ExecEvent::Output { id, chunk, .. } => {
             store.append_command_output(&id.0.to_string(), &chunk)
@@ -108,6 +106,7 @@ mod tests {
             triggering_action: "test".to_string(),
             sensitivity: Sensitivity::Normal,
             redact: vec![],
+            background: false,
         }
     }
 
@@ -187,6 +186,27 @@ mod tests {
             .output
             .contains(nk_exec::SENSITIVE_OUTPUT_PLACEHOLDER));
 
+        bridge.abort();
+    }
+
+    #[tokio::test]
+    async fn the_background_flag_is_persisted_from_the_real_event() {
+        let executor = Executor::new();
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let bridge = tokio::spawn(persist_exec_events(store.clone(), executor.subscribe()));
+
+        let mut spec = shell_spec("echo polling");
+        spec.background = true;
+        executor.execute(spec).await.unwrap();
+
+        let entries = wait_until(&store, |entries| {
+            entries
+                .first()
+                .is_some_and(|e| e.status != crate::CommandHistoryStatus::Running)
+        })
+        .await;
+
+        assert!(entries[0].background);
         bridge.abort();
     }
 

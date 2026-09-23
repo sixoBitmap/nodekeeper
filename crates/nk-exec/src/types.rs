@@ -94,6 +94,12 @@ pub struct CommandSpec {
     /// apply to `Sensitivity::Sensitive` commands, whose entire output is
     /// already withheld from the normal channel regardless.
     pub redact: Vec<String>,
+    /// docs/SPEC.md item 7: "Background polling is hidden by default
+    /// with a Show background polling toggle." Set by the caller, not
+    /// inferred here — the same RPC method (e.g. `getblockchaininfo`)
+    /// can be a meaningful one-off check in one context and repetitive
+    /// polling noise in another.
+    pub background: bool,
 }
 
 /// Tagging info for `Executor::record` — the same shape as `CommandSpec`
@@ -109,6 +115,7 @@ pub struct RecordSpec {
     pub command_display: String,
     pub redact: Vec<String>,
     pub sensitivity: Sensitivity,
+    pub background: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -131,6 +138,7 @@ pub enum ExecEvent {
         /// The command and its arguments, redacted, for display —
         /// exactly what "Learn mode" and "copy command" show.
         command_display: String,
+        background: bool,
     },
     Output {
         id: CommandId,

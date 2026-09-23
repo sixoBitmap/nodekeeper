@@ -57,24 +57,19 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(datadir.join("bitcoin.conf"), &conf)?;
     eprintln!("Generated bitcoin.conf:\n{conf}");
 
-    eprintln!("Starting mainnet bitcoind...");
-    let process = BitcoindProcess::start(&binary_path, &environment).await?;
-    eprintln!("bitcoind started (pid {})", process.pid);
-
-    eprintln!("Waiting for the cookie file...");
-    wait_for_cookie(&environment).await?;
-
-    let rpc = RpcClient::from_cookie_file(
+    eprintln!("Starting mainnet bitcoind and waiting for it to become ready...");
+    let (process, rpc) = BitcoindProcess::start_and_wait_ready(
+        &binary_path,
+        &environment,
         format!("http://127.0.0.1:{}", environment.rpc_port),
-        &environment.bitcoin_cookie_path(),
         Executor::new(),
         "mainnet".to_string(),
-        Chain::Mainnet,
-    )?;
+        Duration::from_secs(60),
+    )
+    .await?;
+    eprintln!("bitcoind started (pid {})", process.pid);
 
-    eprintln!("Waiting for RPC to come up...");
-    wait_for_rpc_ready(&rpc).await?;
-    let info = rpc.get_blockchain_info().await?;
+    let info = rpc.get_blockchain_info(false).await?;
     eprintln!(
         "getblockchaininfo: chain={:?} blocks={:?}",
         info.get("chain"),
@@ -91,36 +86,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn wait_for_cookie(environment: &Environment) -> Result<(), Box<dyn std::error::Error>> {
-    let cookie_path = environment.bitcoin_cookie_path();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    while !cookie_path.exists() {
-        if tokio::time::Instant::now() >= deadline {
-            return Err("timed out waiting for the .cookie file".into());
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    Ok(())
-}
-
-async fn wait_for_rpc_ready(rpc: &RpcClient) -> Result<(), Box<dyn std::error::Error>> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        if rpc.get_blockchain_info().await.is_ok() {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err("timed out waiting for RPC to come up".into());
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
-
 async fn wait_for_a_peer(rpc: &RpcClient) -> Result<u64, Box<dyn std::error::Error>> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
     loop {
         let count = rpc
-            .call("getconnectioncount", vec![], "mainnet smoke test")
+            .call("getconnectioncount", vec![], "mainnet smoke test", true)
             .await?
             .as_u64()
             .ok_or("getconnectioncount did not return a number")?;
