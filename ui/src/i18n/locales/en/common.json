@@ -46,5 +46,83 @@
   },
   "environmentSwitcher": {
     "label": "Environment"
+  },
+  "errors": {
+    "generic": {
+      "title": "Something went wrong",
+      "message": "An unexpected error occurred."
+    },
+    "portInUse": {
+      "title": "Port already in use",
+      "message": "Another program (or another copy of Nodekeeper) is already using the port this node needs.",
+      "whatToDo": "Close the other program, or change this environment's port in settings, then try again."
+    },
+    "diskFull": {
+      "title": "Disk space is low",
+      "message": "There isn't enough free disk space to continue safely.",
+      "whatToDo": "Free up space on this drive, or choose a different data directory with more room."
+    },
+    "indexBehind": {
+      "title": "Index is behind",
+      "message": "The ord index hasn't caught up to the node yet, so this feature isn't ready.",
+      "whatToDo": "Wait for indexing to finish, then try again."
+    },
+    "indexOptionDisabled": {
+      "title": "This feature needs an index option",
+      "message": "This requires an index option that isn't enabled for this environment.",
+      "whatToDo": "Enable the required index option in settings. Note: this means a full reindex."
+    },
+    "walletLocked": {
+      "title": "Wallet is locked",
+      "message": "This action needs the wallet unlocked first.",
+      "whatToDo": "Unlock the wallet, then try again."
+    },
+    "rpcWarmingUp": {
+      "title": "Node is still starting up",
+      "message": "Bitcoin Core is warming up and isn't ready to answer requests yet.",
+      "whatToDo": "Wait a moment and try again."
+    },
+    "ordNotSynced": {
+      "title": "ord isn't caught up yet",
+      "message": "This action needs ord to be fully synced with the node first.",
+      "whatToDo": "Wait for ord to catch up, then try again."
+    },
+    "binaryNotVerified": {
+      "title": "No verified Bitcoin Core binary",
+      "message": "Nodekeeper doesn't have a verified Bitcoin Core binary configured for this installation yet.",
+      "whatToDo": "Run the setup wizard to download and verify Bitcoin Core."
+    }
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "start": "Start",
+    "stop": "Stop",
+    "restart": "Restart",
+    "blockHeight": "Block height",
+    "verificationProgress": "Verification progress",
+    "peers": "Peers",
+    "mempool": "Mempool",
+    "mempoolValue": "{{count}} txs ({{size}})",
+    "uptime": "Uptime",
+    "notRunning": "This node isn't running.",
+    "status": {
+      "stopped": "Stopped",
+      "starting": "Starting",
+      "syncing": "Syncing",
+      "ready": "Ready"
+    }
+  },
+  "diskMonitor": {
+    "title": "Disk usage",
+    "used": "Used by this environment",
+    "free": "Free on this drive",
+    "freeUnknown": "Unknown",
+    "lowSpace": "Low space"
+  },
+  "logViewer": {
+    "searchPlaceholder": "Search debug.log",
+    "loadOlder": "Load older",
+    "empty": "No log output yet.",
+    "noMatches": "No matching lines."
   }
 }

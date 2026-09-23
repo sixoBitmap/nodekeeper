@@ -3,8 +3,12 @@
 // the app calls. Only active in dev builds, and only when there's no
 // real Tauri context already — `tauri dev`/`tauri build` never load this.
 import { mockIPC } from "@tauri-apps/api/mocks";
+import type { Chain } from "@/bindings/Chain";
 import type { Environment } from "@/bindings/Environment";
+import type { NodeStatus } from "@/bindings/NodeStatus";
 import type { SystemCheck } from "@/bindings/SystemCheck";
+import type { LogWindow } from "@/bindings/LogWindow";
+import type { TypedError } from "@/bindings/TypedError";
 
 const MOCK_ENVIRONMENTS: Environment[] = [
   { chain: "mainnet", name: "Mainnet", rpc_port: 8332, p2p_port: 8333, ord_port: 8080, data_root: "data/mainnet" },
@@ -31,6 +35,41 @@ const MOCK_SYSTEM_CHECK: SystemCheck = {
 
 const settings = new Map<string, string>();
 
+// A tiny fake node lifecycle so the Dashboard has something real-ish to
+// show in the browser preview: "starting" (a few seconds of headers-
+// only sync) then "ready", entirely client-side.
+const runningSince = new Map<Chain, number>();
+
+const MOCK_LOG_LINES = [
+  "2026-09-23T12:00:00Z Bitcoin Core version v31.1",
+  "2026-09-23T12:00:00Z Using the 'x86_shani(1way,2way)' SHA256 implementation",
+  "2026-09-23T12:00:01Z Config file: (none)",
+  "2026-09-23T12:00:01Z Assuming ancestors of block ... have valid signatures.",
+  "2026-09-23T12:00:02Z UpdateTip: new best=00000000 height=847213 version=0x20000000",
+  "2026-09-23T12:00:05Z New outbound peer connected: version=70016",
+];
+
+function mockNodeStatus(chain: Chain): NodeStatus {
+  const startedAt = runningSince.get(chain) ?? Date.now();
+  const uptimeSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const syncing = uptimeSeconds < 8;
+  return {
+    blocks: syncing ? Math.min(847_213, uptimeSeconds * 100_000) : 847_213,
+    headers: 847_213,
+    verification_progress: syncing ? uptimeSeconds / 8 : 1,
+    initial_block_download: syncing,
+    peers: syncing ? 2 : 9,
+    mempool_transactions: 1_284,
+    mempool_bytes: 3_402_112,
+    disk: { used_by_data_bytes: 612_040_192_000, free_on_volume_bytes: 128_849_018_880 },
+    uptime_seconds: uptimeSeconds,
+  };
+}
+
+function notRunningError(chain: Chain): TypedError {
+  return { code: null, message: `${chain} is not running` };
+}
+
 export function installDevTauriMockIfNeeded() {
   if (!import.meta.env.DEV || "__TAURI_INTERNALS__" in window) return;
 
@@ -47,6 +86,40 @@ export function installDevTauriMockIfNeeded() {
         settings.set(key, value);
         return undefined;
       }
+      case "is_node_running":
+        return runningSince.has((args as { chain: Chain }).chain);
+      case "start_node":
+        runningSince.set((args as { chain: Chain }).chain, Date.now());
+        return undefined;
+      case "stop_node":
+        runningSince.delete((args as { chain: Chain }).chain);
+        return undefined;
+      case "restart_node":
+        runningSince.set((args as { chain: Chain }).chain, Date.now());
+        return undefined;
+      case "node_status": {
+        const { chain } = args as { chain: Chain };
+        if (!runningSince.has(chain)) return Promise.reject(notRunningError(chain));
+        return mockNodeStatus(chain);
+      }
+      case "tail_debug_log": {
+        const window: LogWindow = {
+          lines: MOCK_LOG_LINES,
+          start_offset: 0,
+          reached_start_of_file: true,
+        };
+        return window;
+      }
+      case "page_debug_log_before": {
+        const window: LogWindow = { lines: [], start_offset: 0, reached_start_of_file: true };
+        return window;
+      }
+      case "search_debug_log": {
+        const { query } = args as { query: string };
+        return MOCK_LOG_LINES.filter((line) => line.includes(query));
+      }
+      case "list_command_history":
+        return [];
       default:
         throw new Error(`dev-tauri-mock: no mock for IPC command "${cmd}"`);
     }

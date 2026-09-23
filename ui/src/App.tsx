@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
+import { DashboardScreen } from "@/components/DashboardScreen";
 import { EnvBanner } from "@/components/EnvBanner";
 import { EnvironmentSwitcher } from "@/components/EnvironmentSwitcher";
 import { FirstRunDisclaimer } from "@/components/FirstRunDisclaimer";
@@ -20,6 +21,10 @@ function App() {
 
   // null = not checked yet, matches the "loading" state below.
   const [disclaimerAcknowledged, setDisclaimerAcknowledged] = useState<boolean | null>(null);
+  // Not persisted: the system check is informational, not a one-time
+  // gate like the disclaimer, so it's fine (and simplest) to show it
+  // again on every launch rather than remembering "already seen".
+  const [pastSystemCheck, setPastSystemCheck] = useState(false);
 
   useEffect(() => {
     void loadEnvironments();
@@ -55,7 +60,14 @@ function App() {
         </div>
       </header>
       <main className="flex-1 overflow-y-auto">
-        <SystemCheckScreen onContinue={() => {}} />
+        {pastSystemCheck && selected ? (
+          // Keyed by chain: switching environments should remount with
+          // fresh state, not carry over the previous environment's
+          // status/log-viewer state (see useDashboardStatus/LogViewer).
+          <DashboardScreen key={selected.chain} environment={selected} />
+        ) : (
+          <SystemCheckScreen onContinue={() => setPastSystemCheck(true)} />
+        )}
       </main>
     </div>
   );

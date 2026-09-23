@@ -531,13 +531,35 @@ Frontend — Live Command Monitor (item 7)
       will run
 
 Frontend — Dashboard (item 2)
-- [ ] Bitcoin Core panel: block height vs header height, verification
-      progress %, ETA, peers, mempool, disk used, uptime
-- [ ] Status badges with text labels (Syncing / Indexing / Ready)
-- [ ] Start / stop / restart controls wired to the process manager
-- [ ] Log viewer: tail + page, search/filter, never loads a whole file
-- [ ] Disk monitor: projected usage including the (future) ord index,
-      warns well before free space gets low
+- [x] Bitcoin Core panel: block height vs header height, verification
+      progress %, peers, mempool, disk used, uptime —
+      `DashboardScreen`/`useDashboardStatus`, polls `node_status` every
+      3s. **ETA is not shown**: `NodeStatus` has no field for it and
+      computing one needs a sync-rate history this phase doesn't track
+      — a real gap, not an oversight, left for whenever that's built
+      rather than faked with a made-up number. The spec's ord section
+      (index height vs node height) is also absent: nothing backs it
+      until Phase 4
+- [x] Status badges with text labels (Syncing / Indexing / Ready) — only
+      Stopped/Starting/Syncing/Ready exist for now (no "Indexing" state
+      since ord isn't wired up)
+- [x] Start / stop / restart controls wired to the process manager —
+      plain buttons, not gated behind `ConfirmDialog`'s mainnet step
+      (that step is scoped to fund-moving actions per the spec; start/
+      stop isn't one)
+- [x] Log viewer: tail + page, search/filter, never loads a whole file
+      — `LogViewer`, backed by the real `tail_debug_log`/
+      `page_debug_log_before`/`search_debug_log` commands
+- [x] Disk monitor: projected usage including the (future) ord index,
+      warns well before free space gets low — `DiskMonitor`, fixed 5
+      GiB warning threshold (not yet configurable per environment)
+
+Verified in the browser (dev server, mocked IPC — see `dev-tauri-mock.ts`):
+disclaimer -> system check -> environment switch to Regtest ->
+Dashboard; clicked Start, watched Syncing -> Ready with live-updating
+block height/peers/mempool/uptime; dark theme toggle re-themes the
+whole screen; log search narrows correctly to matching lines; no
+console errors.
 
 Acceptance criteria (from docs/SPEC.md Phase 3 "Done when"):
 - [ ] [CI] every command from Phase 2 is recorded by the monitor
