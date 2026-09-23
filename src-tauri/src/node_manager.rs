@@ -259,7 +259,14 @@ mod tests {
     /// gated the same way as every other real-binary test this project
     /// uses, so `cargo test` doesn't need a pre-staged binary on every
     /// dev machine.
+    ///
+    /// `#[serial(real_bitcoind)]`, same lock name `nk-testkit`'s
+    /// real-bitcoind tests use (cross-process via serial_test's
+    /// `file_locks` feature) -- several full bitcoind processes running
+    /// at once starved CI's windows-latest runners of enough time to
+    /// become ready even at a 60s timeout (DECISIONS.md).
     #[tokio::test]
+    #[serial_test::serial(real_bitcoind)]
     async fn starts_reports_status_and_stops_a_real_node() {
         let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
             eprintln!("skipping: NK_TEST_BITCOIND not set");

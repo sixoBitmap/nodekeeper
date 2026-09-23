@@ -18,3 +18,4 @@ tempfile = "3"
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 sysinfo = "0.39"
+serial_test = { version = "3", features = ["file_locks"] }

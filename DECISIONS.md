@@ -724,6 +724,28 @@ than the ubuntu/macOS runners, and this run had 4 concurrent real
 machines too (antivirus scanning, a slow disk, concurrent
 environments), not just CI.
 
+**Third CI-only failure — same test binary hit the same wall again**,
+even at 60s: `a_fixture_dropped_without_stop_does_not_leave_an_orphan`,
+`Bitcoind(StartupTimeout)`, finishing at 62.83s. The pattern across all
+three failures (each one fails at just past whatever the current
+deadline is) pointed away from "the timeout is too short" and toward
+the real root cause: 4 real `bitcoind` processes all starting at once
+is more concurrent load than a constrained CI runner can service in
+any reasonable time budget, not a number worth chasing upward
+indefinitely. Fixed properly this time: added `serial_test` (with its
+`file_locks` feature, for cross-process — not just cross-thread —
+locking) and tagged every test across `nk-testkit` and
+`node_manager.rs` that starts a real `bitcoind` with
+`#[serial(real_bitcoind)]`, so at most one real node starts at a time
+project-wide regardless of which crate's test binary it's in. Verified
+locally: one run immediately after a fresh 2m20s compile hit the same
+`StartupTimeout` once (Windows Defender / disk contention from the
+compile itself, still competing with the first serialized test) — a
+second run moments later, nothing else competing, passed all 3
+`nk-testkit` tests in 7.79s — sequential is noticeably slower per run
+than the original concurrent version, but actually reliable, which
+concurrent-but-flaky wasn't. Pushed for a fourth CI verification.
+
 ## Phase 3 — VERIFY: dashboard RPC field names (2026-09-23)
 
 Before writing the dashboard status aggregator, checked the real RPC

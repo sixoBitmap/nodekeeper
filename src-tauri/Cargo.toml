@@ -34,3 +34,4 @@ nk-rpc = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tempfile = "3"
+serial_test = { version = "3", features = ["file_locks"] }

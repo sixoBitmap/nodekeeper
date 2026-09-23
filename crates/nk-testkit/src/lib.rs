@@ -135,6 +135,7 @@ fn random_free_port() -> std::io::Result<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     /// The actual Phase 2 [CI] acceptance criterion: "regtest bitcoind
     /// starts, mines 101 blocks, and stops cleanly." Uses a real
@@ -142,7 +143,15 @@ mod tests {
     /// a verified download there); skipped locally if unset rather than
     /// failing, so `cargo test` doesn't require a pre-staged binary on
     /// every dev machine.
+    ///
+    /// `#[serial(real_bitcoind)]` on every test in this module that
+    /// starts a real node: running several full bitcoind processes at
+    /// once starved CI's windows-latest runners of enough time to
+    /// become ready even at a 60s timeout (DECISIONS.md) -- one real
+    /// node at a time is far cheaper than continuing to chase the
+    /// timeout upward.
     #[tokio::test]
+    #[serial(real_bitcoind)]
     async fn starts_mines_101_blocks_and_stops_cleanly() {
         let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
             eprintln!("skipping: NK_TEST_BITCOIND not set");
@@ -175,6 +184,7 @@ mod tests {
     /// future bitcoind upgrade that renames a field fails a test instead
     /// of silently breaking the dashboard.
     #[tokio::test]
+    #[serial(real_bitcoind)]
     async fn dashboard_rpc_methods_return_the_expected_fields() {
         let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
             eprintln!("skipping: NK_TEST_BITCOIND not set");
@@ -208,6 +218,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial(real_bitcoind)]
     async fn a_fixture_dropped_without_stop_does_not_leave_an_orphan() {
         let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
             eprintln!("skipping: NK_TEST_BITCOIND not set");
