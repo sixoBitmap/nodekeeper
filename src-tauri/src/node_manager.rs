@@ -141,7 +141,12 @@ impl NodeManager {
             format!("http://127.0.0.1:{}", environment.rpc_port),
             executor,
             environment.name.clone(),
-            Duration::from_secs(30),
+            // 60s: real users' machines can be under just as much load
+            // (antivirus scanning a freshly-written binary, a slow
+            // spinning disk, other environments starting concurrently)
+            // as CI's runners, where this margin was shown necessary —
+            // see DECISIONS.md.
+            Duration::from_secs(60),
         )
         .await?;
 

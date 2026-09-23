@@ -67,7 +67,12 @@ impl RegtestFixture {
             format!("http://127.0.0.1:{}", environment.rpc_port),
             Executor::new(),
             "regtest".to_string(),
-            Duration::from_secs(30),
+            // 60s, not 30s: CI runs several crates' real-bitcoind tests
+            // concurrently, and windows-latest runners in particular
+            // have shown real bitcoind startup taking >30s under that
+            // load (not a logic bug -- see DECISIONS.md's "CI-only bug"
+            // entries for this same timeout).
+            Duration::from_secs(60),
         )
         .await?;
 

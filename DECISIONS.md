@@ -709,6 +709,21 @@ of failure mode `DECISIONS.md`'s house rule already exists for: verify
 against the real, contended CI environment, not just a fast local
 machine running one thing at a time.
 
+**Second CI-only failure, same underlying cause**: the per-phase fix
+above fixed ubuntu-latest and macos-latest, but windows-latest still
+failed the *next* run — a different test this time
+(`dashboard_rpc_methods_return_the_expected_fields`), also
+`Bitcoind(StartupTimeout)`, finishing at 32.16s against the (still)
+30s-per-phase deadline. Not a logic bug: `windows-latest` GitHub-hosted
+runners are known to be slower under process-spawning/I/O-heavy load
+than the ubuntu/macOS runners, and this run had 4 concurrent real
+`bitcoind` starts competing for the runner's limited cores. Raised
+`ready_timeout` from 30s to 60s per phase at both call sites
+(`RegtestFixture::start`, `NodeManager::start`) — comfortably above the
+~32s observed failure point, and a reasonable margin for real users'
+machines too (antivirus scanning, a slow disk, concurrent
+environments), not just CI.
+
 ## Phase 3 — VERIFY: dashboard RPC field names (2026-09-23)
 
 Before writing the dashboard status aggregator, checked the real RPC
