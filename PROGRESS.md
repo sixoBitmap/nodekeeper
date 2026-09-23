@@ -530,12 +530,16 @@ Frontend — Live Command Monitor (item 7)
       (Started/Output/Finished merged by command id)
 - [x] Filters: environment, source, status, text search — all real and
       working. "Background polling hidden by default with a toggle":
-      the toggle exists but currently has nothing to filter, since
-      nothing in the app tags any command as background yet (no
-      periodic poller goes through the central executor today — the
-      Dashboard's own polling calls `node_status` directly, bypassing
-      nk-exec entirely). A real gap, tracked here, not a decorative
-      control pretending to work
+      the toggle exists but currently has nothing to filter. **Correction
+      to an earlier note here**: the Dashboard's polling does *not*
+      bypass nk-exec — `node_status`'s RPC calls go through the same
+      real, shared `Executor` `start_node` wired up, so every 3-second
+      poll (3 RPC calls: blockchain/network/mempool info) genuinely
+      appears in the monitor. The actual gap is narrower: nothing marks
+      those specific commands as "background" so the toggle could hide
+      them — expect a live, running node to make the monitor fairly
+      busy with polling entries every few seconds until that tagging
+      exists
 - [x] Per-entry: copy command, copy output — both wired to the
       clipboard. **"Open in console" intentionally omitted**: it's
       meant to pre-fill a console tab, and there's no console to
