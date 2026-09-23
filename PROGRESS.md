@@ -446,13 +446,20 @@ friendly error")
       wired into the existing `ErrorPanel` (Phase 1)
 
 Backend — dashboard status
-- [ ] `nk-rpc`: peer count (`getnetworkinfo`) and mempool
+- [x] `nk-rpc`: peer count (`getnetworkinfo`) and mempool
       (`getmempoolinfo`) methods, alongside the existing
       `get_blockchain_info` — field names VERIFY'd live against a real
-      regtest node (see DECISIONS.md), not assumed
-- [ ] `nk-core`: disk-usage helper (used-by-data-dir + free-on-volume),
-      reusing `sysinfo` the same way `system_check` already does
-- [ ] `nk-proc`: track each running process's start time for uptime
+      regtest node (see DECISIONS.md), not assumed. Real-node coverage
+      via a new `nk-testkit` test (`dashboard_rpc_methods_return_the_
+      expected_fields`), run locally against the cached Bitcoin Core
+      31.1 binary, not just compiled
+- [x] `nk-core`: disk-usage helper (used-by-data-dir + free-on-volume),
+      reusing `sysinfo` the same way `system_check` already does —
+      `nk_core::disk::disk_usage_for`, tested (missing dir reports 0,
+      not an error; recursive sum across nested dirs; real free-space
+      lookup on the containing volume)
+- [x] `nk-proc`: track each running process's start time for uptime —
+      `BitcoindProcess::started_at`
 - [ ] A status aggregator (src-tauri command, composing the above) —
       integration-tested via nk-testkit against a real regtest node
 

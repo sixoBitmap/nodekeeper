@@ -51,8 +51,9 @@ pub fn run_system_check(data_dir: &std::path::Path) -> SystemCheck {
 
 /// Finds the disk with the longest mount-point prefix match for `path`
 /// (the standard way to resolve "which filesystem is this path on" from a
-/// flat disk list), and returns its free space.
-fn disk_free_space_for_path(disks: &Disks, path: &std::path::Path) -> Option<u64> {
+/// flat disk list), and returns its free space. Shared with `disk.rs`'s
+/// dashboard disk monitor.
+pub(crate) fn disk_free_space_for_path(disks: &Disks, path: &std::path::Path) -> Option<u64> {
     // The path itself may not exist yet (e.g. a not-yet-created data
     // dir); walk up to the nearest existing ancestor so canonicalize()
     // succeeds. Use `dunce::canonicalize` rather than

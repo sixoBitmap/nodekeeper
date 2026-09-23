@@ -154,6 +154,20 @@ impl RpcClient {
             .await
     }
 
+    /// Peer count for the dashboard (docs/SPEC.md item 2: "peers").
+    /// Field names VERIFY'd live against a real regtest node, not
+    /// assumed (DECISIONS.md, Phase 3) — `connections` lives on
+    /// `getnetworkinfo`, not `getblockchaininfo`.
+    pub async fn get_network_info(&self) -> Result<Value, RpcError> {
+        self.call("getnetworkinfo", vec![], "check peer count")
+            .await
+    }
+
+    /// Mempool stats for the dashboard (docs/SPEC.md item 2: "mempool").
+    pub async fn get_mempool_info(&self) -> Result<Value, RpcError> {
+        self.call("getmempoolinfo", vec![], "check mempool").await
+    }
+
     fn equivalent_bitcoin_cli(&self, method: &str, params: &[Value]) -> String {
         let mut parts = vec!["bitcoin-cli".to_string()];
         if let Some(flag) = self.chain.bitcoin_cli_flag() {

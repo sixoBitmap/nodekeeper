@@ -201,6 +201,45 @@ mod tests {
         fixture.stop().await.expect("bitcoind should stop cleanly");
     }
 
+    /// Real-node coverage for the dashboard's RPC methods (docs/SPEC.md
+    /// item 2: peers, mempool) -- their field names were VERIFY'd live
+    /// against a throwaway node during development (DECISIONS.md, Phase
+    /// 3); this pins the same shape against a fixture-managed node so a
+    /// future bitcoind upgrade that renames a field fails a test instead
+    /// of silently breaking the dashboard.
+    #[tokio::test]
+    async fn dashboard_rpc_methods_return_the_expected_fields() {
+        let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+            eprintln!("skipping: NK_TEST_BITCOIND not set");
+            return;
+        };
+        let binary_path = std::path::PathBuf::from(binary_path);
+
+        let fixture = RegtestFixture::start(&binary_path)
+            .await
+            .expect("bitcoind should start");
+
+        let network_info = fixture
+            .rpc
+            .get_network_info()
+            .await
+            .expect("getnetworkinfo should succeed");
+        assert!(network_info
+            .get("connections")
+            .and_then(|v| v.as_u64())
+            .is_some());
+
+        let mempool_info = fixture
+            .rpc
+            .get_mempool_info()
+            .await
+            .expect("getmempoolinfo should succeed");
+        assert!(mempool_info.get("size").and_then(|v| v.as_u64()).is_some());
+        assert!(mempool_info.get("bytes").and_then(|v| v.as_u64()).is_some());
+
+        fixture.stop().await.expect("bitcoind should stop cleanly");
+    }
+
     #[tokio::test]
     async fn a_fixture_dropped_without_stop_does_not_leave_an_orphan() {
         let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {

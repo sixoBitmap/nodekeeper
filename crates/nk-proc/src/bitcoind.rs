@@ -47,6 +47,11 @@ impl BitcoindError {
 pub struct BitcoindProcess {
     child: tokio::process::Child,
     pub pid: u32,
+    /// When this process was spawned, for the dashboard's uptime display
+    /// (docs/SPEC.md item 2: "uptime"). `Instant`, not `SystemTime`: this
+    /// value is only ever compared against `Instant::now()` in the same
+    /// run, never persisted or shown as a wall-clock time itself.
+    pub started_at: std::time::Instant,
 }
 
 impl BitcoindProcess {
@@ -86,7 +91,11 @@ impl BitcoindProcess {
         // Windows builds of bitcoind have no `-daemon` flag (confirmed in
         // the Phase 0 spike, DECISIONS.md) — nk-proc always runs it as a
         // tracked foreground child on every OS, which is exactly this.
-        Ok(Self { child, pid })
+        Ok(Self {
+            child,
+            pid,
+            started_at: std::time::Instant::now(),
+        })
     }
 
     /// Graceful stop (docs/SPEC.md Foundation C): the `stop` RPC, then
