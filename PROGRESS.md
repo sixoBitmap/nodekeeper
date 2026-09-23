@@ -464,9 +464,16 @@ Backend — dashboard status
       integration-tested via nk-testkit against a real regtest node
 
 Backend — log viewer (item 2: "never load a whole file")
-- [ ] `nk-core` (or a small new module): tail-from-end file reader
+- [x] `nk-core` (or a small new module): tail-from-end file reader
       (seek, not full read), plus search/filter over the tailed window;
-      tested against files larger than the tail window
+      tested against files larger than the tail window —
+      `nk_core::log_tail` (`tail`, `page_before` for scrolling further
+      back, `search`). Tested: small file returns everything; a large
+      file returns only complete newest lines (no truncated line ever
+      leaks through); repeated `page_before` calls from a `tail()`
+      reconstruct the entire original file byte-for-byte with no gaps
+      or overlap; search respects a match cap; a missing file errors
+      rather than panicking
 
 Backend — process manager wiring for the dashboard
 - [ ] src-tauri app state: running processes per environment + one
