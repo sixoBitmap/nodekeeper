@@ -3,3 +3,8 @@
 node_modules/
 dist/
 *.log
+
+# The app's own runtime data directory (settings DB, and eventually
+# bitcoind/ord data) -- local machine state, never repo content. See
+# src-tauri/src/lib.rs's data_root().
+/data/
