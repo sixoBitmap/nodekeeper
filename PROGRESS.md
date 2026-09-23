@@ -392,7 +392,13 @@ Acceptance criteria (from docs/SPEC.md Phase 2 "Done when"):
 - [x] [CI] redaction unit tests pass; a pre-existing bitcoind is detected
       — both pass locally and in CI
 - [ ] [MANUAL] mainnet bitcoind starts, connects to peers, and stops
-      cleanly (no full sync required)
+      cleanly (no full sync required) — a helper now exists so this
+      exercises Nodekeeper's real conf generation + process manager
+      instead of ad hoc flags: `cargo run -p nk-testkit --example
+      mainnet_smoke_test -- <path-to-verified-bitcoind>` (get a verified
+      binary first via `cargo run -p nk-verify --example
+      fetch_bitcoin_core`). Still needs you to actually run it and
+      confirm it prints "Smoke test passed."
 - [ ] [MANUAL] I have checked every pinned builder-key fingerprint
       against bitcoin-core/guix.sigs from a separate machine or browser
 - [x] Security self-review completed (go through SECURITY RULES line by
