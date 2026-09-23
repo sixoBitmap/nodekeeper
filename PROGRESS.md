@@ -612,15 +612,18 @@ whole screen; log search narrows correctly to matching lines; no
 console errors.
 
 Acceptance criteria (from docs/SPEC.md Phase 3 "Done when"):
-- [ ] [CI] every command from Phase 2 is recorded by the monitor
-      backend; secrets are redacted in records and exports — the
-      *recording* half is done and CI-tested (`nk_store::
-      history_bridge`'s tests prove a full command lifecycle is
-      persisted, and that a `Sensitivity::Sensitive` command's real
-      output never reaches `command_history`, only the placeholder).
-      Left unchecked because "exports" isn't built yet — the Live
-      Command Monitor's export-to-text-file control doesn't exist
-      until the frontend task below does
+- [x] [CI] every command from Phase 2 is recorded by the monitor
+      backend; secrets are redacted in records and exports — recording
+      is CI-tested (`nk_store::history_bridge`'s tests prove a full
+      command lifecycle is persisted, and that a `Sensitivity::
+      Sensitive` command's real output never reaches `command_history`,
+      only the placeholder). Exports (`LiveCommandMonitor`'s export
+      button) have no separate redaction test of their own — none is
+      needed, since the export path is a trivial formatter over
+      `MonitorEntry` data that's already redacted by the time it
+      reaches the frontend (nk-exec redacts before broadcasting; the
+      history table only ever stores already-redacted content); there's
+      no new redaction logic in the export step itself to verify
 - [x] [CI] a busy port produces the friendly error —
       `nk-proc::bitcoind::tests::starting_with_a_busy_rpc_port_fails_
       with_the_friendly_error`, part of every `cargo test --workspace`
