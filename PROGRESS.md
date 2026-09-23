@@ -442,8 +442,9 @@ friendly error")
       tested by binding the target port first with a nonexistent
       binary path and asserting `PortInUse` comes back before any
       spawn attempt
-- [ ] Frontend: i18n message + "What to do" action per error code,
-      wired into the existing `ErrorPanel` (Phase 1)
+- [x] Frontend: i18n message + "What to do" action per error code,
+      wired into the existing `ErrorPanel` (Phase 1) — `lib/error-
+      messages.ts`, used by `DashboardScreen`
 
 Backend — dashboard status
 - [x] `nk-rpc`: peer count (`getnetworkinfo`) and mempool
@@ -460,8 +461,10 @@ Backend — dashboard status
       lookup on the containing volume)
 - [x] `nk-proc`: track each running process's start time for uptime —
       `BitcoindProcess::started_at`
-- [ ] A status aggregator (src-tauri command, composing the above) —
-      integration-tested via nk-testkit against a real regtest node
+- [x] A status aggregator (src-tauri command, composing the above) —
+      integration-tested via nk-testkit against a real regtest node —
+      `NodeManager::status()`, tested end-to-end
+      (`starts_reports_status_and_stops_a_real_node`)
 
 Backend — log viewer (item 2: "never load a whole file")
 - [x] `nk-core` (or a small new module): tail-from-end file reader
