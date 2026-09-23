@@ -411,13 +411,17 @@ In progress. Tasks (one at a time: implement -> test -> quality gate ->
 commit -> tick):
 
 Backend — monitor history (docs/SPEC.md item 7)
-- [ ] `nk-store`: `command_history` migration + insert/query/export,
+- [x] `nk-store`: `command_history` migration + insert/query/export,
       capped per environment (spec: "e.g. last 5,000 entries"), tested
       (round-trip, cap/pruning, reopen keeps data)
-- [ ] Wire `nk-exec`'s `ExecEvent` broadcast into `nk-store`: a
+- [x] Wire `nk-exec`'s `ExecEvent` broadcast into `nk-store`: a
       subscriber task that persists Started/Output/Finished rows —
       safe by construction since the broadcast stream is already
-      redacted/placeholder'd before this layer ever sees it (Phase 2)
+      redacted/placeholder'd before this layer ever sees it (Phase 2).
+      `nk_store::persist_exec_events`, tested against a real spawned
+      `Executor` (full lifecycle persisted; a `Sensitivity::Sensitive`
+      command's real output never reaches history, only the
+      placeholder; the task exits once the `Executor` is dropped)
 - [ ] Mark background-polling events so the UI can hide them by default
       (spec: "Background polling is hidden by default with a Show
       background polling toggle")

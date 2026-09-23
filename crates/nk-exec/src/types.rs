@@ -34,6 +34,21 @@ pub enum CommandSource {
     Rpc,
 }
 
+impl CommandSource {
+    /// The same lowercase form `#[serde(rename_all = "lowercase")]`
+    /// produces — as a plain `&str` for non-serde consumers (e.g.
+    /// `nk-store`'s `command_history.source` column) that would
+    /// otherwise have to round-trip through `serde_json` just to get a
+    /// string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OrdCli => "ordcli",
+            Self::BitcoinCli => "bitcoincli",
+            Self::Rpc => "rpc",
+        }
+    }
+}
+
 /// Whether a command's *output* may contain a mnemonic or similar secret
 /// that must never reach the normal event stream (docs/SPEC.md Foundation
 /// B's sensitive-output channel). This is about output, not input: a
@@ -144,4 +159,21 @@ pub struct ExecOutcome {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
     pub duration: Duration,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_source_as_str_matches_its_serde_serialization() {
+        for source in [
+            CommandSource::OrdCli,
+            CommandSource::BitcoinCli,
+            CommandSource::Rpc,
+        ] {
+            let via_serde = serde_json::to_value(source).unwrap();
+            assert_eq!(via_serde.as_str().unwrap(), source.as_str());
+        }
+    }
 }

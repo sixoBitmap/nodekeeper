@@ -5,6 +5,10 @@
 //! (`rusqlite_migration`), not a table, so opening an already-migrated
 //! database is a no-op.
 
+mod history_bridge;
+
+pub use history_bridge::persist_exec_events;
+
 use rusqlite::{params, Connection};
 use rusqlite_migration::{Migrations, M};
 use serde::Serialize;
@@ -120,7 +124,7 @@ impl Store {
     }
 
     #[cfg(test)]
-    fn open_in_memory() -> Result<Self, StoreError> {
+    pub(crate) fn open_in_memory() -> Result<Self, StoreError> {
         let mut conn = Connection::open_in_memory()?;
         migrations().to_latest(&mut conn)?;
         Ok(Self { conn })
