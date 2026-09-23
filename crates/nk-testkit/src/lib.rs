@@ -19,12 +19,14 @@ use thiserror::Error;
 pub enum FixtureError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// Also covers bitcoind failing to become ready in time
+    /// (`BitcoindError::StartupTimeout`) — `start_and_wait_ready`
+    /// folds spawn-and-wait into one call, so there's no separate
+    /// startup-timeout case at this layer anymore.
     #[error("bitcoind error: {0}")]
     Bitcoind(#[from] nk_proc::BitcoindError),
     #[error("rpc error: {0}")]
     Rpc(#[from] nk_rpc::RpcError),
-    #[error("bitcoind did not become ready within the startup timeout")]
-    StartupTimeout,
 }
 
 pub struct RegtestFixture {
@@ -59,17 +61,15 @@ impl RegtestFixture {
         );
         std::fs::write(datadir.join("bitcoin.conf"), conf)?;
 
-        let process = BitcoindProcess::start(binary_path, &environment).await?;
-
-        wait_for_cookie(&environment).await?;
-        let rpc = RpcClient::from_cookie_file(
+        let (process, rpc) = BitcoindProcess::start_and_wait_ready(
+            binary_path,
+            &environment,
             format!("http://127.0.0.1:{}", environment.rpc_port),
-            &environment.bitcoin_cookie_path(),
             Executor::new(),
             "regtest".to_string(),
-            Chain::Regtest,
-        )?;
-        wait_for_rpc_ready(&rpc).await?;
+            Duration::from_secs(30),
+        )
+        .await?;
 
         Ok(Self {
             process: Some(process),
@@ -125,44 +125,6 @@ impl Drop for RegtestFixture {
 
 fn random_free_port() -> std::io::Result<u16> {
     Ok(TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
-}
-
-async fn wait_for_cookie(environment: &Environment) -> Result<(), FixtureError> {
-    let cookie_path = environment.bitcoin_cookie_path();
-    poll_until(Duration::from_secs(30), Duration::from_millis(100), || {
-        cookie_path.exists()
-    })
-    .await
-}
-
-async fn wait_for_rpc_ready(rpc: &RpcClient) -> Result<(), FixtureError> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        if rpc.get_blockchain_info().await.is_ok() {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(FixtureError::StartupTimeout);
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
-
-async fn poll_until(
-    timeout: Duration,
-    interval: Duration,
-    mut condition: impl FnMut() -> bool,
-) -> Result<(), FixtureError> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        if condition() {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(FixtureError::StartupTimeout);
-        }
-        tokio::time::sleep(interval).await;
-    }
 }
 
 #[cfg(test)]

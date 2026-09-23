@@ -645,6 +645,47 @@ including the real regtest bitcoind spawn, passed. Pushed and confirmed
 green on all 3 OSes: run `35795672861`, with `cargo test` actually
 executing (not skipping) the real regtest integration test on every OS.
 
+## Phase 3 — real app process-manager wiring (2026-09-23)
+
+Built `src-tauri::node_manager::NodeManager`, the real (not test-only)
+start/stop/restart/status orchestration for the dashboard, and along the
+way consolidated a piece of duplicated logic: `nk-testkit`'s
+`RegtestFixture` had its own private `wait_for_cookie`/
+`wait_for_rpc_ready`/`poll_until` functions for "spawn bitcoind, then
+wait until it's actually ready to take RPC calls." Real app code needs
+the exact same sequence, and copying it a second time (into
+`node_manager.rs`) would have created two copies to keep in sync.
+Extracted it into `nk_proc::BitcoindProcess::start_and_wait_ready`
+instead — `nk-proc` is the right owner since "knowing when a started
+process is actually ready" is squarely the process manager's job, not a
+test-only concern. `RegtestFixture::start` now calls the same function
+real app code does; its own private polling helpers were deleted rather
+than left as unused dead code.
+
+**Scoping decision** (not a STOP AND ASK — an ordinary sequencing call,
+no security/fund-safety implication): `NodeManager::start` takes an
+already-known `binary_path` argument rather than locating or downloading
+one itself. Bitcoin Core download-and-verify-and-install-to-a-real-
+location is docs/SPEC.md item 1's setup wizard — Phase 2 built the
+verify-and-download *mechanism* (`nk-verify`) but no UI flow writes a
+verified binary to a real, persistent install location and remembers
+its path; today that only happens in the CI/dev helper
+(`fetch_bitcoin_core.rs`, explicitly `#![allow(clippy::disallowed_
+methods)]`-marked as CI/dev-only) and in `nk-testkit`'s ephemeral
+fixtures. Building that whole flow now would mean either a real in-app
+archive extractor (no more shelling out to `unzip`/`tar`, which the
+disallowed-methods rule and "never bundled or run by Nodekeeper itself"
+comment both rule out for shipped code) or expanding Phase 3's scope
+into the setup wizard's — neither was in this phase's task breakdown.
+Instead, `start_node` reads the binary path from the existing settings
+table (`bitcoind_path`, via Phase 1's `get_setting`/`set_setting`) and
+returns `AppErrorCode::BinaryNotVerified` if it's unset. This makes the
+dashboard's start/stop/restart controls genuinely functional end-to-end
+today (verified against a real regtest node) without blocking on
+building the full wizard first — set the setting manually (e.g. to the
+path `fetch_bitcoin_core` prints) until a real wizard screen exists to
+write it.
+
 ## Phase 3 — VERIFY: dashboard RPC field names (2026-09-23)
 
 Before writing the dashboard status aggregator, checked the real RPC

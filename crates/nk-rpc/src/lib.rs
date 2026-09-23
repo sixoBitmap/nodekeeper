@@ -28,6 +28,7 @@ pub enum RpcError {
     UnexpectedResponse(String),
 }
 
+#[derive(Clone)]
 pub struct RpcClient {
     http: reqwest::Client,
     url: String,

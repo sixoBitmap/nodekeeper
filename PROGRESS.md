@@ -476,12 +476,38 @@ Backend — log viewer (item 2: "never load a whole file")
       rather than panicking
 
 Backend — process manager wiring for the dashboard
-- [ ] src-tauri app state: running processes per environment + one
+- [x] src-tauri app state: running processes per environment + one
       shared `Executor` instance whose broadcast stream feeds both the
-      history persistence above and the frontend event bridge below
-- [ ] Tauri commands: start/stop/restart per environment, status query
-- [ ] Background task bridging `Executor` events to the frontend
-      (Tauri's event system) for the Live Command Monitor
+      history persistence above and the frontend event bridge below —
+      `node_manager::NodeManager` (its own module, not `#[tauri::
+      command]` bodies, so it's testable without the GUI per CLAUDE.md);
+      the shared `Executor` and `Arc<Mutex<Store>>` are `.manage()`d
+      once in `run()`. **Scoping note**: `start()` takes an
+      already-known `binary_path` rather than locating/downloading one
+      itself — there is no real "install Bitcoin Core to a persistent
+      location" flow yet (only the CI/dev helper and test fixtures
+      exercise download+verify+extract today), that's the setup
+      wizard's job (item 1), not built as a UI flow yet. For now the
+      path is read from the existing settings table (`bitcoind_path`);
+      unset -> `AppErrorCode::BinaryNotVerified`. Set it manually via
+      `set_setting` (e.g. to the path `fetch_bitcoin_core` prints) to
+      exercise start/stop for real until the wizard exists
+- [x] Tauri commands: start/stop/restart per environment, status query
+      — `start_node`/`stop_node`/`restart_node`/`node_status`, plus
+      `is_node_running` (cheap "is it running" check so the frontend
+      doesn't have to treat "not started yet" as a `node_status` error).
+      Real end-to-end test (`starts_reports_status_and_stops_a_real_
+      node`) against a real regtest bitcoind: start refuses a second
+      concurrent start for the same chain, status reports real
+      blocks/peers, stop actually stops it, and status afterward
+      correctly reports `NotRunning`, not stale data
+- [x] Background task persisting `Executor` events into `command_history`
+      — spawned once in `run()`'s `.setup()` hook via `nk_store::
+      persist_exec_events` (the previous commit's bridge). **Not yet
+      done**: re-emitting `ExecEvent`s as Tauri events for the frontend
+      to subscribe to live (the Live Command Monitor UI itself needs
+      this, and doesn't exist yet) — only the history-persistence side
+      of "bridging to the frontend" is wired so far
 
 Frontend — Live Command Monitor (item 7)
 - [ ] Resizable bottom drawer: show/hide (top-bar toggle + keyboard

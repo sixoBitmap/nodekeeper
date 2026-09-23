@@ -3146,6 +3146,7 @@ version = "0.1.0"
 dependencies = [
  "hostname",
  "nk-core",
+ "nk-exec",
  "nk-rpc",
  "sysinfo",
  "tempfile",
@@ -3229,12 +3230,18 @@ name = "nodekeeper"
 version = "0.1.0"
 dependencies = [
  "nk-core",
+ "nk-exec",
+ "nk-proc",
+ "nk-rpc",
  "nk-store",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
  "ts-rs",
 ]
 

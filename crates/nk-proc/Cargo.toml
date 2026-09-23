@@ -12,6 +12,7 @@ sysinfo = "0.39"
 tokio = { workspace = true, features = ["process", "time"] }
 nk-core = { workspace = true }
 nk-rpc = { workspace = true }
+nk-exec = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

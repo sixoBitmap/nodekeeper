@@ -30,6 +30,10 @@ pub enum BitcoindError {
     Io(#[from] std::io::Error),
     #[error("bitcoind did not exit within the timeout after being asked to stop")]
     StopTimeout,
+    #[error("bitcoind did not become ready (cookie file + responsive RPC) within the timeout")]
+    StartupTimeout,
+    #[error("rpc error: {0}")]
+    Rpc(#[from] nk_rpc::RpcError),
 }
 
 impl BitcoindError {
@@ -39,7 +43,12 @@ impl BitcoindError {
     pub fn code(&self) -> Option<AppErrorCode> {
         match self {
             Self::PortInUse { .. } => Some(AppErrorCode::PortInUse),
-            Self::AlreadyRunning { .. } | Self::Spawn(_) | Self::Io(_) | Self::StopTimeout => None,
+            Self::AlreadyRunning { .. }
+            | Self::Spawn(_)
+            | Self::Io(_)
+            | Self::StopTimeout
+            | Self::StartupTimeout
+            | Self::Rpc(_) => None,
         }
     }
 }
@@ -96,6 +105,54 @@ impl BitcoindProcess {
             pid,
             started_at: std::time::Instant::now(),
         })
+    }
+
+    /// `start()` plus waiting for it to actually become usable: bitcoind
+    /// writes its cookie file and starts answering RPC shortly *after*
+    /// the process exists, not the instant it's spawned, so a caller
+    /// that needs a working `RpcClient` right away must poll rather than
+    /// assume readiness. Bundles the whole sequence (spawn -> wait for
+    /// cookie -> build the RPC client -> wait for it to respond) into
+    /// one call so real app code and test fixtures don't each duplicate
+    /// it — shared by `nk-testkit`'s `RegtestFixture` and the real app's
+    /// dashboard start control.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_and_wait_ready(
+        binary_path: &Path,
+        environment: &Environment,
+        rpc_url: String,
+        executor: nk_exec::Executor,
+        environment_label: String,
+        ready_timeout: Duration,
+    ) -> Result<(Self, nk_rpc::RpcClient), BitcoindError> {
+        let process = Self::start(binary_path, environment).await?;
+        let deadline = tokio::time::Instant::now() + ready_timeout;
+
+        let cookie_path = environment.bitcoin_cookie_path();
+        while !cookie_path.exists() {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(BitcoindError::StartupTimeout);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let rpc = nk_rpc::RpcClient::from_cookie_file(
+            rpc_url,
+            &cookie_path,
+            executor,
+            environment_label,
+            environment.chain,
+        )?;
+
+        loop {
+            if rpc.get_blockchain_info().await.is_ok() {
+                return Ok((process, rpc));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(BitcoindError::StartupTimeout);
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
     }
 
     /// Graceful stop (docs/SPEC.md Foundation C): the `stop` RPC, then
