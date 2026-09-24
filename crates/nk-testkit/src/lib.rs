@@ -157,6 +157,7 @@ impl RegtestFixture {
                         "createwallet",
                         vec![serde_json::json!("test")],
                         "test setup",
+                        vec![],
                         false,
                     )
                     .await?;
@@ -263,6 +264,131 @@ mod tests {
             .await
             .expect("node should respond to RPC");
         assert_eq!(info.get("blocks").and_then(|v| v.as_u64()), Some(101));
+
+        fixture.stop().await.expect("bitcoind should stop cleanly");
+    }
+
+    /// Real-node coverage for Phase 5's wallet-unlock flow
+    /// (docs/SPEC.md item 3): a signing RPC against an encrypted
+    /// wallet fails cleanly while locked, `wallet_passphrase` unlocks
+    /// it, the same signing RPC then succeeds, and `wallet_lock`
+    /// re-locks it (confirmed by the signing RPC failing again).
+    /// `sendtoaddress` stands in for any real signing action (e.g.
+    /// ord's `wallet send`) -- the lock/unlock behavior is bitcoind's,
+    /// not ord's (DECISIONS.md Phase 5 VERIFY).
+    #[tokio::test]
+    #[serial(real_bitcoind)]
+    async fn wallet_unlock_and_lock_gate_a_real_signing_rpc() {
+        let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+            eprintln!("skipping: NK_TEST_BITCOIND not set");
+            return;
+        };
+        let binary_path = std::path::PathBuf::from(binary_path);
+
+        let fixture = RegtestFixture::start(&binary_path)
+            .await
+            .expect("bitcoind should start");
+
+        // Deliberately not `fixture.mine_blocks()` here: its own
+        // fallback creates an (unwanted, differently-named) wallet the
+        // first time no wallet exists yet, which then leaves *two*
+        // wallets loaded once this test's own explicit `createwallet`
+        // below runs -- reproduced live as a real
+        // "Multiple wallets are loaded" RPC error. Create the named
+        // wallet this test actually needs first, before anything else
+        // touches the wallet subsystem.
+        let wallet = "ord";
+        fixture
+            .rpc
+            .call(
+                "createwallet",
+                vec![serde_json::json!(wallet)],
+                "test setup",
+                vec![],
+                false,
+            )
+            .await
+            .expect("createwallet should succeed");
+        let address: String = serde_json::from_value(
+            fixture
+                .rpc
+                .call("getnewaddress", vec![], "test setup", vec![], false)
+                .await
+                .expect("getnewaddress should succeed"),
+        )
+        .unwrap();
+        fixture
+            .rpc
+            .generate_to_address(101, &address)
+            .await
+            .expect("mining to fund the wallet should succeed");
+
+        fixture
+            .rpc
+            .encrypt_wallet(wallet, "test-passphrase-123")
+            .await
+            .expect("encrypt_wallet should succeed");
+
+        let send = |fixture: &RegtestFixture, address: String| {
+            let rpc = fixture.rpc.clone();
+            async move {
+                // Regtest has no mempool history to estimate a fee
+                // from and `-fallbackfee` isn't enabled -- an explicit
+                // `fee_rate` (position 10, confirmed live via
+                // `bitcoin-cli help sendtoaddress`) avoids needing fee
+                // estimation at all. Positions 3-9 are left at their
+                // defaults via `null`.
+                rpc.call(
+                    "sendtoaddress",
+                    vec![
+                        serde_json::json!(address),
+                        serde_json::json!(0.1),
+                        serde_json::Value::Null,
+                        serde_json::Value::Null,
+                        serde_json::Value::Null,
+                        serde_json::Value::Null,
+                        serde_json::Value::Null,
+                        serde_json::Value::Null,
+                        serde_json::Value::Null,
+                        serde_json::json!(1),
+                    ],
+                    "test send",
+                    vec![],
+                    false,
+                )
+                .await
+            }
+        };
+
+        let locked_result = send(&fixture, address.clone()).await;
+        assert!(
+            matches!(locked_result, Err(nk_rpc::RpcError::Rpc { code: -13, .. })),
+            "sending while locked should fail with bitcoind's -13 (wallet locked) error, got \
+             {locked_result:?}"
+        );
+
+        fixture
+            .rpc
+            .wallet_passphrase(wallet, "test-passphrase-123", 60)
+            .await
+            .expect("wallet_passphrase should unlock the wallet");
+        send(&fixture, address.clone())
+            .await
+            .expect("sending should succeed once unlocked");
+
+        fixture
+            .rpc
+            .wallet_lock(wallet)
+            .await
+            .expect("wallet_lock should re-lock the wallet");
+        let relocked_result = send(&fixture, address).await;
+        assert!(
+            matches!(
+                relocked_result,
+                Err(nk_rpc::RpcError::Rpc { code: -13, .. })
+            ),
+            "sending after wallet_lock should fail again with -13, got {relocked_result:?}"
+        );
 
         fixture.stop().await.expect("bitcoind should stop cleanly");
     }

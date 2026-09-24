@@ -89,6 +89,13 @@ impl RpcClient {
 
     /// Makes a raw JSON-RPC call. Prefer the typed methods below where
     /// one exists; this is here for RPCs Nodekeeper doesn't wrap yet.
+    ///
+    /// `redact`: secret param values (e.g. a wallet passphrase) that
+    /// must never appear in `command_display` as broadcast to the Live
+    /// Command Monitor or persisted to `command_history` — passed
+    /// straight through to `nk_exec::RecordSpec::redact`, which is
+    /// applied there. Empty for every RPC that carries no secret.
+    ///
     /// `background` is docs/SPEC.md item 7's "Background polling is
     /// hidden by default with a Show background polling toggle" — the
     /// caller decides, since the same RPC method can be a meaningful
@@ -100,36 +107,26 @@ impl RpcClient {
         method: &str,
         params: Vec<Value>,
         triggering_action: &str,
+        redact: Vec<String>,
         background: bool,
     ) -> Result<Value, RpcError> {
-        let display = self.equivalent_bitcoin_cli(method, &params);
-        let http = self.http.clone();
-        let url = self.url.clone();
-        let user = self.user.clone();
-        let password = self.password.clone();
-        let method = method.to_string();
-
-        self.executor
-            .record(
-                RecordSpec {
-                    environment: self.environment.clone(),
-                    source: CommandSource::Rpc,
-                    triggering_action: triggering_action.to_string(),
-                    command_display: display,
-                    redact: vec![],
-                    sensitivity: Sensitivity::Normal,
-                    background,
-                },
-                move || async move { do_call(http, url, user, password, method, params).await },
-            )
-            .await
+        self.call_at(
+            self.url.clone(),
+            method,
+            params,
+            triggering_action,
+            redact,
+            background,
+        )
+        .await
     }
 
     /// docs/SPEC.md Foundation C: bitcoind's graceful stop is the `stop`
     /// RPC, then waiting for the process to exit (the waiting is
     /// nk-proc's job, not this call's).
     pub async fn stop(&self) -> Result<(), RpcError> {
-        self.call("stop", vec![], "stop node", false).await?;
+        self.call("stop", vec![], "stop node", vec![], false)
+            .await?;
         Ok(())
     }
 
@@ -143,6 +140,7 @@ impl RpcClient {
                 "generatetoaddress",
                 vec![json!(nblocks), json!(address)],
                 "mine blocks",
+                vec![],
                 false,
             )
             .await?;
@@ -151,7 +149,7 @@ impl RpcClient {
 
     pub async fn get_new_address(&self) -> Result<String, RpcError> {
         let result = self
-            .call("getnewaddress", vec![], "get new address", false)
+            .call("getnewaddress", vec![], "get new address", vec![], false)
             .await?;
         result
             .as_str()
@@ -160,8 +158,14 @@ impl RpcClient {
     }
 
     pub async fn get_blockchain_info(&self, background: bool) -> Result<Value, RpcError> {
-        self.call("getblockchaininfo", vec![], "check sync status", background)
-            .await
+        self.call(
+            "getblockchaininfo",
+            vec![],
+            "check sync status",
+            vec![],
+            background,
+        )
+        .await
     }
 
     /// Peer count for the dashboard (docs/SPEC.md item 2: "peers").
@@ -169,13 +173,129 @@ impl RpcClient {
     /// assumed (DECISIONS.md, Phase 3) — `connections` lives on
     /// `getnetworkinfo`, not `getblockchaininfo`.
     pub async fn get_network_info(&self, background: bool) -> Result<Value, RpcError> {
-        self.call("getnetworkinfo", vec![], "check peer count", background)
-            .await
+        self.call(
+            "getnetworkinfo",
+            vec![],
+            "check peer count",
+            vec![],
+            background,
+        )
+        .await
     }
 
     /// Mempool stats for the dashboard (docs/SPEC.md item 2: "mempool").
     pub async fn get_mempool_info(&self, background: bool) -> Result<Value, RpcError> {
-        self.call("getmempoolinfo", vec![], "check mempool", background)
+        self.call(
+            "getmempoolinfo",
+            vec![],
+            "check mempool",
+            vec![],
+            background,
+        )
+        .await
+    }
+
+    /// Unlocks the wallet for `timeout_secs` before a signing action
+    /// (docs/SPEC.md item 3, Foundation D): `passphrase` is redacted
+    /// from `command_display` so it never reaches the Live Command
+    /// Monitor or `command_history` — confirmed necessary and correct
+    /// live (DECISIONS.md, Phase 5 VERIFY): a real `walletpassphrase`
+    /// call's equivalent bitcoin-cli display otherwise shows the
+    /// passphrase in plain text.
+    pub async fn wallet_passphrase(
+        &self,
+        wallet: &str,
+        passphrase: &str,
+        timeout_secs: u32,
+    ) -> Result<(), RpcError> {
+        self.wallet_call(
+            wallet,
+            "walletpassphrase",
+            vec![json!(passphrase), json!(timeout_secs)],
+            "unlock wallet",
+            vec![passphrase.to_string()],
+            false,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Re-locks the wallet immediately after a signing action, rather
+    /// than waiting out `wallet_passphrase`'s timeout (docs/SPEC.md
+    /// item 3: "unlocks it... for a short timeout and locks it again
+    /// afterwards").
+    pub async fn wallet_lock(&self, wallet: &str) -> Result<(), RpcError> {
+        self.wallet_call(wallet, "walletlock", vec![], "lock wallet", vec![], false)
+            .await?;
+        Ok(())
+    }
+
+    /// Encrypts a not-yet-encrypted wallet (docs/SPEC.md item 3: every
+    /// MAINNET wallet must be encrypted). Same redaction reasoning as
+    /// `wallet_passphrase`.
+    pub async fn encrypt_wallet(&self, wallet: &str, passphrase: &str) -> Result<(), RpcError> {
+        self.wallet_call(
+            wallet,
+            "encryptwallet",
+            vec![json!(passphrase)],
+            "encrypt wallet",
+            vec![passphrase.to_string()],
+            false,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Same as `call`, but against `/wallet/<wallet>` — every wallet
+    /// RPC (as opposed to node-level RPCs like `getblockchaininfo`)
+    /// needs the wallet name in the URL path (confirmed live,
+    /// DECISIONS.md Phase 5 VERIFY: `curl .../wallet/ord`).
+    #[allow(clippy::too_many_arguments)]
+    async fn wallet_call(
+        &self,
+        wallet: &str,
+        method: &str,
+        params: Vec<Value>,
+        triggering_action: &str,
+        redact: Vec<String>,
+        background: bool,
+    ) -> Result<Value, RpcError> {
+        let url = format!("{}/wallet/{}", self.url.trim_end_matches('/'), wallet);
+        self.call_at(url, method, params, triggering_action, redact, background)
+            .await
+    }
+
+    /// Shared implementation behind `call`/`wallet_call`: only the
+    /// target URL differs between a node-level RPC and a wallet RPC.
+    #[allow(clippy::too_many_arguments)]
+    async fn call_at(
+        &self,
+        url: String,
+        method: &str,
+        params: Vec<Value>,
+        triggering_action: &str,
+        redact: Vec<String>,
+        background: bool,
+    ) -> Result<Value, RpcError> {
+        let display = self.equivalent_bitcoin_cli(method, &params);
+        let http = self.http.clone();
+        let user = self.user.clone();
+        let password = self.password.clone();
+        let method = method.to_string();
+
+        self.executor
+            .record(
+                RecordSpec {
+                    environment: self.environment.clone(),
+                    source: CommandSource::Rpc,
+                    triggering_action: triggering_action.to_string(),
+                    command_display: display,
+                    redact,
+                    sensitivity: Sensitivity::Normal,
+                    background,
+                },
+                move || async move { do_call(http, url, user, password, method, params).await },
+            )
             .await
     }
 
@@ -230,6 +350,76 @@ async fn do_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nk_exec::ExecEvent;
+
+    /// The real, automatable slice of Phase 5's [CI] "fake-passphrase
+    /// search test" acceptance criterion: a passphrase passed to
+    /// `wallet_passphrase` must never appear in the `command_display`
+    /// broadcast to the Live Command Monitor. Found live (DECISIONS.md,
+    /// Phase 5 VERIFY) that `RpcClient::call` previously hardcoded
+    /// `redact: vec![]`, which would have leaked it. The call itself
+    /// fails (nothing is listening on port 1) -- irrelevant here, since
+    /// the `Started` event (carrying `command_display`) is emitted
+    /// *before* the call is attempted.
+    #[tokio::test]
+    async fn a_wallet_passphrase_never_appears_in_the_broadcast_command_display() {
+        let executor = Executor::new();
+        let mut events = executor.subscribe();
+        let client = RpcClient::new(
+            "http://127.0.0.1:1".to_string(),
+            "u".to_string(),
+            "p".to_string(),
+            executor,
+            "regtest".to_string(),
+            Chain::Regtest,
+        );
+
+        let fake_passphrase = "correct horse battery staple fake";
+        let _ = client.wallet_passphrase("ord", fake_passphrase, 30).await;
+
+        match events.recv().await.unwrap() {
+            ExecEvent::Started {
+                command_display, ..
+            } => {
+                assert!(
+                    !command_display.contains(fake_passphrase),
+                    "command_display leaked the passphrase: {command_display}"
+                );
+            }
+            other => panic!("expected a Started event first, got {other:?}"),
+        }
+    }
+
+    /// Same reasoning and mechanism as the passphrase test above, for
+    /// `encrypt_wallet`.
+    #[tokio::test]
+    async fn encrypt_wallet_never_appears_in_the_broadcast_command_display() {
+        let executor = Executor::new();
+        let mut events = executor.subscribe();
+        let client = RpcClient::new(
+            "http://127.0.0.1:1".to_string(),
+            "u".to_string(),
+            "p".to_string(),
+            executor,
+            "regtest".to_string(),
+            Chain::Regtest,
+        );
+
+        let fake_passphrase = "another fake passphrase entirely";
+        let _ = client.encrypt_wallet("ord", fake_passphrase).await;
+
+        match events.recv().await.unwrap() {
+            ExecEvent::Started {
+                command_display, ..
+            } => {
+                assert!(
+                    !command_display.contains(fake_passphrase),
+                    "command_display leaked the passphrase: {command_display}"
+                );
+            }
+            other => panic!("expected a Started event first, got {other:?}"),
+        }
+    }
 
     #[test]
     fn equivalent_bitcoin_cli_includes_the_chain_flag_except_for_mainnet() {

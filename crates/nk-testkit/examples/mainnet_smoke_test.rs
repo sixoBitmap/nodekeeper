@@ -90,7 +90,13 @@ async fn wait_for_a_peer(rpc: &RpcClient) -> Result<u64, Box<dyn std::error::Err
     let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
     loop {
         let count = rpc
-            .call("getconnectioncount", vec![], "mainnet smoke test", true)
+            .call(
+                "getconnectioncount",
+                vec![],
+                "mainnet smoke test",
+                vec![],
+                true,
+            )
             .await?
             .as_u64()
             .ok_or("getconnectioncount did not return a number")?;

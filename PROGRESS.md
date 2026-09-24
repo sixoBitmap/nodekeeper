@@ -797,22 +797,27 @@ handling or workaround needed -- the spec's STOP-AND-ASK trigger for
 this did not fire).
 
 `nk-rpc` (wallet-unlock RPCs, with real redaction -- a gap found while
-planning this phase)
-- [ ] `RpcClient::call()` currently hardcodes `redact: vec![]` and
-      `Sensitivity::Normal` -- fine for every RPC used so far (none
-      carried a secret parameter), but `walletpassphrase <passphrase>
-      <timeout>`'s equivalent-bitcoin-cli `command_display` would
-      leak the passphrase straight into the Live Command Monitor and
-      `command_history` otherwise. Add a `redact: Vec<String>`
-      parameter to `call()` (breaking change, update every existing
-      call site to pass `vec![]`), then `wallet_passphrase`/
-      `wallet_lock`/`encrypt_wallet` typed wrappers that actually use
-      it.
-- [ ] Test: a call carrying a fake passphrase never appears in the
-      redacted `command_display` -- the real, automatable slice of the
-      Phase 5 [CI] "fake-passphrase search test" acceptance criterion
-      (the fake-mnemonic half lives with the sensitive-channel work
-      below).
+planning this phase) — **done**
+- [x] Added a `redact: Vec<String>` parameter to `RpcClient::call()`
+      (breaking change, every existing call site updated to pass
+      `vec![]`) plus `wallet_passphrase`/`wallet_lock`/`encrypt_wallet`
+      typed wrappers, each targeting `/wallet/<name>` (a new private
+      `call_at`/`wallet_call` split keeps `call()` and the wallet
+      wrappers from duplicating the record/broadcast plumbing) and
+      passing the real passphrase through `redact` so it's scrubbed
+      from `command_display` before broadcast.
+- [x] Tests: two unit tests confirm a fake passphrase never appears in
+      the broadcast `command_display` for `wallet_passphrase`/
+      `encrypt_wallet` (network-free, same layering as `nk-rpc`'s other
+      tests) -- the real, automatable slice of the Phase 5 [CI]
+      "fake-passphrase search test" acceptance criterion (the
+      fake-mnemonic half lives with the sensitive-channel work below).
+      Plus a real `nk-testkit` integration test,
+      `wallet_unlock_and_lock_gate_a_real_signing_rpc`: encrypts a real
+      wallet, confirms a signing RPC fails cleanly while locked,
+      `wallet_passphrase` unlocks it and the same RPC succeeds,
+      `wallet_lock` re-locks it and the RPC fails again -- **ran live
+      on this Windows machine, passed**.
 
 `nk-ord` (wallet CLI wrapper)
 - [ ] `wallet_args(environment, server_url, wallet_name)` argument
