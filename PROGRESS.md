@@ -876,10 +876,19 @@ Foundation D (webview security model, CSP)
       (`nk-ord`) mapping the two real failure texts found live
       (locked-wallet, ord-behind-bitcoind) to `AppErrorCode::
       WalletLocked`/`OrdNotSynced`.
-- [ ] Full-screen view: screenshot warning, mnemonic shown once,
-      require confirming several words before proceeding, zeroize
-      (frontend-side: clear component state, no lingering references)
-      immediately after.
+- [x] Full-screen view: already existed, built as Phase 1's skeleton
+      (`SensitiveSeedView.tsx`, `feat: shared components...` commit) --
+      screenshot warning, mnemonic shown once (numbered word grid),
+      then a confirm step quizzing 3 random word positions, "Confirm"
+      disabled until all 3 are typed correctly. Takes `words: string[]`
+      + `onDone`; the future "Wallet screen" wiring passes
+      `create_wallet`'s `mnemonic` split on whitespace. Re-verified
+      this session (re-read the file properly after an initial mistake
+      where I overwrote it without reading first, caught by noticing
+      `git status` showed a *modified* file rather than a new one --
+      reverted with `git checkout <commit> --`, restoring the original
+      untouched) that it already fully satisfies this task; nothing
+      left to build here.
 - [x] Test: the fake-mnemonic half of the search-test acceptance
       criterion -- `create_and_restore_wallet_never_leak_the_mnemonic_
       to_the_broadcast_stream` (`nk-testkit`): neither a real
