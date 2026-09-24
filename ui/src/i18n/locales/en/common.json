@@ -2,6 +2,10 @@
   "app": {
     "title": "Nodekeeper"
   },
+  "nav": {
+    "dashboard": "Dashboard",
+    "wallet": "Wallet"
+  },
   "theme": {
     "toggleToLight": "Switch to light theme",
     "toggleToDark": "Switch to dark theme"
@@ -129,6 +133,25 @@
       "addresses": "Addresses",
       "none": "None enabled"
     }
+  },
+  "wallet": {
+    "title": "Wallet",
+    "checking": "Checking for a wallet…",
+    "noneYet": "This environment doesn't have a wallet yet.",
+    "create": "Create wallet",
+    "restore": "Restore wallet",
+    "cancel": "Cancel",
+    "restoreTitle": "Restore from recovery phrase",
+    "restorePlaceholder": "Enter your 12-word recovery phrase, separated by spaces",
+    "restoreWordCount": "{{count}} word",
+    "restoreWordCount_other": "{{count}} words",
+    "restoreHasHistory": "This wallet has existing funds or transaction history (does a full rescan)",
+    "restoreSubmit": "Restore",
+    "loadingBalance": "Loading balance…",
+    "cardinalBalance": "Cardinal (spendable)",
+    "inscribedBalance": "Inscribed",
+    "totalBalance": "Total",
+    "receiveAddress": "Receive address"
   },
   "diskMonitor": {
     "title": "Disk usage",

@@ -10,6 +10,7 @@ import type { OrdStatus } from "@/bindings/OrdStatus";
 import type { SystemCheck } from "@/bindings/SystemCheck";
 import type { LogWindow } from "@/bindings/LogWindow";
 import type { TypedError } from "@/bindings/TypedError";
+import type { WalletBalance } from "@/bindings/WalletBalance";
 
 const NO_INDEX_OPTIONS = { index_sats: false, index_runes: false, index_addresses: false };
 const ALL_INDEX_OPTIONS = { index_sats: true, index_runes: true, index_addresses: true };
@@ -72,6 +73,20 @@ const settings = new Map<string, string>();
 const runningSince = new Map<Chain, number>();
 // Same idea for ord: "indexing" for a few seconds, then "caught up".
 const ordRunningSince = new Map<Chain, number>();
+// A tiny fake wallet per chain, keyed by whether create/restore has
+// "run" -- just enough for the Wallet screen's create-vs-show branch
+// to have something real-ish to render in the browser preview.
+const wallets = new Map<Chain, { address: string; balance: WalletBalance }>();
+
+const MOCK_MNEMONIC =
+  "wolf tiger eagle river stone flame cloud brave delta ember frost glow";
+
+function mockWallet(chain: Chain): { address: string; balance: WalletBalance } {
+  return {
+    address: `bcrt1p${chain}mockaddress0000000000000000000000000000000000000000`,
+    balance: { cardinal: 4_998_990_000, ordinal: 10_000, total: 4_999_000_000 },
+  };
+}
 
 const MOCK_LOG_LINES = [
   "2026-09-23T12:00:00Z Bitcoin Core version v31.1",
@@ -186,6 +201,34 @@ export function installDevTauriMockIfNeeded() {
         const { chain } = args as { chain: Chain };
         if (!ordRunningSince.has(chain)) return Promise.reject(notRunningError(chain));
         return mockOrdStatus(chain);
+      }
+      case "wallet_exists":
+        return wallets.has((args as { chain: Chain }).chain);
+      case "create_wallet": {
+        const { chain } = args as { chain: Chain };
+        wallets.set(chain, mockWallet(chain));
+        return { mnemonic: MOCK_MNEMONIC };
+      }
+      case "restore_wallet": {
+        const { chain } = args as { chain: Chain };
+        wallets.set(chain, mockWallet(chain));
+        return undefined;
+      }
+      case "wallet_balance": {
+        const { chain } = args as { chain: Chain };
+        const wallet = wallets.get(chain);
+        if (!wallet) {
+          return Promise.reject({ code: null, message: `${chain} has no wallet yet` });
+        }
+        return wallet.balance;
+      }
+      case "wallet_receive_address": {
+        const { chain } = args as { chain: Chain };
+        const wallet = wallets.get(chain);
+        if (!wallet) {
+          return Promise.reject({ code: null, message: `${chain} has no wallet yet` });
+        }
+        return wallet.address;
       }
       default:
         throw new Error(`dev-tauri-mock: no mock for IPC command "${cmd}"`);

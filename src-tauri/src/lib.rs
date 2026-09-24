@@ -267,6 +267,65 @@ async fn wallet_exists(
         .map_err(TypedError::from)
 }
 
+/// docs/SPEC.md item 3: "Balance: cardinal vs inscribed sats."
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct WalletBalance {
+    #[ts(type = "number")]
+    pub cardinal: u64,
+    #[ts(type = "number")]
+    pub ordinal: u64,
+    #[ts(type = "number")]
+    pub total: u64,
+}
+
+#[tauri::command]
+async fn wallet_balance(
+    chain: Chain,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<WalletBalance, TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store)?;
+    let response = nk_ord::wallet::wallet_balance(&executor, &ctx.target())
+        .await
+        .map_err(TypedError::from)?;
+    let field = |key: &str| {
+        response.get(key).and_then(|v| v.as_u64()).ok_or_else(|| {
+            TypedError::from(format!(
+                "ord did not return a numeric \"{key}\" balance field"
+            ))
+        })
+    };
+    Ok(WalletBalance {
+        cardinal: field("cardinal")?,
+        ordinal: field("ordinal")?,
+        total: field("total")?,
+    })
+}
+
+/// docs/SPEC.md item 3: "Receive: address with a QR code" -- just the
+/// single next address; `nk_ord::wallet::wallet_receive` supports
+/// requesting several at once, not needed by this screen yet.
+#[tauri::command]
+async fn wallet_receive_address(
+    chain: Chain,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<String, TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store)?;
+    let response = nk_ord::wallet::wallet_receive(&executor, &ctx.target(), None)
+        .await
+        .map_err(TypedError::from)?;
+    response
+        .get("addresses")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| TypedError::from("ord did not return a receive address".to_string()))
+}
+
 #[tauri::command]
 async fn start_node(
     chain: Chain,
@@ -549,6 +608,8 @@ pub fn run() {
             create_wallet,
             restore_wallet,
             wallet_exists,
+            wallet_balance,
+            wallet_receive_address,
             tail_debug_log,
             page_debug_log_before,
             search_debug_log,
@@ -578,6 +639,7 @@ mod tests {
         node_manager::NodeStatus::export_all(&config).unwrap();
         node_manager::OrdStatus::export_all(&config).unwrap();
         CreateWalletResult::export_all(&config).unwrap();
+        WalletBalance::export_all(&config).unwrap();
         nk_core::log_tail::LogWindow::export_all(&config).unwrap();
         nk_store::CommandHistoryEntry::export_all(&config).unwrap();
         nk_exec::ExecEvent::export_all(&config).unwrap();

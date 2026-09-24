@@ -18,3 +18,8 @@ export function formatUptime(seconds: number): string {
   if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
 }
+
+/** Sats as a BTC amount, e.g. `formatSats(100_000_000) === "1.00000000 BTC"`. */
+export function formatSats(sats: number): string {
+  return `${(sats / 100_000_000).toFixed(8)} BTC`;
+}

@@ -911,8 +911,22 @@ Wallet screen (frontend + backend orchestration)
 - [ ] Wallet-unlock flow: passphrase prompt before a signing action,
       optional "Remember for this session" (in-memory only, cleared on
       lock/app-exit/idle timeout, default 15 min).
-- [ ] Balance (cardinal vs inscribed), receive (address + QR), multiple
-      named wallets.
+- [x] Balance (cardinal vs inscribed), receive (address + QR). New
+      typed Tauri commands `wallet_balance`/`wallet_receive_address`
+      (`WalletBalance` TS-exported), a `WalletScreen` composing
+      create/restore (wired to the existing `SensitiveSeedView`/new
+      `RestoreWalletForm`) with `WalletBalanceSection` once a wallet
+      exists, backed by `useWalletExists`/`useWalletBalance`. Added
+      `qrcode.react` (new frontend dependency, MIT, well-established)
+      for the receive-address QR. Added a simple Dashboard/Wallet nav
+      tab bar to `App.tsx` -- the app had no way to reach a second
+      screen before this. Verified live in the browser (dev IPC mock
+      extended with a fake per-chain wallet): create -> confirm words
+      -> balance+QR renders; switching environments shows each one's
+      own wallet state independently; restore -> balance+QR renders
+      for the restored chain. "Multiple named wallets" not done yet --
+      every wallet command hardcodes `DEFAULT_WALLET_NAME = "ord"`
+      for now, tracked as a separate follow-up.
 - [ ] Inscriptions gallery (static previews, Foundation D sandboxing
       above), rune balances gated on `index_runes` being enabled
       (Foundation F) -- and note the Phase 0 finding that rune listing

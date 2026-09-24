@@ -8,8 +8,11 @@ import { EnvironmentSwitcher } from "@/components/EnvironmentSwitcher";
 import { FirstRunDisclaimer } from "@/components/FirstRunDisclaimer";
 import { LiveCommandMonitor } from "@/components/LiveCommandMonitor";
 import { SystemCheckScreen } from "@/components/SystemCheckScreen";
+import { WalletScreen } from "@/components/WalletScreen";
 import { selectedEnvironment, useEnvironmentStore } from "@/store/environment";
 import { useThemeStore } from "@/store/theme";
+
+type Screen = "dashboard" | "wallet";
 
 const DISCLAIMER_SETTING_KEY = "disclaimer_acknowledged";
 
@@ -26,6 +29,7 @@ function App() {
   // gate like the disclaimer, so it's fine (and simplest) to show it
   // again on every launch rather than remembering "already seen".
   const [pastSystemCheck, setPastSystemCheck] = useState(false);
+  const [screen, setScreen] = useState<Screen>("dashboard");
 
   useEffect(() => {
     void loadEnvironments();
@@ -52,7 +56,27 @@ function App() {
     <div className="flex h-full flex-col bg-background text-foreground">
       {selected && <EnvBanner environment={selected} />}
       <header className="flex items-center justify-between border-b border-border px-4 py-2">
-        <h1 className="text-sm font-semibold">{t("app.title")}</h1>
+        <div className="flex items-center gap-4">
+          <h1 className="text-sm font-semibold">{t("app.title")}</h1>
+          {pastSystemCheck && (
+            <nav className="flex gap-1">
+              <Button
+                variant={screen === "dashboard" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setScreen("dashboard")}
+              >
+                {t("nav.dashboard")}
+              </Button>
+              <Button
+                variant={screen === "wallet" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setScreen("wallet")}
+              >
+                {t("nav.wallet")}
+              </Button>
+            </nav>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <EnvironmentSwitcher />
           <Button variant="outline" size="sm" onClick={toggleTheme}>
@@ -62,10 +86,15 @@ function App() {
       </header>
       <main className="flex-1 overflow-y-auto">
         {pastSystemCheck && selected ? (
-          // Keyed by chain: switching environments should remount with
-          // fresh state, not carry over the previous environment's
-          // status/log-viewer state (see useDashboardStatus/LogViewer).
-          <DashboardScreen key={selected.chain} environment={selected} />
+          // Keyed by chain (and now screen): switching environments or
+          // screens should remount with fresh state, not carry over
+          // the previous one's status/log-viewer state (see
+          // useDashboardStatus/LogViewer).
+          screen === "dashboard" ? (
+            <DashboardScreen key={selected.chain} environment={selected} />
+          ) : (
+            <WalletScreen key={selected.chain} chain={selected.chain} />
+          )
         ) : (
           <SystemCheckScreen onContinue={() => setPastSystemCheck(true)} />
         )}
