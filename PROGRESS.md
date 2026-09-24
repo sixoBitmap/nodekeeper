@@ -657,15 +657,26 @@ that comparison itself).
       the test would fail with a network error instead of
       `UnpinnedVersion` if the check happened after downloading)
 
-`nk-core` (ord paths, CLI argument generation, index options)
-- [ ] Per-environment index-option settings (index-sats, index-runes,
-      index-addresses) — persisted, not just in-memory defaults
-- [ ] ord CLI argument-array generation: chain flag, `--data-dir`,
-      `--cookie-file`, `--bitcoin-data-dir` (pointing at Nodekeeper's
-      own bitcoind, not ord's default `~/.bitcoin`), the enabled
-      `--index-*` flags, `server --address 127.0.0.1 --http --http-port
-      <port>` — tested that the RPC-bind-only-to-localhost rule from
-      Foundation D applies here exactly like bitcoind's `rpcbind`
+`nk-core` (ord paths, CLI argument generation, index options) — **done**
+- [x] Per-environment index-option settings (index-sats, index-runes,
+      index-addresses) — `Environment::index_options: IndexOptions`,
+      defaulted per chain via `Chain::default_index_options()` (only
+      Regtest defaults to all-on, per Foundation F). **Not yet actually
+      persisted** — same pre-existing gap as every other `Environment`
+      field (no environment-persistence system exists at all yet, not
+      something new to this task); wired up now so the setup wizard has
+      something real to write to once it exists
+- [x] ord CLI argument-array generation: chain flag (`Chain::
+      ord_cli_flag()`, double-dash, VERIFY'd distinct from bitcoind's
+      single-dash convention and from ord's separate legacy `--testnet`
+      flag), `--data-dir`, `--cookie-file`, `--bitcoin-data-dir`
+      (pointing at Nodekeeper's own bitcoind, not ord's default
+      `~/.bitcoin`), the enabled `--index-*` flags, `server --address
+      127.0.0.1 --http --http-port <port>` —
+      `nk_core::ord_conf::{ord_base_args, ord_server_args}`, tested that
+      the RPC-bind-only-to-localhost rule from Foundation D applies here
+      exactly like bitcoind's `rpcbind` (asserts the wildcard `0.0.0.0`
+      never appears)
 
 `nk-proc` (ord process manager)
 - [ ] `OrdProcess::start()`: spawn, track pid file (mirroring

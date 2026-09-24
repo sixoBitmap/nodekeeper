@@ -12,6 +12,7 @@ const REGTEST: Environment = {
   p2p_port: 18444,
   ord_port: 8081,
   data_root: "data/regtest",
+  index_options: { index_sats: true, index_runes: true, index_addresses: true },
 };
 
 const MAINNET: Environment = {
@@ -21,6 +22,7 @@ const MAINNET: Environment = {
   p2p_port: 8333,
   ord_port: 8080,
   data_root: "data/mainnet",
+  index_options: { index_sats: false, index_runes: false, index_addresses: false },
 };
 
 describe("ConfirmDialog", () => {

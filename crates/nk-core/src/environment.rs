@@ -7,6 +7,23 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
+/// ord's index options (docs/SPEC.md Foundation F): each one is
+/// "effectively permanent" once ord has indexed with it disabled —
+/// enabling it later means a full reindex, so these are surfaced (and
+/// chosen) up front, not toggled casually.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct IndexOptions {
+    /// Unlocks sat-level views (docs/SPEC.md Foundation F), including
+    /// "all inscriptions on this sat" in reinscribe mode.
+    pub index_sats: bool,
+    /// Unlocks rune balances (Foundation F). Missing this fails *soft*
+    /// in ord, not hard (VERIFY'd in Phase 0) — rune listing itself
+    /// still works, just without balance data.
+    pub index_runes: bool,
+    /// Unlocks address lookups in the explorer (Foundation F).
+    pub index_addresses: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Environment {
     pub chain: Chain,
@@ -25,6 +42,7 @@ pub struct Environment {
     /// environment.
     #[ts(type = "string")]
     pub data_root: PathBuf,
+    pub index_options: IndexOptions,
 }
 
 impl Environment {
@@ -38,6 +56,7 @@ impl Environment {
             p2p_port: chain.default_p2p_port(),
             ord_port: chain.default_ord_port(),
             data_root: app_data_root.join(chain.dir_name()),
+            index_options: chain.default_index_options(),
         }
     }
 }
@@ -52,5 +71,14 @@ mod tests {
         assert_eq!(env.data_root, Path::new("/data/regtest"));
         assert_eq!(env.name, "Regtest");
         assert_eq!(env.rpc_port, 18443);
+        assert!(env.index_options.index_sats);
+    }
+
+    #[test]
+    fn new_default_uses_the_chains_default_index_options() {
+        let mainnet = Environment::new_default(Chain::Mainnet, Path::new("/data"));
+        assert!(!mainnet.index_options.index_sats);
+        let regtest = Environment::new_default(Chain::Regtest, Path::new("/data"));
+        assert!(regtest.index_options.index_sats);
     }
 }

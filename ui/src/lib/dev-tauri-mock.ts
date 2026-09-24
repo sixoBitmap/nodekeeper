@@ -10,10 +10,39 @@ import type { SystemCheck } from "@/bindings/SystemCheck";
 import type { LogWindow } from "@/bindings/LogWindow";
 import type { TypedError } from "@/bindings/TypedError";
 
+const NO_INDEX_OPTIONS = { index_sats: false, index_runes: false, index_addresses: false };
+const ALL_INDEX_OPTIONS = { index_sats: true, index_runes: true, index_addresses: true };
+
 const MOCK_ENVIRONMENTS: Environment[] = [
-  { chain: "mainnet", name: "Mainnet", rpc_port: 8332, p2p_port: 8333, ord_port: 8080, data_root: "data/mainnet" },
-  { chain: "regtest", name: "Regtest", rpc_port: 18443, p2p_port: 18444, ord_port: 8081, data_root: "data/regtest" },
-  { chain: "signet", name: "Signet", rpc_port: 38332, p2p_port: 38333, ord_port: 8082, data_root: "data/signet" },
+  {
+    chain: "mainnet",
+    name: "Mainnet",
+    rpc_port: 8332,
+    p2p_port: 8333,
+    ord_port: 8080,
+    data_root: "data/mainnet",
+    index_options: NO_INDEX_OPTIONS,
+  },
+  {
+    chain: "regtest",
+    name: "Regtest",
+    rpc_port: 18443,
+    p2p_port: 18444,
+    ord_port: 8081,
+    data_root: "data/regtest",
+    // Matches Chain::default_index_options()'s real default: Regtest
+    // is the only chain that enables everything out of the box.
+    index_options: ALL_INDEX_OPTIONS,
+  },
+  {
+    chain: "signet",
+    name: "Signet",
+    rpc_port: 38332,
+    p2p_port: 38333,
+    ord_port: 8082,
+    data_root: "data/signet",
+    index_options: NO_INDEX_OPTIONS,
+  },
   {
     chain: "testnet4",
     name: "Testnet4",
@@ -21,6 +50,7 @@ const MOCK_ENVIRONMENTS: Environment[] = [
     p2p_port: 48333,
     ord_port: 8083,
     data_root: "data/testnet4",
+    index_options: NO_INDEX_OPTIONS,
   },
 ];
 

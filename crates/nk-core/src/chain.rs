@@ -76,6 +76,21 @@ impl Chain {
         }
     }
 
+    /// `ord`'s network-selection flag (double-dash, unlike bitcoind's
+    /// single-dash convention) — confirmed live against `ord --help`
+    /// 0.29.0 (DECISIONS.md, Phase 4). `None` for mainnet (the
+    /// default). Deliberately *not* `--testnet`: ord's CLI treats
+    /// `testnet` (legacy testnet3) and `testnet4` as distinct chain
+    /// values, not aliases — Nodekeeper only ever means testnet4.
+    pub fn ord_cli_flag(self) -> Option<&'static str> {
+        match self {
+            Chain::Mainnet => None,
+            Chain::Regtest => Some("--regtest"),
+            Chain::Signet => Some("--signet"),
+            Chain::Testnet4 => Some("--testnet4"),
+        }
+    }
+
     pub fn default_label(self) -> &'static str {
         match self {
             Chain::Mainnet => "Mainnet",
@@ -115,6 +130,21 @@ impl Chain {
             Chain::Testnet4 => 8083,
         }
     }
+
+    /// docs/SPEC.md Foundation F: "Regtest enables all index options by
+    /// default, since they cost almost nothing there." Every other
+    /// chain defaults to none enabled — each option is effectively
+    /// permanent once ord has indexed without it (enabling it later
+    /// means a full reindex), so the real cost/time tradeoff belongs to
+    /// the setup wizard, not a silent default.
+    pub fn default_index_options(self) -> crate::environment::IndexOptions {
+        let all = self == Chain::Regtest;
+        crate::environment::IndexOptions {
+            index_sats: all,
+            index_runes: all,
+            index_addresses: all,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -140,6 +170,31 @@ mod tests {
         for chain in Chain::ALL {
             assert_eq!(chain.bitcoin_cli_flag().is_none(), chain == Chain::Mainnet);
         }
+    }
+
+    #[test]
+    fn only_mainnet_has_no_ord_cli_flag() {
+        for chain in Chain::ALL {
+            assert_eq!(chain.ord_cli_flag().is_none(), chain == Chain::Mainnet);
+        }
+    }
+
+    #[test]
+    fn only_regtest_enables_all_index_options_by_default() {
+        for chain in Chain::ALL {
+            let opts = chain.default_index_options();
+            let all_enabled = opts.index_sats && opts.index_runes && opts.index_addresses;
+            assert_eq!(all_enabled, chain == Chain::Regtest);
+        }
+    }
+
+    #[test]
+    fn ord_testnet4_flag_is_not_the_legacy_testnet_flag() {
+        // ord's CLI treats `testnet` (legacy testnet3) and `testnet4` as
+        // distinct chain values -- confirmed live (DECISIONS.md, Phase
+        // 4). Nodekeeper must never accidentally emit the bare
+        // `--testnet` flag when it means testnet4.
+        assert_eq!(Chain::Testnet4.ord_cli_flag(), Some("--testnet4"));
     }
 
     #[test]
