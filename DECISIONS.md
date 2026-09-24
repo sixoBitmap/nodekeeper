@@ -1460,6 +1460,83 @@ a cheap wallet RPC (`wallet_addresses`) with `NonZeroExit` whose stderr
 contains `"Path does not exist"` treated as "no wallet", not an error
 (`nk_ord::wallet::wallet_exists`, added following this VERIFY).
 
+## Phase 5 — VERIFY: address validation and fee estimation for Send (2026-09-24)
+
+Before building the Send screen, checked live whether ord's own
+`wallet send --dry-run` already validates the destination address's
+network (docs/SPEC.md item 3: "reject addresses from the wrong
+network"), so Nodekeeper doesn't need its own bitcoin-address-parsing
+dependency just for this.
+
+- Dry-run send to a real mainnet address (`bc1q...`) from a regtest
+  wallet fails with a clean, distinguishable error: `error: validation
+  error\n\nbecause:\n- address bc1q... is not valid on regtest`. ord
+  already does this validation (it has to, to construct the
+  transaction) -- Nodekeeper's Send screen can just call `wallet_send_
+  dry_run` as both the fee/PSBT preview *and* the address-network
+  check, surfacing this error directly instead of duplicating address
+  parsing in Rust or JS.
+- `estimatesmartfee` on regtest (no real fee market): `{"errors":
+  ["Insufficient data or no feerate found"], "blocks": 0}` -- no
+  `feerate` field at all, confirming docs/SPEC.md item 3's own
+  expectation ("If no estimate is available (regtest, freshly synced
+  node), use a configurable fallback on regtest and require manual
+  entry with guidance on mainnet"). `wallet_fee_estimate` (new Tauri
+  command) returns `Option<f64>` -- `None` exactly when `feerate` is
+  absent, letting the frontend decide the fallback/manual-entry UI per
+  chain rather than guessing from a magic number.
+
+The "non-Taproot inscription" warning from the same SPEC item couldn't
+be VERIFY'd yet -- it needs a real inscription to send, which doesn't
+exist until Phase 6's inscribe flow is built. Deferred, not skipped.
+
+## Phase 5 — Send screen: browser verification of the ConfirmDialog passphrase flow (2026-09-24)
+
+Built `WalletSendForm` + extended `ConfirmDialog` with an optional
+`passphrase` prop, then verified the full flow live in the browser (dev
+server, mocked IPC extended with `MOCK_WALLET_PASSPHRASE` and a
+`rememberedPassphrases` map in `dev-tauri-mock.ts`) since there is no
+Tauri backend in that context to exercise `WalletSession` for real (that
+part is already covered by `wallet_unlock_and_lock_gate_a_real_signing_
+rpc` and `wallet_cli_create_fund_send_and_restore` in `nk-testkit`,
+against a real bitcoind+ord). Sequence, on the mainnet environment:
+
+1. Entered a regtest-prefixed address on mainnet, clicked Preview ->
+   friendly error panel; "Show technical details" matched the real
+   live-VERIFIED ord error text exactly: `error: validation error\n\n
+   because:\n- address bcrt1q... is not valid on mainnet`.
+2. Corrected to a valid mainnet address, Preview -> succeeded, fee
+   shown, no absurd-fee warning (fee was small relative to the amount).
+3. Clicked Send -> `ConfirmDialog` opened with the mainnet warning and
+   the mainnet-ack checkbox, no passphrase field yet (the form doesn't
+   know the wallet is locked until it tries).
+4. Checked the mainnet ack, clicked Send inside the dialog -> mock
+   rejected with `WALLET_LOCKED`, dialog stayed open and grew a
+   password field with "This wallet is locked; enter its passphrase to
+   continue."
+5. Entered a wrong passphrase, clicked Send -> rejected inline with the
+   real RPC -14 error text, dialog stayed open, mainnet ack stayed
+   checked (state preserved across a failed attempt).
+6. Entered the correct passphrase, checked "Remember for this session",
+   clicked Send -> succeeded, dialog closed, returned to the balance
+   view.
+7. Started a second, independent send (fresh address/amount) -> Preview
+   -> Send -> `ConfirmDialog` opened, mainnet ack checked, Send clicked
+   immediately with **no** passphrase field ever appearing -> succeeded
+   on the first attempt, confirming the remembered-passphrase path
+   (backend tries no-passphrase-provided first, falls back to
+   `WalletSession`, per the existing `wallet_send` Tauri command) works
+   end to end from the UI's perspective, not just in `WalletSession`'s
+   own unit tests.
+
+This is the browser-mock half of the two [MANUAL] Phase 5 acceptance
+criteria ("mainnet confirmation appears for a mainnet send"; "encrypted
+wallet unlock/lock works... session remember clears after the idle
+timeout") -- confirms the UI wiring is correct, but the user still needs
+to check these against the real Tauri app (real mainnet-shaped
+ConfirmDialog copy review, and the 15-minute idle-timeout expiry, which
+isn't practical to wait out in an automated or live-browser check).
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

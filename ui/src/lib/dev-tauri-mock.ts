@@ -80,6 +80,27 @@ const wallets = new Map<Chain, { address: string; balance: WalletBalance }>();
 
 const MOCK_MNEMONIC =
   "wolf tiger eagle river stone flame cloud brave delta ember frost glow";
+// The one passphrase the mock "wallet_send" accepts -- lets the Send
+// flow's passphrase prompt / wrong-passphrase / remember-for-session
+// paths all be exercised in the browser preview.
+const MOCK_WALLET_PASSPHRASE = "mock-passphrase";
+const rememberedPassphrases = new Map<Chain, string>();
+
+/** Same network-prefix check ord itself does live (DECISIONS.md Phase
+ * 5 VERIFY: "address ... is not valid on <chain>") -- a simplified
+ * version, prefix-only, good enough for the dev preview. */
+function mockAddressValidation(
+  chain: Chain,
+  address: string,
+): { code: null; message: string } | null {
+  const mainnetPrefixes = ["bc1", "1", "3"];
+  const testPrefixes = ["bcrt1", "tb1", "m", "n", "2"];
+  const prefixes = chain === "mainnet" ? mainnetPrefixes : testPrefixes;
+  if (!prefixes.some((p) => address.startsWith(p))) {
+    return { code: null, message: `error: validation error\n\nbecause:\n- address ${address} is not valid on ${chain}` };
+  }
+  return null;
+}
 
 function mockWallet(chain: Chain): { address: string; balance: WalletBalance } {
   return {
@@ -229,6 +250,50 @@ export function installDevTauriMockIfNeeded() {
           return Promise.reject({ code: null, message: `${chain} has no wallet yet` });
         }
         return wallet.address;
+      }
+      case "wallet_fee_estimate": {
+        const { chain } = args as { chain: Chain };
+        // Demonstrates both UI paths: a real estimate on mainnet, none
+        // elsewhere (matching the real VERIFY finding that regtest
+        // never has one -- DECISIONS.md Phase 5).
+        return chain === "mainnet" ? 14.5 : null;
+      }
+      case "wallet_send_dry_run": {
+        const { chain, address, feeRate } = args as {
+          chain: Chain;
+          address: string;
+          feeRate: number;
+        };
+        const rejection = mockAddressValidation(chain, address);
+        if (rejection) return Promise.reject(rejection);
+        return { txid: "mock-dry-run-txid", fee: Math.round(feeRate * 200) };
+      }
+      case "wallet_send": {
+        const { chain, address, feeRate, passphrase, remember } = args as {
+          chain: Chain;
+          address: string;
+          feeRate: number;
+          passphrase: string | null;
+          remember: boolean;
+        };
+        const rejection = mockAddressValidation(chain, address);
+        if (rejection) return Promise.reject(rejection);
+
+        const effectivePassphrase = passphrase ?? rememberedPassphrases.get(chain);
+        if (!effectivePassphrase) {
+          return Promise.reject({
+            code: "WALLET_LOCKED",
+            message: "This wallet is locked; enter its passphrase to continue.",
+          });
+        }
+        if (effectivePassphrase !== MOCK_WALLET_PASSPHRASE) {
+          return Promise.reject({
+            code: null,
+            message: `rpc error -14: the wallet passphrase entered was incorrect (dev mock -- try "${MOCK_WALLET_PASSPHRASE}")`,
+          });
+        }
+        if (remember) rememberedPassphrases.set(chain, effectivePassphrase);
+        return { txid: "mock-send-txid", fee: Math.round(feeRate * 200) };
       }
       default:
         throw new Error(`dev-tauri-mock: no mock for IPC command "${cmd}"`);

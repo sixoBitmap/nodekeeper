@@ -19,7 +19,9 @@
     "confirm": "Confirm",
     "mainnetWarningTitle": "You are on {{environment}} — this uses real bitcoin",
     "mainnetAcknowledge": "I understand this action is on mainnet and involves real bitcoin.",
-    "commandLabel": "Command that will run"
+    "commandLabel": "Command that will run",
+    "passphraseLabel": "Wallet passphrase",
+    "rememberPassphrase": "Remember for this session"
   },
   "sensitiveSeed": {
     "screenshotWarning": "Do not screenshot or photograph this screen. Write these words down on paper and store them somewhere safe.",
@@ -151,7 +153,25 @@
     "cardinalBalance": "Cardinal (spendable)",
     "inscribedBalance": "Inscribed",
     "totalBalance": "Total",
-    "receiveAddress": "Receive address"
+    "receiveAddress": "Receive address",
+    "send": {
+      "title": "Send",
+      "address": "Recipient address",
+      "amount": "Amount (BTC)",
+      "feeRate": "Fee rate (sat/vB)",
+      "feeRateManualRequired": "Enter a fee rate",
+      "noEstimateMainnet": "No fee estimate is available yet -- enter a fee rate manually.",
+      "noEstimateRegtest": "No fee estimate available on this network; using a fallback of {{rate}} sat/vB.",
+      "preview": "Preview",
+      "previewTitle": "Preview",
+      "previewFee": "Fee",
+      "feeWarningRate": "{{rate}} sat/vB is an unusually high fee rate.",
+      "feeWarningAbsolute": "{{fee}} is an unusually high fee.",
+      "feeWarningShare": "The fee is {{percent}}% of the amount sent -- unusually high.",
+      "submit": "Send",
+      "confirmTitle": "Send bitcoin",
+      "confirmDescription": "Send {{amount}} BTC to {{address}}"
+    }
   },
   "diskMonitor": {
     "title": "Disk usage",

@@ -1,26 +1,29 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import type { Chain } from "@/bindings/Chain";
 import type { CreateWalletResult } from "@/bindings/CreateWalletResult";
+import type { Environment } from "@/bindings/Environment";
 import type { TypedError } from "@/bindings/TypedError";
 import { Button } from "@/components/ui/button";
 import { ErrorPanel } from "@/components/ErrorPanel";
 import { RestoreWalletForm } from "@/components/RestoreWalletForm";
 import { SensitiveSeedView } from "@/components/SensitiveSeedView";
 import { WalletBalanceSection } from "@/components/WalletBalanceSection";
+import { WalletSendForm } from "@/components/WalletSendForm";
 import { useWalletExists } from "@/hooks/useWalletExists";
 import { friendlyError } from "@/lib/error-messages";
 
 /**
  * The visual ord wallet (docs/SPEC.md item 3), scoped to the current
- * environment. This increment covers create/restore and balance/
- * receive; the inscriptions gallery, send flow, and transaction
- * history are separate, later tasks (PROGRESS.md).
+ * environment. Create/restore, balance/receive, and send are covered;
+ * the inscriptions gallery and transaction history are separate, later
+ * tasks (PROGRESS.md).
  */
-export function WalletScreen({ chain }: { chain: Chain }) {
+export function WalletScreen({ environment }: { environment: Environment }) {
   const { t } = useTranslation();
+  const chain = environment.chain;
   const { exists, error: existsError, refresh } = useWalletExists(chain);
+  const [sending, setSending] = useState(false);
 
   // Set only right after a successful create -- while non-null, the
   // full-screen SensitiveSeedView takes over instead of anything else
@@ -79,7 +82,18 @@ export function WalletScreen({ chain }: { chain: Chain }) {
       {exists === null ? (
         <p className="text-sm text-muted-foreground">{t("wallet.checking")}</p>
       ) : exists ? (
-        <WalletBalanceSection chain={chain} />
+        <div className="space-y-4">
+          <WalletBalanceSection chain={chain} />
+          {sending ? (
+            <WalletSendForm
+              environment={environment}
+              onSent={() => setSending(false)}
+              onCancel={() => setSending(false)}
+            />
+          ) : (
+            <Button onClick={() => setSending(true)}>{t("wallet.send.title")}</Button>
+          )}
+        </div>
       ) : (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">{t("wallet.noneYet")}</p>

@@ -195,6 +195,29 @@ impl RpcClient {
         .await
     }
 
+    /// Fee-rate estimate for the Send screen (docs/SPEC.md item 3:
+    /// "estimates only from the local node"). `conf_target` is in
+    /// blocks. Returns the raw response -- `result.feerate` (BTC/kvB)
+    /// is present only when bitcoind actually has an estimate;
+    /// confirmed live (DECISIONS.md Phase 5 VERIFY) that regtest
+    /// returns `{"errors": [...], "blocks": 0}` with no `feerate` field
+    /// at all rather than an RPC error, so the caller checks for the
+    /// field's absence, not a `Result::Err`.
+    pub async fn estimate_smart_fee(
+        &self,
+        conf_target: u32,
+        background: bool,
+    ) -> Result<Value, RpcError> {
+        self.call(
+            "estimatesmartfee",
+            vec![json!(conf_target)],
+            "estimate fee rate",
+            vec![],
+            background,
+        )
+        .await
+    }
+
     /// Unlocks the wallet for `timeout_secs` before a signing action
     /// (docs/SPEC.md item 3, Foundation D): `passphrase` is redacted
     /// from `command_display` so it never reaches the Live Command

@@ -923,10 +923,10 @@ Wallet screen (frontend + backend orchestration)
       restore` (`nk-testkit`) -- this just orchestrates the same
       already-tested pieces, consistent with every other thin Tauri
       command in this file having no command-layer test of its own.
-      **Frontend half (passphrase-prompt dialog, "remember" checkbox,
-      wiring into an actual Send screen) not built yet** -- there's no
-      Send UI to trigger it from; tracked as part of the Send bullet
-      below, not done.
+      **Frontend half now built** -- `WalletSendForm`'s passphrase
+      prompt, wrong-passphrase rejection, and "remember for this
+      session" checkbox, wired through `ConfirmDialog`'s new optional
+      `passphrase` prop (see Send bullet below for the full flow).
 - [x] Balance (cardinal vs inscribed), receive (address + QR). New
       typed Tauri commands `wallet_balance`/`wallet_receive_address`
       (`WalletBalance` TS-exported), a `WalletScreen` composing
@@ -948,19 +948,60 @@ Wallet screen (frontend + backend orchestration)
       (Foundation F) -- and note the Phase 0 finding that rune listing
       fails *soft* (empty, not an error) without it, so gate
       proactively rather than trusting ord's own error.
-- [ ] Send: wrong-network address rejection, non-Taproot-inscription
-      warning, fee-rate estimate from `estimatesmartfee` with a
-      regtest fallback / mainnet manual-entry requirement, absurd-fee
-      guard, dry-run preview + review screen, MAINNET extra
-      confirmation via the existing shared `ConfirmDialog`.
+- [x] Send: `WalletSendForm` (address, amount, fee rate) ->
+      `wallet_send_dry_run` preview (fee shown, or the friendly
+      wrong-network-address error with technical details expandable)
+      -> `ConfirmDialog` (MAINNET extra ack checkbox, reused unchanged
+      -- no screen implements its own confirmation flow) -> `wallet_
+      send`. New `nk-rpc::estimate_smart_fee` +
+      `wallet_fee_estimate` Tauri command (a new bitcoind-only
+      `bitcoin_rpc_context` helper, factored out of `wallet_context`
+      since fee estimation doesn't need ord running) pre-fill the fee
+      field; VERIFY'd live (DECISIONS.md) that regtest has no fallback
+      estimate (`estimatesmartfee` returns no `feerate` field), so the
+      field is left blank with a placeholder rather than a fake
+      number -- the user must enter one. Absurd-fee guard (>200 sat/vB,
+      or >5% of the send amount, or >50,000 sats) shown as a
+      non-blocking warning, not a hard block. `ConfirmDialog` extended
+      with an optional `passphrase` prop (value/onChange/remember/
+      error, Input `type="password"` + a "remember for this session"
+      checkbox) -- `WalletSendForm` tries the send with no passphrase
+      first, and only shows the field after catching a real
+      `WALLET_LOCKED` rejection (matching how the backend already
+      falls back to `WalletSession` before asking); a wrong password
+      keeps the dialog open with the real RPC -14 error text inline.
+      **Non-Taproot-inscription warning intentionally deferred**: it
+      needs real inscription data to warn about, which doesn't exist
+      until Phase 6's inscribe studio -- nothing to gate against yet,
+      not a missed step. Verified live in the browser (dev IPC mock,
+      `MOCK_WALLET_PASSPHRASE`): wrong-network address rejected with
+      the exact live-VERIFIED ord error text; valid preview shows the
+      correct fee with no false absurd-fee warning; Send opens
+      `ConfirmDialog` with the mainnet warning; wrong passphrase
+      rejected inline without closing the dialog; correct passphrase
+      + "remember" succeeds and returns to the balance view; a second
+      send immediately afterward succeeds with **no** passphrase
+      re-prompt, confirming the remembered-passphrase path end to end.
 - [ ] Transaction history.
 
 Acceptance criteria (from docs/SPEC.md Phase 5 "Done when"):
-- [ ] [CI] the fake-mnemonic and fake-passphrase search test passes
+- [x] [CI] the fake-mnemonic and fake-passphrase search test passes --
+      `create_and_restore_wallet_never_leak_the_mnemonic_to_the_
+      broadcast_stream` (`nk-testkit`, real+fake mnemonic) plus
+      `nk-rpc`'s two `wallet_passphrase`/`encrypt_wallet` redaction
+      unit tests (fake passphrase). All part of every `cargo test
+      --workspace` run; confirmed passing locally this session
+      (pending a fresh CI run once GitHub Actions billing is resolved
+      -- see the Phase 4 CI note).
 - [ ] [CI] a malicious test HTML/SVG inscription cannot call Tauri IPC
       or read app data
 - [ ] [CI] wrong-network addresses are rejected; an inscription send
-      completes on regtest
+      completes on regtest -- wrong-network rejection is VERIFIED live
+      against real ord (DECISIONS.md) and exercised in the browser
+      (mocked IPC mirrors the exact real error text), but has no
+      automated `cargo test` assertion of its own yet; "an inscription
+      send" can't be built until Phase 6 produces real inscriptions to
+      send. Left unchecked until both exist as real CI-run tests.
 - [ ] [MANUAL] mainnet confirmation appears for a mainnet send (cancel
       it before broadcasting); encrypted wallet unlock/lock works; the
       session remember clears after the idle timeout

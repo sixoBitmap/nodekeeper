@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { Environment } from "@/bindings/Environment";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -29,6 +30,24 @@ export interface ConfirmDialogProps {
   learnMode?: boolean;
   onConfirm: () => void;
   confirmLabel?: string;
+  /**
+   * Optional passphrase entry (docs/SPEC.md item 3: unlock before a
+   * signing action, with an optional "Remember for this session").
+   * The caller owns the actual state (this component just renders and
+   * reports changes) so it stays available to `onConfirm` without a
+   * separate step -- kept here, not a second dialog, so the mainnet
+   * confirmation and the unlock stay one flow, matching "No screen may
+   * implement its own confirmation flow." Confirm stays disabled until
+   * a non-empty passphrase is entered, on top of the existing mainnet
+   * gating.
+   */
+  passphrase?: {
+    value: string;
+    onChange: (value: string) => void;
+    remember: boolean;
+    onRememberChange: (remember: boolean) => void;
+    error?: string;
+  };
 }
 
 /**
@@ -49,6 +68,7 @@ export function ConfirmDialog({
   learnMode,
   onConfirm,
   confirmLabel,
+  passphrase,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
   const isMainnet = environment.chain === "mainnet";
@@ -94,13 +114,36 @@ export function ConfirmDialog({
           </div>
         )}
 
+        {passphrase && (
+          <div className="space-y-2">
+            <label className="block text-sm">
+              {t("confirmDialog.passphraseLabel")}
+              <Input
+                className="mt-1"
+                type="password"
+                value={passphrase.value}
+                onChange={(e) => passphrase.onChange(e.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            {passphrase.error && <p className="text-xs text-danger">{passphrase.error}</p>}
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={passphrase.remember}
+                onCheckedChange={(checked) => passphrase.onRememberChange(checked === true)}
+              />
+              {t("confirmDialog.rememberPassphrase")}
+            </label>
+          </div>
+        )}
+
         <DialogFooter>
           <Button variant="outline" onClick={() => handleOpenChange(false)}>
             {t("confirmDialog.cancel")}
           </Button>
           <Button
             variant={isMainnet ? "destructive" : "default"}
-            disabled={isMainnet && !mainnetAck}
+            disabled={(isMainnet && !mainnetAck) || (passphrase !== undefined && passphrase.value.length === 0)}
             onClick={onConfirm}
           >
             {confirmLabel ?? t("confirmDialog.confirm")}

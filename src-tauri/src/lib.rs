@@ -181,27 +181,23 @@ impl WalletContext {
     }
 }
 
-fn wallet_context(
+/// Just the bitcoind-level pieces (RPC client + environment), for
+/// commands that need the node but not ord/a wallet -- fee estimation,
+/// for instance, is a plain bitcoind RPC with no wallet involved at
+/// all, so requiring ord to be running for it would be an unmotivated
+/// extra constraint. `wallet_context` below builds on top of this.
+fn bitcoin_rpc_context(
     chain: Chain,
     node_manager: &tauri::State<'_, NodeManager>,
-    store: &tauri::State<'_, Arc<Mutex<Store>>>,
     executor: &tauri::State<'_, Executor>,
-) -> Result<WalletContext, TypedError> {
+) -> Result<(Environment, nk_rpc::RpcClient), TypedError> {
     if !node_manager.is_running(chain) {
         return Err(TypedError::from(format!(
-            "{chain:?}'s node must be running before using its wallet"
+            "{chain:?}'s node must be running first"
         )));
     }
-    if !node_manager.is_ord_running(chain) {
-        return Err(TypedError::from(format!(
-            "{chain:?}'s ord server must be running before using its wallet"
-        )));
-    }
-    let ord_binary_path = configured_ord_path(store)?;
     let environment = Environment::new_default(chain, data_root());
     let cookie_path = environment.bitcoin_cookie_path();
-    let bitcoin_datadir = environment.bitcoin_datadir_arg();
-    let server_url = format!("http://127.0.0.1:{}", environment.ord_port);
     let rpc = nk_rpc::RpcClient::from_cookie_file(
         format!("http://127.0.0.1:{}", environment.rpc_port),
         &cookie_path,
@@ -210,6 +206,25 @@ fn wallet_context(
         chain,
     )
     .map_err(|e| TypedError::from(e.to_string()))?;
+    Ok((environment, rpc))
+}
+
+fn wallet_context(
+    chain: Chain,
+    node_manager: &tauri::State<'_, NodeManager>,
+    store: &tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: &tauri::State<'_, Executor>,
+) -> Result<WalletContext, TypedError> {
+    let (environment, rpc) = bitcoin_rpc_context(chain, node_manager, executor)?;
+    if !node_manager.is_ord_running(chain) {
+        return Err(TypedError::from(format!(
+            "{chain:?}'s ord server must be running before using its wallet"
+        )));
+    }
+    let ord_binary_path = configured_ord_path(store)?;
+    let cookie_path = environment.bitcoin_cookie_path();
+    let bitcoin_datadir = environment.bitcoin_datadir_arg();
+    let server_url = format!("http://127.0.0.1:{}", environment.ord_port);
     Ok(WalletContext {
         ord_binary_path,
         environment,
@@ -444,6 +459,35 @@ async fn wallet_send(
     let _ = ctx.rpc.wallet_lock(DEFAULT_WALLET_NAME).await;
 
     parse_wallet_send_result(response.map_err(TypedError::from)?)
+}
+
+/// Fee-rate estimate in sat/vB for the Send screen (docs/SPEC.md item
+/// 3: "estimates only from the local node"). `conf_target` is in
+/// blocks (a smaller number asks for a faster, more expensive
+/// estimate). `None` means bitcoind has no estimate yet -- confirmed
+/// live (DECISIONS.md Phase 5 VERIFY) this is regtest's normal
+/// response, not an error; the frontend falls back to a configurable
+/// regtest default or requires manual entry on mainnet, per spec.
+/// Doesn't need ord at all, so only requires the node running, not the
+/// wallet (`bitcoin_rpc_context`, not `wallet_context`).
+#[tauri::command]
+async fn wallet_fee_estimate(
+    chain: Chain,
+    conf_target: u32,
+    node_manager: tauri::State<'_, NodeManager>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<Option<f64>, TypedError> {
+    let (_environment, rpc) = bitcoin_rpc_context(chain, &node_manager, &executor)?;
+    let response = rpc
+        .estimate_smart_fee(conf_target, false)
+        .await
+        .map_err(|e| TypedError::from(e.to_string()))?;
+    // bitcoind reports BTC/kvB; sat/vB is BTC/kvB * 100_000 (100_000_000
+    // sats/BTC / 1000 vB/kvB).
+    Ok(response
+        .get("feerate")
+        .and_then(|v| v.as_f64())
+        .map(|btc_per_kvb| btc_per_kvb * 100_000.0))
 }
 
 #[tauri::command]
@@ -734,6 +778,7 @@ pub fn run() {
             wallet_receive_address,
             wallet_send_dry_run,
             wallet_send,
+            wallet_fee_estimate,
             tail_debug_log,
             page_debug_log_before,
             search_debug_log,

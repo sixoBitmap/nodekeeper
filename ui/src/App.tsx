@@ -93,7 +93,7 @@ function App() {
           screen === "dashboard" ? (
             <DashboardScreen key={selected.chain} environment={selected} />
           ) : (
-            <WalletScreen key={selected.chain} chain={selected.chain} />
+            <WalletScreen key={selected.chain} environment={selected} />
           )
         ) : (
           <SystemCheckScreen onContinue={() => setPastSystemCheck(true)} />
