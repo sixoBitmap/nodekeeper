@@ -633,7 +633,68 @@ Acceptance criteria (from docs/SPEC.md Phase 3 "Done when"):
 
 ## Phase 4 — ord integration
 
-Not started. See docs/SPEC.md Phase 4.
+In progress. Tasks (one at a time: implement -> test -> quality gate ->
+commit -> tick). VERIFY'd live before starting (DECISIONS.md): ord
+0.29.0 is still current, its CLI surface (chain/index-option/path/
+server flags), and its `/status` sync-API (needs `Accept: application/
+json`, returns ord's own indexed height — "caught up" means comparing
+that against `getblockchaininfo`'s `blocks` via nk-rpc, ord doesn't do
+that comparison itself).
+
+`nk-verify` (ord download + verification, pinned hashes)
+- [ ] Pin ord 0.29.0's per-platform SHA-256 hashes (from DECISIONS.md,
+      independently computed, not just GitHub's reported digest);
+      refuse any unpinned version rather than skipping verification
+- [ ] `download_and_verify_ord_asset`, mirroring `nk-verify::bitcoin_
+      core`'s shape (no builder-key/PGP step — ord has no maintainer
+      checksums file, so the pinned hash *is* the verification per
+      docs/SPEC.md item 1)
+- [ ] Tests: a real download of the live ord 0.29.0 release verifies
+      successfully (network test, not mocked); a tampered/corrupted
+      file is rejected; an unpinned version is refused
+
+`nk-core` (ord paths, CLI argument generation, index options)
+- [ ] Per-environment index-option settings (index-sats, index-runes,
+      index-addresses) — persisted, not just in-memory defaults
+- [ ] ord CLI argument-array generation: chain flag, `--data-dir`,
+      `--cookie-file`, `--bitcoin-data-dir` (pointing at Nodekeeper's
+      own bitcoind, not ord's default `~/.bitcoin`), the enabled
+      `--index-*` flags, `server --address 127.0.0.1 --http --http-port
+      <port>` — tested that the RPC-bind-only-to-localhost rule from
+      Foundation D applies here exactly like bitcoind's `rpcbind`
+
+`nk-proc` (ord process manager)
+- [ ] `OrdProcess::start()`: spawn, track pid file (mirroring
+      `BitcoindProcess`), refuse a second instance on the same data dir
+- [ ] Graceful stop: SIGINT on macOS/Linux, `CREATE_NEW_PROCESS_GROUP` +
+      `CTRL_BREAK_EVENT` on Windows — **real CI test on all 3 OSes**,
+      finally closing the gap Phase 0 could only verify on Windows
+      ("needs a CI job — no such machine available in this session")
+- [ ] Wait-for-sync: poll ord's `/status`, compare `height` against the
+      node's `getblockchaininfo.blocks` via nk-rpc, until caught up (or
+      a timeout) — real regtest integration test via nk-testkit
+
+`nk-rpc` (or a small new module) — ord's HTTP JSON API
+- [ ] A typed client for `GET /status` (`Accept: application/json`)
+
+Frontend — Dashboard: ord section (item 2, previously omitted with a
+note in Phase 3 since nothing backed it yet)
+- [ ] Index height vs node height, indexing/caught-up status, which
+      index options are enabled — extends `DashboardScreen`
+- [ ] Start/stop wired to `OrdProcess` the same way bitcoind's controls
+      already are
+
+Acceptance criteria (from docs/SPEC.md Phase 4 "Done when"):
+- [ ] [CI] ord verifies; an unpinned version is refused
+- [ ] [CI] ord indexes regtest with all index options and stays caught up
+- [ ] [CI] ord stops gracefully on Windows, macOS, and Linux and
+      restarts without reindexing
+- [ ] [MANUAL] ord server is not reachable from another machine on the LAN
+- [ ] [MANUAL] I have checked every pinned ord SHA-256 hash against the
+      official ord release from a separate machine or browser
+- [ ] VERIFY results for Foundation F recorded in DECISIONS.md (mostly
+      done in Phase 0's spike; revisit once index-option settings are
+      actually wired to real feature gating, not just spike commands)
 
 ## Phase 5 — Wallet
 
