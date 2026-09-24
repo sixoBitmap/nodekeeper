@@ -419,6 +419,95 @@ mod tests {
         fixture.stop().await.expect("bitcoind should stop cleanly");
     }
 
+    /// The other half of the "[CI] ord stops gracefully ... and
+    /// restarts without reindexing" acceptance criterion (graceful
+    /// stop itself is covered above): after a graceful stop and a
+    /// restart against the *same* data directory, ord must resume from
+    /// its persisted index rather than reindexing from block 0. Mines
+    /// more blocks between stop and restart so this is unambiguous:
+    /// ord's very first `/status` response after restart already
+    /// reflects the pre-stop height (5) -- a real reindex would start
+    /// back at/near 0, not jump straight there.
+    #[tokio::test]
+    #[serial(real_bitcoind)]
+    async fn ord_restarts_from_its_persisted_index_without_reindexing() {
+        let (Some(bitcoind_path), Some(ord_path)) = (
+            std::env::var_os("NK_TEST_BITCOIND"),
+            std::env::var_os("NK_TEST_ORD"),
+        ) else {
+            eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
+            return;
+        };
+        let bitcoind_path = std::path::PathBuf::from(bitcoind_path);
+        let ord_path = std::path::PathBuf::from(ord_path);
+
+        let mut fixture = RegtestFixture::start(&bitcoind_path)
+            .await
+            .expect("bitcoind should start");
+        fixture.mine_blocks(5).await.expect("mining should succeed");
+
+        fixture
+            .start_ord(&ord_path)
+            .await
+            .expect("ord should start and become ready");
+        nk_proc::wait_until_caught_up(
+            fixture.ord.as_ref().unwrap(),
+            &fixture.rpc,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("ord should catch up before the first stop");
+
+        fixture
+            .stop_ord()
+            .await
+            .expect("ord should stop gracefully");
+
+        fixture.mine_blocks(5).await.expect("mining should succeed");
+
+        fixture
+            .start_ord(&ord_path)
+            .await
+            .expect("ord should restart against the same data directory");
+
+        let status_right_after_restart = fixture
+            .ord
+            .as_ref()
+            .unwrap()
+            .status(false)
+            .await
+            .expect("ord should answer /status right after restart");
+        let height_right_after_restart = status_right_after_restart
+            .get("height")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        assert!(
+            height_right_after_restart >= 5,
+            "ord's height right after restart was {height_right_after_restart}, expected >= 5 \
+             (its pre-stop height) -- a value near 0 would mean it reindexed from scratch \
+             instead of resuming from its persisted index"
+        );
+
+        nk_proc::wait_until_caught_up(
+            fixture.ord.as_ref().unwrap(),
+            &fixture.rpc,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("ord should catch up to the new height after restarting");
+        let final_status = fixture.ord.as_ref().unwrap().status(false).await.unwrap();
+        assert_eq!(
+            final_status.get("height").and_then(|v| v.as_u64()),
+            Some(10)
+        );
+
+        fixture
+            .stop_ord()
+            .await
+            .expect("ord should stop gracefully");
+        fixture.stop().await.expect("bitcoind should stop cleanly");
+    }
+
     #[tokio::test]
     #[serial(real_bitcoind)]
     async fn an_ord_process_dropped_without_stop_does_not_leave_an_orphan() {

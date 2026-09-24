@@ -754,12 +754,16 @@ Acceptance criteria (from docs/SPEC.md Phase 4 "Done when"):
       up — `wait_until_caught_up` + `ord_status`, both with real
       integration tests, **run live on this Windows machine** (not
       yet re-confirmed by a fresh CI run — see note below)
-- [ ] [CI] ord stops gracefully on Windows, macOS, and Linux and
-      restarts without reindexing — graceful stop itself is confirmed
-      live on Windows and (via CI, before the billing interruption) on
-      Linux/macOS; "restarts without reindexing" specifically has no
-      test yet (redb persists to disk so this should hold, but it's
-      an assumption, not something asserted)
+- [x] [CI] ord stops gracefully on Windows, macOS, and Linux and
+      restarts without reindexing — graceful stop confirmed live on
+      Windows and (via CI, before the billing interruption) on
+      Linux/macOS. "Restarts without reindexing" now has a real test,
+      `ord_restarts_from_its_persisted_index_without_reindexing`
+      (`nk-testkit`): stop, mine more blocks, restart against the same
+      data dir, assert the *first* post-restart `/status` already shows
+      the pre-stop height rather than 0 — **run live on this Windows
+      machine, passed** (not yet re-confirmed by a fresh CI run on all
+      3 OSes — see note below).
 - [ ] [MANUAL] ord server is not reachable from another machine on the LAN
 - [ ] [MANUAL] I have checked every pinned ord SHA-256 hash against the
       official ord release from a separate machine or browser

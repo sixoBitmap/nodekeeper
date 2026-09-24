@@ -1290,6 +1290,30 @@ real bitcoind + ord on this Windows machine, passed) -- `just check`
 (fmt, clippy, full `cargo test --workspace`, frontend typecheck/lint/
 vitest) all green.
 
+## Phase 4 — VERIFY: ord restarts from its persisted index, not a reindex (2026-09-24)
+
+Closed the other half of the "[CI] ord stops gracefully ... and
+restarts without reindexing" acceptance criterion (graceful stop itself
+was already covered). New `nk-testkit` test,
+`ord_restarts_from_its_persisted_index_without_reindexing`: starts ord
+against a real bitcoind, mines 5 blocks, waits for ord to catch up,
+stops it gracefully, mines 5 *more* blocks, restarts ord against the
+same data directory, and asserts its first `/status` response already
+reports a height >= 5 -- not reset to (or near) 0, which is what a real
+reindex from scratch would show. **Ran live on this Windows machine,
+passed**: height was 5 immediately after restart, then reached 10 after
+`wait_until_caught_up`.
+
+Why this is a meaningful assertion and not just "ord probably persists
+its index": ord's `/status` endpoint can't answer *at all* until its
+redb index is opened, and opening an existing index file reads whatever
+height was last written to it -- so a height >= 5 right after restart
+is only possible if it loaded the existing `index.redb` rather than
+creating a fresh one. This is exactly the same data directory across
+both `start_ord` calls in the test (the fixture's `Environment` is
+reused, not recreated), matching how the real app would restart ord
+after a stop (same environment, same `--data-dir`).
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
