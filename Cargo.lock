@@ -3161,8 +3161,10 @@ name = "nk-proc"
 version = "0.1.0"
 dependencies = [
  "hostname",
+ "libc",
  "nk-core",
  "nk-exec",
+ "nk-ord",
  "nk-rpc",
  "sysinfo",
  "tempfile",
@@ -3217,6 +3219,7 @@ version = "0.1.0"
 dependencies = [
  "nk-core",
  "nk-exec",
+ "nk-ord",
  "nk-proc",
  "nk-rpc",
  "serde_json",

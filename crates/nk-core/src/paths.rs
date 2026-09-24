@@ -50,6 +50,16 @@ impl Environment {
     pub fn ord_index_dir(&self) -> PathBuf {
         join_chain_subdir(&self.ord_datadir_arg(), self.chain.data_subdir())
     }
+
+    /// Where Nodekeeper tracks ord's own PID. Unlike bitcoind, ord
+    /// writes no PID file of its own (confirmed live -- DECISIONS.md
+    /// Phase 4: only `index.redb` appears under a running ord server's
+    /// data directory), so `nk-proc`'s `OrdProcess` writes and reads
+    /// this file itself. Lives alongside the index, the same place
+    /// bitcoind's own `bitcoind.pid` lives alongside its `.cookie`.
+    pub fn ord_pid_path(&self) -> PathBuf {
+        self.ord_index_dir().join("ord.pid")
+    }
 }
 
 fn join_chain_subdir(base: &Path, subdir: Option<&str>) -> PathBuf {
@@ -123,6 +133,7 @@ mod tests {
             Path::new("/data/mainnet/bitcoin/debug.log")
         );
         assert_eq!(e.ord_index_dir(), Path::new("/data/mainnet/ord"));
+        assert_eq!(e.ord_pid_path(), Path::new("/data/mainnet/ord/ord.pid"));
     }
 
     #[test]
@@ -139,6 +150,7 @@ mod tests {
                 e.bitcoin_datadir_arg().join(sub).join("wallets")
             );
             assert_eq!(e.ord_index_dir(), e.ord_datadir_arg().join(sub));
+            assert_eq!(e.ord_pid_path(), e.ord_index_dir().join("ord.pid"));
             // the ord/bitcoin *argument* values themselves never carry the
             // chain subfolder -- only the resolved on-disk paths do.
             assert_eq!(e.ord_datadir_arg(), e.data_root.join("ord"));

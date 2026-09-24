@@ -8,3 +8,7 @@ dist/
 # bitcoind/ord data) -- local machine state, never repo content. See
 # src-tauri/src/lib.rs's data_root().
 /data/
+
+# Claude Code session-local state -- a per-session lock file, never
+# repo content (unlike .claude/launch.json, which stays tracked).
+/.claude/scheduled_tasks.lock

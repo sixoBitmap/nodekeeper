@@ -88,6 +88,25 @@ jobs:
           path=$(cargo run --release -p nk-verify --example fetch_bitcoin_core)
           echo "NK_TEST_BITCOIND=$path" >> "$GITHUB_ENV"
 
+      # Same caching/verification shape as Bitcoin Core above, for ord
+      # (bump the key whenever crates/nk-verify/examples/fetch_ord.rs's
+      # VERSION changes). Needed for nk-testkit's real ord integration
+      # test, including the Windows CTRL_BREAK_EVENT graceful-stop path
+      # Phase 0 could previously only verify by hand outside CI.
+      - name: Cache ord download
+        id: ord-cache
+        uses: actions/cache@v4
+        with:
+          path: target/nodekeeper-ord-0.29.0
+          key: ord-0.29.0-${{ matrix.os }}
+
+      - name: Fetch and verify ord (for nk-testkit's regtest integration test)
+        shell: bash
+        run: |
+          set -e
+          path=$(cargo run --release -p nk-verify --example fetch_ord)
+          echo "NK_TEST_ORD=$path" >> "$GITHUB_ENV"
+
       - name: cargo test
         run: cargo test --workspace
 

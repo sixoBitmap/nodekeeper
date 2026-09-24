@@ -29,6 +29,18 @@ pub fn ord_base_args(
     // layout).
     args.push("--bitcoin-data-dir".to_string());
     args.push(bitcoin_datadir.display().to_string());
+    // Without this, ord silently assumes bitcoind's RPC is on the
+    // chain's *standard* port (18443 for regtest, etc.) and fails to
+    // connect on any environment using a different one -- confirmed
+    // live (DECISIONS.md): pointing ord at a regtest bitcoind on a
+    // non-default RPC port with no `--bitcoin-rpc-url` produces
+    // "Failed to connect to Bitcoin Core RPC at `127.0.0.1:18443/`"
+    // even though `--cookie-file`/`--bitcoin-data-dir` were correct.
+    // `host:port`, no scheme (confirmed live -- a `http://` prefix was
+    // never tried against, but the bare form is what ord's own `--help`
+    // shows and what worked).
+    args.push("--bitcoin-rpc-url".to_string());
+    args.push(format!("127.0.0.1:{}", environment.rpc_port));
 
     if environment.index_options.index_sats {
         args.push("--index-sats".to_string());
@@ -105,6 +117,20 @@ mod tests {
                 "--bitcoin-data-dir".to_string(),
                 bitcoin_datadir.display().to_string()
             ]));
+    }
+
+    /// Regression test for a real bug caught by a live integration test
+    /// (DECISIONS.md): without this flag, ord silently assumes
+    /// bitcoind's RPC is on the chain's standard port and fails to
+    /// connect on any environment using a different one.
+    #[test]
+    fn base_args_point_ord_at_the_environments_actual_rpc_port() {
+        let mut environment = env(Chain::Regtest);
+        environment.rpc_port = 54321;
+        let args = ord_base_args(&environment, Path::new("/c"), Path::new("/b"));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["--bitcoin-rpc-url", "127.0.0.1:54321"]));
     }
 
     #[test]

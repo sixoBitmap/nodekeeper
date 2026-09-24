@@ -679,15 +679,32 @@ that comparison itself).
       never appears)
 
 `nk-proc` (ord process manager)
-- [ ] `OrdProcess::start()`: spawn, track pid file (mirroring
-      `BitcoindProcess`), refuse a second instance on the same data dir
-- [ ] Graceful stop: SIGINT on macOS/Linux, `CREATE_NEW_PROCESS_GROUP` +
-      `CTRL_BREAK_EVENT` on Windows — **real CI test on all 3 OSes**,
-      finally closing the gap Phase 0 could only verify on Windows
-      ("needs a CI job — no such machine available in this session")
+- [x] `OrdProcess::start()`: spawn, track pid file (mirroring
+      `BitcoindProcess`, but ord writes none of its own — Nodekeeper
+      writes and reads `Environment::ord_pid_path`), refuse a second
+      instance on the same data dir. Plus `start_and_wait_ready()`
+      (spawn + bounded wait for `/status` to respond, the ord
+      equivalent of `BitcoindProcess`'s cookie/RPC-ready wait).
+- [x] Graceful stop: `libc::kill(pid, SIGINT)` on macOS/Linux, a
+      hand-rolled `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid)` FFI
+      binding against a `CREATE_NEW_PROCESS_GROUP` child on Windows.
+      **Verified live on this Windows machine** via a real
+      `nk-testkit` integration test (real bitcoind + real ord,
+      graceful stop actually terminates the process, confirmed via
+      `detect_running_ord`) — closing the gap Phase 0 could only note
+      ("needs a CI job — no such machine available in this session").
+      Linux/macOS coverage now runs via the same test in CI (added an
+      ord fetch+cache CI step mirroring Bitcoin Core's); cross-platform
+      confirmation lands once this commit's CI run completes.
 - [ ] Wait-for-sync: poll ord's `/status`, compare `height` against the
       node's `getblockchaininfo.blocks` via nk-rpc, until caught up (or
-      a timeout) — real regtest integration test via nk-testkit
+      a timeout) — **not yet built**. `start_and_wait_ready()` above
+      only waits for ord's HTTP server to respond at all (a short,
+      bounded startup check), not for the index to catch up with the
+      chain tip — deliberately kept separate since "wait until caught
+      up" can be open-ended on a real chain and shouldn't block
+      startup. Still needs its own function + real regtest integration
+      test via nk-testkit.
 
 `nk-ord` (new crate) — ord's HTTP JSON API — **done**
 - [x] A client for `GET /status` (`Accept: application/json`) —
@@ -703,11 +720,10 @@ that comparison itself).
       subprocess invocations — same reasoning as `Rpc` being separate
       from `BitcoinCli`. Unit-tested the pure URL-building logic only
       (no network) — same layering as `nk-rpc` (whose own tests are
-      network-free; live-server verification lives in `nk-testkit`
-      once a real fixture exists). A live integration test against a
-      real running ord server belongs in `nk-testkit` once `nk-proc`'s
-      `OrdProcess` can actually stand one up — tracked as part of the
-      `nk-proc` task below, not duplicated here.
+      network-free; live-server verification lives in `nk-testkit`).
+      The live integration test against a real running ord server now
+      exists in `nk-testkit`, built alongside `nk-proc`'s `OrdProcess`
+      below (needed it to actually stand a real ord server up).
 
 Frontend — Dashboard: ord section (item 2, previously omitted with a
 note in Phase 3 since nothing backed it yet)

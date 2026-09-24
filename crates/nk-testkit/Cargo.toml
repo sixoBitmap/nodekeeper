@@ -13,6 +13,7 @@ nk-core = { workspace = true }
 nk-exec = { workspace = true }
 nk-proc = { workspace = true }
 nk-rpc = { workspace = true }
+nk-ord = { workspace = true }
 tempfile = "3"
 
 [dev-dependencies]

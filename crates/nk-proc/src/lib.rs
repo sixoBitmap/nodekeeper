@@ -8,7 +8,9 @@
 
 pub mod bitcoind;
 pub mod lock;
+pub mod ord;
 mod process_check;
 
 pub use bitcoind::{detect_running_bitcoind, BitcoindError, BitcoindProcess};
 pub use lock::{LockError, SingleInstanceLock};
+pub use ord::{detect_running_ord, OrdProcess, OrdProcessError};

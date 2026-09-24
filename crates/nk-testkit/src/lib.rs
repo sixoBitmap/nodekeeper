@@ -8,7 +8,7 @@ use nk_core::{
     bitcoin_conf::generate_bitcoin_conf, system_check::run_system_check, Chain, Environment,
 };
 use nk_exec::Executor;
-use nk_proc::BitcoindProcess;
+use nk_proc::{BitcoindProcess, OrdProcess};
 use nk_rpc::RpcClient;
 use std::net::TcpListener;
 use std::path::Path;
@@ -27,12 +27,20 @@ pub enum FixtureError {
     Bitcoind(#[from] nk_proc::BitcoindError),
     #[error("rpc error: {0}")]
     Rpc(#[from] nk_rpc::RpcError),
+    /// Same "folds spawn-and-wait into one call" note as `Bitcoind`
+    /// above, for ord's `start_and_wait_ready`.
+    #[error("ord error: {0}")]
+    Ord(#[from] nk_proc::OrdProcessError),
 }
 
 pub struct RegtestFixture {
     process: Option<BitcoindProcess>,
+    ord_process: Option<OrdProcess>,
     pub environment: Environment,
     pub rpc: RpcClient,
+    /// `Some` only once `start_ord` has been called — most tests only
+    /// need bitcoind, so ord isn't started automatically.
+    pub ord: Option<nk_ord::OrdClient>,
     // Kept alive for the fixture's lifetime; deleted on drop.
     _tempdir: tempfile::TempDir,
 }
@@ -46,8 +54,17 @@ impl RegtestFixture {
         let tempdir = tempfile::tempdir()?;
 
         let mut environment = Environment::new_default(Chain::Regtest, tempdir.path());
-        environment.rpc_port = random_free_port()?;
-        environment.p2p_port = random_free_port()?;
+        let [rpc_port, p2p_port] = random_free_ports()?;
+        environment.rpc_port = rpc_port;
+        environment.p2p_port = p2p_port;
+        // ord_port is deliberately *not* picked here: `start_ord` is
+        // typically called well after this (post-`mine_blocks`, etc.),
+        // and reserving a port that far ahead of actually using it
+        // reproduced as a real `PortInUse` failure -- something else on
+        // the dev machine grabbed the same ephemeral port in the gap.
+        // Picking it right before use (in `start_ord`) keeps that
+        // window as small as rpc_port/p2p_port's own (picked and used
+        // within the same function call).
 
         let datadir = environment.bitcoin_datadir_arg();
         std::fs::create_dir_all(&datadir)?;
@@ -78,10 +95,54 @@ impl RegtestFixture {
 
         Ok(Self {
             process: Some(process),
+            ord_process: None,
             environment,
             rpc,
+            ord: None,
             _tempdir: tempdir,
         })
+    }
+
+    /// Starts a real `ord server` pointed at this fixture's own
+    /// already-running bitcoind (its cookie file and data directory) —
+    /// only the tests that need ord call this; most don't. Waits for
+    /// ord's HTTP server to answer `/status` before returning, the same
+    /// "spawn and wait for readiness" shape as `start()`'s own bitcoind
+    /// startup.
+    pub async fn start_ord(&mut self, ord_binary_path: &Path) -> Result<(), FixtureError> {
+        self.environment.ord_port = random_free_port()?;
+        let cookie_path = self.environment.bitcoin_cookie_path();
+        let bitcoin_datadir = self.environment.bitcoin_datadir_arg();
+
+        let (process, client) = OrdProcess::start_and_wait_ready(
+            ord_binary_path,
+            &self.environment,
+            &cookie_path,
+            &bitcoin_datadir,
+            format!("http://127.0.0.1:{}", self.environment.ord_port),
+            Executor::new(),
+            "regtest".to_string(),
+            Duration::from_secs(30),
+        )
+        .await?;
+
+        self.ord_process = Some(process);
+        self.ord = Some(client);
+        Ok(())
+    }
+
+    /// Graceful stop for ord (SIGINT/CTRL_BREAK, not an RPC call — ord
+    /// has none), consuming only the ord half of the fixture. A test
+    /// that wants to assert the graceful-stop path itself succeeded
+    /// calls this explicitly, same reasoning as bitcoind's `stop()`.
+    pub async fn stop_ord(&mut self) -> Result<(), FixtureError> {
+        if let Some(process) = self.ord_process.take() {
+            process
+                .stop(&self.environment, Duration::from_secs(15))
+                .await?;
+        }
+        self.ord = None;
+        Ok(())
     }
 
     /// Mines `n` blocks to a fresh address in the node's own wallet
@@ -119,14 +180,42 @@ impl RegtestFixture {
 
 impl Drop for RegtestFixture {
     fn drop(&mut self) {
-        // Best-effort force-kill if `stop()` was never called (e.g. the
-        // test panicked) -- Drop can't be async, so this can't be the
-        // graceful RPC-stop path; it only guarantees no orphaned process
-        // survives the test.
+        // Best-effort force-kill if `stop()`/`stop_ord()` were never
+        // called (e.g. the test panicked) -- Drop can't be async, so
+        // this can't be the graceful stop path for either process; it
+        // only guarantees no orphaned process survives the test. ord
+        // first, since it depends on bitcoind still being reachable.
+        if let Some(mut process) = self.ord_process.take() {
+            process.kill_sync();
+        }
         if let Some(mut process) = self.process.take() {
             process.kill_sync();
         }
     }
+}
+
+/// Picks 2 distinct free ports (rpc/p2p) by binding both listeners
+/// *before* dropping either, then returning their ports together --
+/// guarantees the pair can never collide with each other (two live
+/// sockets can't share a port), unlike calling a single-port picker
+/// twice in a row. A real, separate `PortInUse` race was found and
+/// fixed while building this fixture's ord support (see `start_ord`'s
+/// comment): reserving a port long before actually using it gives
+/// something else on the machine time to grab that same ephemeral
+/// port in between. rpc_port and p2p_port don't have that problem --
+/// both are used immediately, in this same function -- so this helper
+/// only needs to guard against the two of them landing on the same
+/// port, not against that separate time-gap race.
+fn random_free_ports() -> std::io::Result<[u16; 2]> {
+    let listeners = [
+        TcpListener::bind("127.0.0.1:0")?,
+        TcpListener::bind("127.0.0.1:0")?,
+    ];
+    let mut ports = [0u16; 2];
+    for (port, listener) in ports.iter_mut().zip(&listeners) {
+        *port = listener.local_addr()?.port();
+    }
+    Ok(ports)
 }
 
 fn random_free_port() -> std::io::Result<u16> {
@@ -242,6 +331,113 @@ mod tests {
         assert!(
             sys.process(sysinfo::Pid::from_u32(pid)).is_none(),
             "bitcoind (pid {pid}) should not survive an un-stopped fixture being dropped"
+        );
+    }
+
+    /// The Phase 4 [CI] acceptance criteria: ord starts against a real
+    /// bitcoind, indexes regtest and reports its own height via
+    /// `/status`, and stops gracefully (SIGINT on macOS/Linux,
+    /// `CTRL_BREAK_EVENT` on Windows) -- the real cross-platform
+    /// verification Phase 0 could only do on Windows by hand.
+    /// `NK_TEST_ORD` is set by CI the same way `NK_TEST_BITCOIND` is
+    /// (`cargo run -p nk-verify --example fetch_ord`); skipped locally
+    /// if unset.
+    #[tokio::test]
+    #[serial(real_bitcoind)]
+    async fn ord_starts_indexes_regtest_and_stops_gracefully() {
+        let (Some(bitcoind_path), Some(ord_path)) = (
+            std::env::var_os("NK_TEST_BITCOIND"),
+            std::env::var_os("NK_TEST_ORD"),
+        ) else {
+            eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
+            return;
+        };
+        let bitcoind_path = std::path::PathBuf::from(bitcoind_path);
+        let ord_path = std::path::PathBuf::from(ord_path);
+
+        let mut fixture = RegtestFixture::start(&bitcoind_path)
+            .await
+            .expect("bitcoind should start");
+        fixture.mine_blocks(5).await.expect("mining should succeed");
+
+        fixture
+            .start_ord(&ord_path)
+            .await
+            .expect("ord should start and become ready");
+        let ord_pid = fixture.ord_process.as_ref().unwrap().pid;
+
+        let status = fixture
+            .ord
+            .as_ref()
+            .unwrap()
+            .status(false)
+            .await
+            .expect("ord should answer /status");
+        assert_eq!(
+            status.get("chain").and_then(|v| v.as_str()),
+            Some("regtest")
+        );
+        // All three index options default on for regtest
+        // (Chain::default_index_options) and were passed through to the
+        // real spawned process -- confirming ord's own report of its
+        // active flags matches what Nodekeeper told it to enable.
+        assert_eq!(
+            status.get("sat_index").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            status.get("rune_index").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            status.get("address_index").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+
+        fixture
+            .stop_ord()
+            .await
+            .expect("ord should stop gracefully");
+        assert!(
+            nk_proc::detect_running_ord(&fixture.environment).is_none(),
+            "ord (pid {ord_pid}) should not still be detected as running after a graceful stop"
+        );
+
+        fixture.stop().await.expect("bitcoind should stop cleanly");
+    }
+
+    #[tokio::test]
+    #[serial(real_bitcoind)]
+    async fn an_ord_process_dropped_without_stop_does_not_leave_an_orphan() {
+        let (Some(bitcoind_path), Some(ord_path)) = (
+            std::env::var_os("NK_TEST_BITCOIND"),
+            std::env::var_os("NK_TEST_ORD"),
+        ) else {
+            eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
+            return;
+        };
+        let bitcoind_path = std::path::PathBuf::from(bitcoind_path);
+        let ord_path = std::path::PathBuf::from(ord_path);
+
+        let ord_pid = {
+            let mut fixture = RegtestFixture::start(&bitcoind_path)
+                .await
+                .expect("bitcoind should start");
+            fixture
+                .start_ord(&ord_path)
+                .await
+                .expect("ord should start and become ready");
+            fixture.ord_process.as_ref().unwrap().pid
+        };
+        // fixture dropped here without calling stop_ord() -- Drop's
+        // kill_sync() must have terminated ord (and bitcoind).
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let mut sys = sysinfo::System::new();
+        sys.refresh_all();
+        assert!(
+            sys.process(sysinfo::Pid::from_u32(ord_pid)).is_none(),
+            "ord (pid {ord_pid}) should not survive an un-stopped fixture being dropped"
         );
     }
 }

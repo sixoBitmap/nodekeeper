@@ -1123,6 +1123,85 @@ hand, not as an automated test) that a real regtest ord server's
 (same VERIFY run recorded in the "ord's CLI surface and sync-status
 API" entry above).
 
+## Phase 4 — nk-proc: OrdProcess, and two real bugs it caught (2026-09-24)
+
+Built `OrdProcess` (`crates/nk-proc/src/ord.rs`), mirroring
+`BitcoindProcess`'s shape: `start()` (spawn, refuse a second instance on
+the same data dir, pre-flight port check), `start_and_wait_ready()`
+(spawn + poll `/status` until it responds or times out), `stop()`
+(graceful signal + wait, with a timeout), `kill_sync()`. Two real
+differences from bitcoind, both forced by how ord actually behaves
+(earlier VERIFY entries in this file):
+
+- ord writes no PID file of its own, so `OrdProcess::start` writes one
+  itself (new `Environment::ord_pid_path`, `nk-core`) and
+  `detect_running_ord` reads it back, mirroring `detect_running_
+  bitcoind`'s own liveness check.
+- ord has no RPC-based graceful stop. `stop()` sends a real signal:
+  `libc::kill(pid, SIGINT)` on macOS/Linux; on Windows, a hand-rolled
+  `extern "system"` binding for `GenerateConsoleCtrlEvent(CTRL_BREAK_
+  EVENT, pid)` against a child spawned with `CREATE_NEW_PROCESS_GROUP`
+  -- the exact mechanism Phase 0's spike (`spikes/test-createprocess-
+  v2.ps1`) proved live via raw PowerShell/CreateProcessW, now exercised
+  through real Rust code for the first time. `tokio::process::Command`
+  exposes `creation_flags` as an inherent method on Windows, so no
+  `windows-sys`/`winapi` dependency was needed (consistent with earlier
+  "keep the FFI dependency tree lean" calls this session).
+
+Extended `nk-testkit`'s `RegtestFixture` with `start_ord`/`stop_ord`
+(only tests that need ord call them) and added a real end-to-end test,
+`ord_starts_indexes_regtest_and_stops_gracefully`: real bitcoind, real
+ord pointed at it, `/status` checked for the right chain and index
+flags, then a real graceful stop, then confirms `detect_running_ord`
+no longer sees it. **Ran live on this Windows machine** (not just
+written and assumed): all 5 `nk-testkit` tests passed, including the
+graceful Windows `CTRL_BREAK_EVENT` stop actually terminating a real
+`ord.exe` process. Linux/macOS coverage of the same test now runs via
+CI (see below) -- the "needs a CI job" gap Phase 0 could only note, not
+close, is closed as of this commit landing on all 3 OSes.
+
+Two real bugs were caught by this live testing, not by reasoning about
+the code -- both are the kind VERIFY-before-implement exists to catch:
+
+1. **Port-reservation race in the test fixture, not app code.**
+   `RegtestFixture` originally picked `ord_port` at the same time as
+   `rpc_port`/`p2p_port` (fixture construction), but `start_ord` is
+   typically called much later (after `mine_blocks`, etc.). On this
+   machine that gap was long enough for something else to grab the
+   same ephemeral port, and `OrdProcess::start`'s pre-flight check
+   correctly refused to proceed (`PortInUse`) -- the check did its job;
+   the bug was reserving the port too early. Fixed by picking
+   `ord_port` inside `start_ord` itself, right before use, shrinking
+   the window back to the same size as `rpc_port`/`p2p_port`'s own
+   (picked and used in the same function call). Not a production bug
+   -- `nk-testkit`-only -- but worth recording since it could recur for
+   any future fixture code that reserves a resource well ahead of
+   using it.
+2. **Real app bug: `ord_base_args` never told ord bitcoind's actual RPC
+   port.** Confirmed live: pointing a real ord server at a regtest
+   bitcoind listening on a non-default RPC port, with only
+   `--cookie-file`/`--bitcoin-data-dir` passed (no RPC port), produced
+   `error: Failed to connect to Bitcoin Core RPC at
+   \`127.0.0.1:18443/\`` -- ord silently assumed the chain's *standard*
+   RPC port (18443 for regtest) rather than reading it from the cookie
+   file or bitcoin.conf. Since Nodekeeper's whole multi-environment
+   model (Foundation A) depends on non-default ports being normal, not
+   an edge case, this would have silently broken ord for exactly the
+   configurations the app is built to support. Confirmed the fix live
+   too: `ord --help` documents `--bitcoin-rpc-url <BITCOIN_RPC_URL>`
+   (bare `host:port`, no scheme); adding
+   `--bitcoin-rpc-url 127.0.0.1:<environment.rpc_port>` to `nk_core::
+   ord_conf::ord_base_args` fixed it, verified against a real running
+   pair (ord answered `/status` correctly once connected). Regression
+   test added: `base_args_point_ord_at_the_environments_actual_rpc_port`.
+
+Added CI caching + a `fetch_ord` example (`crates/nk-verify/examples/
+fetch_ord.rs`, mirroring `fetch_bitcoin_core.rs` exactly: real
+download+verify+extract via `nk_verify::ord`, cached by OS + pinned
+version) so `NK_TEST_ORD` is set in CI the same way `NK_TEST_BITCOIND`
+already is -- without this the new ord integration test would only
+ever run locally.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
