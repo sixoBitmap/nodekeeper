@@ -38,7 +38,10 @@ impl WalletSession {
     /// was called, not from last use, matching "idle timeout" read as
     /// "since the user last actively unlocked," the simpler and safer
     /// reading (a busy signing session doesn't stay unlocked forever).
-    pub fn remember(&self, chain: Chain, passphrase: String) {
+    /// Takes an already-`Zeroizing` passphrase, not a plain `String` --
+    /// Phase 5 security self-review (DECISIONS.md): the caller should
+    /// never need to hold a plain-text copy just to call this.
+    pub fn remember(&self, chain: Chain, passphrase: Zeroizing<String>) {
         let mut remembered = self
             .remembered
             .lock()
@@ -46,7 +49,7 @@ impl WalletSession {
         remembered.insert(
             chain,
             Remembered {
-                passphrase: Zeroizing::new(passphrase),
+                passphrase,
                 expires_at: Instant::now() + DEFAULT_REMEMBER_TIMEOUT,
             },
         );
@@ -55,14 +58,16 @@ impl WalletSession {
     /// The remembered passphrase for `chain`, if any and not yet timed
     /// out. An expired entry is removed (zeroizing it via `Zeroizing`'s
     /// own `Drop`) rather than just ignored, so a stale passphrase
-    /// never lingers in memory past its stated timeout.
-    pub fn get(&self, chain: Chain) -> Option<String> {
+    /// never lingers in memory past its stated timeout. Returns a fresh
+    /// `Zeroizing` clone rather than a plain `String` -- same self-
+    /// review reasoning as `remember`.
+    pub fn get(&self, chain: Chain) -> Option<Zeroizing<String>> {
         let mut remembered = self
             .remembered
             .lock()
             .expect("mutex should not be poisoned");
         match remembered.get(&chain) {
-            Some(entry) if entry.expires_at > Instant::now() => Some(entry.passphrase.to_string()),
+            Some(entry) if entry.expires_at > Instant::now() => Some(entry.passphrase.clone()),
             Some(_) => {
                 remembered.remove(&chain);
                 None
@@ -100,8 +105,11 @@ mod tests {
     #[test]
     fn a_remembered_passphrase_is_returned_until_forgotten() {
         let session = WalletSession::new();
-        session.remember(Chain::Regtest, "hunter2".to_string());
-        assert_eq!(session.get(Chain::Regtest), Some("hunter2".to_string()));
+        session.remember(Chain::Regtest, Zeroizing::new("hunter2".to_string()));
+        assert_eq!(
+            session.get(Chain::Regtest),
+            Some(Zeroizing::new("hunter2".to_string()))
+        );
 
         session.forget(Chain::Regtest);
         assert_eq!(session.get(Chain::Regtest), None);
@@ -110,7 +118,7 @@ mod tests {
     #[test]
     fn remembering_a_chain_does_not_affect_another() {
         let session = WalletSession::new();
-        session.remember(Chain::Regtest, "hunter2".to_string());
+        session.remember(Chain::Regtest, Zeroizing::new("hunter2".to_string()));
         assert_eq!(session.get(Chain::Mainnet), None);
     }
 

@@ -952,6 +952,23 @@ Wallet screen (frontend + backend orchestration)
       for the restored chain. "Multiple named wallets" not done yet --
       every wallet command hardcodes `DEFAULT_WALLET_NAME = "ord"`
       for now, tracked as a separate follow-up.
+- [ ] **Enforce mainnet wallet encryption.** Found by the Phase 5
+      security self-review below, not yet fixed: `create_wallet`
+      creates a plain, unencrypted wallet for every chain including
+      mainnet -- `nk_rpc::RpcClient::encrypt_wallet` (built earlier
+      this phase) has no caller anywhere. This is a real violation of
+      docs/SPEC.md's mandatory "All mainnet wallets are encrypted" rule
+      and a named STOP-AND-ASK topic (CLAUDE.md), so it wasn't
+      improvised -- needs a UX decision (encrypt as part of
+      `create_wallet` before the mnemonic is shown? a mandatory
+      separate step right after? how `restore_wallet` should treat a
+      wallet that may or may not already be encrypted?) plus a live
+      VERIFY of `encryptwallet` against an ord-managed wallet
+      specifically (Phase 0 only VERIFIED unlock/lock against an
+      *already*-encrypted wallet, not this transition, and Core's
+      `encryptwallet` is known to reload the wallet internally -- untested
+      against ord's own wrapping). See DECISIONS.md's Phase 5 security
+      self-review, item 8, for the full writeup.
 - [x] Inscriptions gallery + rune balances. VERIFY'd live first
       (DECISIONS.md) against a real scratch regtest+ord with an actual
       inscribed HTML file: `ord wallet inscriptions`'s real field names
@@ -1065,7 +1082,14 @@ Acceptance criteria (from docs/SPEC.md Phase 5 "Done when"):
       session remember clears after the idle timeout
 - [x] Encryption compatibility with ord VERIFIED (DECISIONS.md,
       2026-09-24) -- works cleanly, no workaround needed
-- [ ] Security self-review completed
+- [x] Security self-review completed (DECISIONS.md, 2026-09-25) -- went
+      through every SECURITY RULES line item; closed two Phase-2-
+      deferred items with real evidence (sensitive-channel mnemonic
+      flow, argv-vs-stdin/RPC secrets), fixed a real `WalletSession`
+      zeroization gap found while reviewing, and surfaced one
+      significant unresolved gap (mainnet wallets aren't actually
+      encrypted yet -- see the new task above) rather than improvising
+      a fix for a named STOP-AND-ASK topic.
 
 ## Phase 6 — Inscribe studio
 

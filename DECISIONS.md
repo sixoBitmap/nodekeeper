@@ -1646,6 +1646,190 @@ force-kills as `nk-proc`'s documented cleanup-only fallback, never as
 its primary stop path (Phase 2), and this was purely a throwaway manual
 VERIFY environment, not `nk-testkit`.
 
+## Phase 5 — security self-review (2026-09-25)
+
+Per CLAUDE.md/docs/SPEC.md's "Security self-review at the end of Phases 2,
+5, and 7": going through docs/SPEC.md's SECURITY RULES (mandatory) line by
+line, what enforces each today, and what's still a gap. Numbering matches
+the Phase 2 self-review above.
+
+1. **RPC and ord server bind to 127.0.0.1 only; ord's address flag passed
+   explicitly.**
+   Unchanged from Phase 4: `nk_core::ord_conf::ord_server_args` always
+   passes `--address 127.0.0.1`, tested to never emit `0.0.0.0`.
+
+2. **Cookie auth; secrets stored per Foundation E.**
+   Unchanged from Phase 1/2 -- no new secret-storage surface this phase
+   (wallet passphrases are explicitly *not* persisted per rule 4, so
+   `nk-secrets` isn't involved in the wallet flow at all).
+
+3. **Never log/store/transmit seed phrases or private keys; sensitive
+   output channel only.**
+   **Closed with a real flow, not just the mechanism** (Phase 2's open
+   item): `create_wallet`/`restore_wallet` use `Sensitivity::Sensitive`
+   end to end, and `create_and_restore_wallet_never_leak_the_mnemonic_
+   to_the_broadcast_stream` (`nk-testkit`) proves it with both a real
+   ord-generated mnemonic and a known BIP39 test vector -- neither ever
+   appears in any broadcast `ExecEvent`, run live against a real ord.
+   `SensitiveSeedView` is the only place a mnemonic is ever rendered.
+   **Residual gap, narrow**: the plain-text mnemonic `String` inside
+   `create_wallet`'s Tauri command handler (and the one the frontend
+   holds in React state before/during `SensitiveSeedView`) is never
+   wrapped in `Zeroizing` -- it's return-value/UI-state data that has to
+   exist in plain form to be displayed at all, and serde_json's own
+   serialization step would create an unzeroized copy on the wire
+   regardless of anything done on the Rust side, so wrapping it there
+   has limited real benefit. Accepted as-is; flagging rather than
+   pretending it's fully closed.
+
+4. **Wallet-encryption passphrases never persisted; in-memory mnemonics/
+   passphrases zeroized after use.**
+   `nk-exec`'s stdin-buffer zeroization (Phase 2) now has a real secret
+   flowing through it (`restore_wallet`'s mnemonic via stdin). Found and
+   fixed a real gap in this session's own Send-flow code while writing
+   this review: `WalletSession::remember`/`get` took/returned a plain
+   `String`, forcing every caller (`wallet_send`) to hold an unzeroized
+   copy of the passphrase for the whole call. Changed both to take/
+   return `Zeroizing<String>` directly (`src-tauri/src/wallet_session.rs`,
+   `src-tauri/src/lib.rs`'s `wallet_send`) -- the passphrase from IPC is
+   wrapped in `Zeroizing` as the first thing `wallet_send` does with it,
+   and every downstream use (the RPC call, the remembered copy) works
+   with that wrapper, not a bare `String`. Tests updated and passing.
+   **Residual gap, same shape as item 3**: the raw `String` Tauri's own
+   IPC deserialization produces for the `passphrase` parameter, before
+   `wallet_send`'s first line wraps it, isn't itself zeroized -- closing
+   that would need the `zeroize` crate's `serde` feature enabled and the
+   Tauri command parameter typed as `Zeroizing<String>` directly, which
+   wasn't attempted this session (untried feature-flag combination,
+   traded off against the very narrow benefit: this is a single
+   deserialization pass in the user's own trusted local process, not a
+   network boundary). Documented rather than guessed at.
+
+5. **Backups contain only public descriptors unless explicitly encrypted.**
+   No backup feature exists yet (not in Phase 5's task list either).
+   Correctly deferred.
+
+6. **All commands go through the central executor; secrets via stdin/RPC,
+   never argv.**
+   **Closed with real call sites** (Phase 2's open item): `restore_
+   wallet`'s mnemonic goes via stdin (`nk_ord::wallet::restore_wallet`);
+   `wallet_passphrase`/`encrypt_wallet` pass the passphrase as an RPC
+   JSON param over HTTP, redacted from `command_display` (tested,
+   Phase 5's `nk-rpc` unit tests). Every `ord wallet`/RPC call in this
+   phase's new code goes through `nk-exec`'s `execute`/`record` -- no
+   direct `Command::new` anywhere in `nk-ord`/`nk-rpc`/`src-tauri`,
+   still mechanically enforced by `clippy::disallowed-methods`.
+
+7. **Inscription content sandboxed per Foundation D; CSP lists only exact
+   ord server origins.**
+   `tauri.conf.json`'s `frame-src` lists exactly the 4 default ord ports
+   (confirmed by reading the file directly this review, not just
+   trusting PROGRESS.md's claim). `InscriptionGallery`'s `<iframe
+   sandbox="allow-scripts">` has no `allow-same-origin`/`allow-forms`/
+   `allow-popups`/top-navigation. **Gap, honestly restated from
+   PROGRESS.md**: the actual "a malicious test HTML/SVG inscription
+   cannot call Tauri IPC or read app data" acceptance criterion has not
+   been exercised against the real Tauri webview -- this session's
+   tooling can drive a browser tab (no real Tauri IPC to attempt calling
+   at all) but not the native Tauri window, so this remains reasoned-
+   through at the code level, not live-tested. Needs a human ([MANUAL])
+   or a differently-tooled session to actually try it.
+
+8. **All mainnet wallets are encrypted.**
+   **Real gap found by this review, not previously flagged as clearly**:
+   `create_wallet` (`src-tauri/src/lib.rs`) creates a plain, unencrypted
+   ord/Core wallet for *every* chain including mainnet -- nothing calls
+   `nk_rpc::RpcClient::encrypt_wallet` (built in the wallet-unlock-RPCs
+   task) from any Tauri command; grepped the whole file to confirm zero
+   call sites. The Send flow's passphrase-unlock UI is real and tested,
+   but only against a wallet some *other* path already encrypted (in
+   `nk-testkit`'s tests, the test itself calls `encrypt_wallet` directly
+   -- the app never does). A user creating a real mainnet wallet through
+   Nodekeeper today gets an **unencrypted** wallet with no prompt to fix
+   that. This is exactly the topic CLAUDE.md names as a STOP-AND-ASK
+   area ("especially around mainnet wallet encryption... never quietly
+   improvise a workaround"), and the fix isn't a trivial one-liner: it
+   needs a real UX decision (encrypt as part of `create_wallet` itself,
+   before the mnemonic is even shown? A separate mandatory step right
+   after? What happens to `restore_wallet`, which recovers an existing
+   wallet that might already be encrypted or might not be?) plus a live
+   VERIFY of bitcoin Core's `encryptwallet` RPC against an ord-managed
+   wallet specifically -- Phase 0's VERIFY only covered *unlock/lock*
+   against an *already-encrypted* wallet, not the encrypt-a-freshly-
+   created-wallet transition, which has its own known Core quirk
+   (`encryptwallet` reloads the wallet internally) not yet checked
+   against ord's own wrapping. **Not fixed in this session** -- raised
+   to the user instead of improvised.
+
+9. **Verify all binaries; fail closed.**
+   Unchanged from Phase 2/4 -- no new binary-handling code this phase.
+
+10. **Fund-moving actions need a preview and explicit confirmation;
+    mainnet needs an extra step; Core spend against ord wallets blocked
+    by default.**
+    Preview: `wallet_send_dry_run` always precedes a real send in
+    `WalletSendForm`'s flow, and ord's own dry-run needs no unlock
+    (VERIFIED live, Phase 5). Mainnet extra step: `ConfirmDialog`'s
+    `isMainnet = environment.chain === "mainnet"` gate, confirmed by
+    reading the component directly this review -- only mainnet requires
+    the acknowledgement checkbox, matching the rule's "mainnet requires
+    an extra... step" (not every environment). "Core spend commands
+    against ord wallets blocked by default": still not applicable --
+    no raw-RPC console or script runner exists yet (Phase 7) for a Core
+    spend command to even be issued through; nothing to block yet,
+    same as Phase 2's conclusion.
+
+11. **Environments are fully isolated.**
+    Stronger claim possible now than Phase 2's "mechanism only": every
+    real wallet/RPC call this phase (`bitcoin_rpc_context`,
+    `wallet_context`) derives its RPC URL/ord server URL/wallet paths
+    from the same `chain` parameter the frontend passed into that one
+    Tauri command invocation -- there is no code path today where a
+    call built for one chain's environment could reach another's, since
+    each command re-derives `Environment::new_default(chain, ...)` from
+    scratch rather than looking up a cached/ambient "current
+    environment." **Gap unchanged from Phase 2**: this is isolation by
+    construction, not by an active runtime guard/test -- still worth a
+    dedicated regression test once Foundation A's "more than one
+    environment per chain" or Phase 8's Test Lab exist, since a future
+    change to how `Environment` is resolved could silently break this
+    invariant with nothing catching it.
+
+12. **No telemetry; network calls only to the allowed list.**
+    Reviewed every new outbound call this phase: `nk-ord`'s HTTP calls
+    target `127.0.0.1:<ord-port>` only (local service); every RPC call
+    targets `127.0.0.1:<rpc-port>` only. No new external endpoints, no
+    analytics/telemetry crate added. Consistent with the rule.
+
+13. **Scripts are trusted code; the runner enforces environment
+    restrictions.**
+    No script runner yet (Phase 7). Not applicable.
+
+14. **A VERIFY result conflicting with any of these rules: STOP AND ASK.**
+    Item 8 above is exactly this: a real, mandatory rule that today's
+    code doesn't satisfy, on a topic CLAUDE.md names explicitly as
+    STOP-AND-ASK territory. Raised to the user rather than resolved
+    unilaterally in this session.
+
+**Summary of open gaps carried forward:**
+- **Mainnet wallets are not actually encrypted by the app today (item
+  8)** -- the headline finding of this review. Needs a UX decision plus
+  a live VERIFY of `encryptwallet` against an ord-managed wallet before
+  implementing; flagged to the user, not improvised.
+- Two narrow, accepted residual zeroization gaps (items 3, 4): plain-
+  text copies exist briefly at the Tauri IPC boundary and in frontend
+  React state, both traded off deliberately rather than chased for
+  marginal benefit.
+- The sandboxed-iframe/malicious-inscription acceptance criterion is
+  reasoned through but not live-tested against the real Tauri webview
+  (item 7) -- needs a human or different tooling.
+- Cross-environment isolation is still "by construction," not by an
+  active regression test (item 11, unchanged from Phase 2) -- revisit
+  once multiple environments of the same chain or the Test Lab exist.
+- Core-spend-blocked-by-default (item 10) and the backups rule (item 5)
+  remain correctly not-yet-applicable; no code path exists for either
+  yet.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

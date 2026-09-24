@@ -608,7 +608,13 @@ async fn wallet_send(
 ) -> Result<WalletSendResult, TypedError> {
     let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
 
-    let passphrase = match passphrase.or_else(|| wallet_session.get(chain)) {
+    // Wrapped in `Zeroizing` immediately -- Phase 5 security self-review
+    // (DECISIONS.md): neither this plain-text `String` from IPC nor
+    // `WalletSession`'s own copy should linger unzeroized past its use.
+    let passphrase: zeroize::Zeroizing<String> = match passphrase
+        .map(zeroize::Zeroizing::new)
+        .or_else(|| wallet_session.get(chain))
+    {
         Some(p) => p,
         None => {
             return Err(TypedError {
@@ -623,7 +629,7 @@ async fn wallet_send(
         .await
         .map_err(|e| TypedError::from(e.to_string()))?;
     if remember {
-        wallet_session.remember(chain, passphrase);
+        wallet_session.remember(chain, passphrase.clone());
     }
 
     let response =
