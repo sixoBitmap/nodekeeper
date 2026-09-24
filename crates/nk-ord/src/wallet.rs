@@ -14,7 +14,7 @@
 //! any log. Every other wallet command here is `Sensitivity::Normal` --
 //! a PSBT, txid, address, or balance isn't a secret.
 
-use nk_core::Environment;
+use nk_core::{AppErrorCode, Environment};
 use nk_exec::{CommandSource, CommandSpec, Executor, Sensitivity};
 use serde_json::Value;
 use std::path::Path;
@@ -31,6 +31,32 @@ pub enum WalletError {
     },
     #[error("could not parse ord's output as JSON: {0}")]
     InvalidJson(#[from] serde_json::Error),
+}
+
+impl WalletError {
+    /// Maps the two `NonZeroExit` failure texts confirmed live
+    /// (DECISIONS.md Phase 5 VERIFY) to their shared plain-language
+    /// codes (docs/SPEC.md item 8): a locked wallet's real bitcoind
+    /// error text ("Please enter the wallet passphrase...") surfacing
+    /// through ord's own exit, and ord's own "N blocks behind
+    /// bitcoind" sync gate. Anything else stays a technical-details-only
+    /// error -- pattern-matching stderr text is inherently best-effort,
+    /// not a substitute for the caller checking `ord_status().caught_up`
+    /// and wallet-lock state proactively where it can.
+    pub fn code(&self) -> Option<AppErrorCode> {
+        match self {
+            Self::NonZeroExit { stderr, .. } => {
+                if stderr.contains("wallet passphrase") {
+                    Some(AppErrorCode::WalletLocked)
+                } else if stderr.contains("blocks behind") {
+                    Some(AppErrorCode::OrdNotSynced)
+                } else {
+                    None
+                }
+            }
+            Self::Exec(_) | Self::InvalidJson(_) => None,
+        }
+    }
 }
 
 /// Everything needed to run a single `ord wallet` subcommand, bundled
@@ -295,6 +321,31 @@ async fn run(
 mod tests {
     use super::*;
     use nk_core::Chain;
+
+    #[test]
+    fn non_zero_exit_maps_known_stderr_texts_to_their_shared_codes() {
+        let locked = WalletError::NonZeroExit {
+            exit_code: Some(1),
+            stderr: "error: JSON-RPC error: RPC error response: RpcError { code: -13, message: \
+                     \"Error: Please enter the wallet passphrase with walletpassphrase first.\" }"
+                .to_string(),
+        };
+        assert_eq!(locked.code(), Some(AppErrorCode::WalletLocked));
+
+        let behind = WalletError::NonZeroExit {
+            exit_code: Some(1),
+            stderr: "error: `ord server` 6 blocks behind `bitcoind`, consider using \
+                     `--no-sync` to ignore this error"
+                .to_string(),
+        };
+        assert_eq!(behind.code(), Some(AppErrorCode::OrdNotSynced));
+
+        let other = WalletError::NonZeroExit {
+            exit_code: Some(1),
+            stderr: "some other ord error".to_string(),
+        };
+        assert_eq!(other.code(), None);
+    }
 
     fn target(environment: &Environment) -> WalletTarget<'_> {
         WalletTarget {

@@ -864,16 +864,28 @@ Foundation D (webview security model, CSP)
       cannot call Tauri IPC or read app data.
 
 `SensitiveSeedView` (frontend) + mnemonic display Tauri command
-- [ ] `create_wallet`/`restore_wallet` Tauri commands returning the
-      mnemonic directly in the IPC response (never through any logged/
-      stored path) -- a dedicated response type, not reused elsewhere.
+- [x] `create_wallet`/`restore_wallet` Tauri commands (`src-tauri/src/
+      lib.rs`): a shared `wallet_context` helper checks both bitcoind
+      and ord are running for the chain first (a clear error instead of
+      a raw connection failure), then delegates to `nk_ord::wallet`.
+      `CreateWalletResult { mnemonic }` is a dedicated TS-exported
+      response type, returned directly in the IPC response and never
+      threaded through anything else. Wallet name is hardcoded to
+      `"ord"` for now (`DEFAULT_WALLET_NAME`) -- "Multiple named
+      wallets" is a separate, later task. Added `WalletError::code()`
+      (`nk-ord`) mapping the two real failure texts found live
+      (locked-wallet, ord-behind-bitcoind) to `AppErrorCode::
+      WalletLocked`/`OrdNotSynced`.
 - [ ] Full-screen view: screenshot warning, mnemonic shown once,
       require confirming several words before proceeding, zeroize
       (frontend-side: clear component state, no lingering references)
       immediately after.
-- [ ] Test: the fake-mnemonic half of the search-test acceptance
-      criterion -- a wallet created with a known fake mnemonic never
-      appears in monitor records, `command_history`, logs, or exports.
+- [x] Test: the fake-mnemonic half of the search-test acceptance
+      criterion -- `create_and_restore_wallet_never_leak_the_mnemonic_
+      to_the_broadcast_stream` (`nk-testkit`): neither a real
+      ord-generated mnemonic nor a known fake one (a standard BIP39
+      test vector) ever appears in any broadcast `ExecEvent`. **Ran
+      live on this Windows machine, passed.**
 
 Wallet screen (frontend + backend orchestration)
 - [ ] Wallet-unlock flow: passphrase prompt before a signing action,

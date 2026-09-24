@@ -79,6 +79,15 @@ impl From<NodeManagerError> for TypedError {
     }
 }
 
+impl From<nk_ord::wallet::WalletError> for TypedError {
+    fn from(e: nk_ord::wallet::WalletError) -> Self {
+        TypedError {
+            code: e.code(),
+            message: e.to_string(),
+        }
+    }
+}
+
 impl From<String> for TypedError {
     fn from(message: String) -> Self {
         TypedError {
@@ -128,6 +137,116 @@ fn configured_ord_path(store: &tauri::State<Arc<Mutex<Store>>>) -> Result<String
         code: Some(AppErrorCode::BinaryNotVerified),
         message: "No verified ord binary is configured yet.".to_string(),
     })
+}
+
+/// Only the default wallet Nodekeeper creates on first use of a chain's
+/// wallet screen -- "Multiple named wallets" (docs/SPEC.md item 3) is a
+/// later task; every wallet command hardcodes this name for now, same
+/// scoping shape as the missing setup wizard elsewhere in this file.
+const DEFAULT_WALLET_NAME: &str = "ord";
+
+/// Everything an `ord wallet` command needs, resolved from `chain`'s
+/// environment and settings, with both bitcoind and ord confirmed
+/// running first -- ord wallet commands need a real running ord server
+/// to talk to (`--server-url`), and ord itself needs bitcoind
+/// (confirmed live, DECISIONS.md Phase 5 VERIFY: ord's own sync-status
+/// gate refuses wallet commands otherwise anyway, but this fails with a
+/// clearer message before ever shelling out).
+struct WalletContext {
+    ord_binary_path: String,
+    environment: Environment,
+    cookie_path: std::path::PathBuf,
+    bitcoin_datadir: std::path::PathBuf,
+    server_url: String,
+}
+
+impl WalletContext {
+    fn target(&self) -> nk_ord::wallet::WalletTarget<'_> {
+        nk_ord::wallet::WalletTarget {
+            binary_path: std::path::Path::new(&self.ord_binary_path),
+            environment: &self.environment,
+            cookie_path: &self.cookie_path,
+            bitcoin_datadir: &self.bitcoin_datadir,
+            server_url: &self.server_url,
+            wallet_name: DEFAULT_WALLET_NAME,
+        }
+    }
+}
+
+fn wallet_context(
+    chain: Chain,
+    node_manager: &tauri::State<'_, NodeManager>,
+    store: &tauri::State<'_, Arc<Mutex<Store>>>,
+) -> Result<WalletContext, TypedError> {
+    if !node_manager.is_running(chain) {
+        return Err(TypedError::from(format!(
+            "{chain:?}'s node must be running before using its wallet"
+        )));
+    }
+    if !node_manager.is_ord_running(chain) {
+        return Err(TypedError::from(format!(
+            "{chain:?}'s ord server must be running before using its wallet"
+        )));
+    }
+    let ord_binary_path = configured_ord_path(store)?;
+    let environment = Environment::new_default(chain, data_root());
+    let cookie_path = environment.bitcoin_cookie_path();
+    let bitcoin_datadir = environment.bitcoin_datadir_arg();
+    let server_url = format!("http://127.0.0.1:{}", environment.ord_port);
+    Ok(WalletContext {
+        ord_binary_path,
+        environment,
+        cookie_path,
+        bitcoin_datadir,
+        server_url,
+    })
+}
+
+/// The mnemonic, returned directly in the IPC response and nowhere
+/// else (docs/SPEC.md Foundation B's sensitive channel) -- a dedicated
+/// type, not reused for anything that might tempt a caller into
+/// logging/storing it alongside other wallet data.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct CreateWalletResult {
+    pub mnemonic: String,
+}
+
+#[tauri::command]
+async fn create_wallet(
+    chain: Chain,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<CreateWalletResult, TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store)?;
+    let response = nk_ord::wallet::create_wallet(&executor, &ctx.target())
+        .await
+        .map_err(TypedError::from)?;
+    let mnemonic = response
+        .get("mnemonic")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| TypedError::from("ord did not return a mnemonic".to_string()))?
+        .to_string();
+    Ok(CreateWalletResult { mnemonic })
+}
+
+/// `timestamp`: `"now"` to skip scanning (a brand-new restore with
+/// nothing to find yet), a unix timestamp, or `"0"` for a full rescan
+/// -- the frontend decides which, based on what it asks the user (see
+/// `nk_ord::wallet::restore_wallet`'s doc comment).
+#[tauri::command]
+async fn restore_wallet(
+    chain: Chain,
+    mnemonic: String,
+    timestamp: String,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<(), TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store)?;
+    nk_ord::wallet::restore_wallet(&executor, &ctx.target(), &mnemonic, &timestamp)
+        .await
+        .map_err(TypedError::from)
 }
 
 #[tauri::command]
@@ -409,6 +528,8 @@ pub fn run() {
             restart_ord,
             ord_status,
             is_ord_running,
+            create_wallet,
+            restore_wallet,
             tail_debug_log,
             page_debug_log_before,
             search_debug_log,
@@ -437,6 +558,7 @@ mod tests {
         TypedError::export_all(&config).unwrap();
         node_manager::NodeStatus::export_all(&config).unwrap();
         node_manager::OrdStatus::export_all(&config).unwrap();
+        CreateWalletResult::export_all(&config).unwrap();
         nk_core::log_tail::LogWindow::export_all(&config).unwrap();
         nk_store::CommandHistoryEntry::export_all(&config).unwrap();
         nk_exec::ExecEvent::export_all(&config).unwrap();

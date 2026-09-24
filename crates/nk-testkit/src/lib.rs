@@ -562,6 +562,106 @@ mod tests {
         fixture.stop().await.expect("bitcoind should stop cleanly");
     }
 
+    /// The real, automatable half of Phase 5's [CI] "fake-mnemonic...
+    /// search test" acceptance criterion (the passphrase half already
+    /// lives in `nk-rpc`): neither a real, ord-generated mnemonic
+    /// (`create_wallet`) nor a known fake one fed in via `restore_wallet`
+    /// ever appears in any event the executor broadcasts -- checked
+    /// against the `Debug` representation of every event (covers
+    /// `command_display` *and* output chunks in one assertion, rather
+    /// than matching each `ExecEvent` variant by hand).
+    #[tokio::test]
+    #[serial(real_bitcoind)]
+    async fn create_and_restore_wallet_never_leak_the_mnemonic_to_the_broadcast_stream() {
+        let (Some(bitcoind_path), Some(ord_path)) = (
+            std::env::var_os("NK_TEST_BITCOIND"),
+            std::env::var_os("NK_TEST_ORD"),
+        ) else {
+            eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
+            return;
+        };
+        let bitcoind_path = std::path::PathBuf::from(bitcoind_path);
+        let ord_path = std::path::PathBuf::from(ord_path);
+
+        let mut fixture = RegtestFixture::start(&bitcoind_path)
+            .await
+            .expect("bitcoind should start");
+        fixture
+            .start_ord(&ord_path)
+            .await
+            .expect("ord should start and become ready");
+
+        let executor = Executor::new();
+        let mut events = executor.subscribe();
+        let cookie_path = fixture.environment.bitcoin_cookie_path();
+        let bitcoin_datadir = fixture.environment.bitcoin_datadir_arg();
+        let server_url = format!("http://127.0.0.1:{}", fixture.environment.ord_port);
+        let target = nk_ord::wallet::WalletTarget {
+            binary_path: &ord_path,
+            environment: &fixture.environment,
+            cookie_path: &cookie_path,
+            bitcoin_datadir: &bitcoin_datadir,
+            server_url: &server_url,
+            wallet_name: "ord",
+        };
+
+        let created = nk_ord::wallet::create_wallet(&executor, &target)
+            .await
+            .expect("wallet create should succeed");
+        let real_mnemonic = created["mnemonic"]
+            .as_str()
+            .expect("create response should include a mnemonic")
+            .to_string();
+        assert_no_broadcast_event_contains(&mut events, &real_mnemonic);
+
+        // A well-known BIP39 test vector, not a mnemonic that ever
+        // actually held funds -- restore doesn't need to succeed for
+        // this assertion (the mnemonic goes via stdin, never
+        // command_display), but a real target makes the test as
+        // realistic as `wallet_cli_create_fund_send_and_restore`'s.
+        let fake_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon \
+                              abandon abandon abandon about";
+        let restored_target = nk_ord::wallet::WalletTarget {
+            binary_path: &ord_path,
+            environment: &fixture.environment,
+            cookie_path: &cookie_path,
+            bitcoin_datadir: &bitcoin_datadir,
+            server_url: &server_url,
+            wallet_name: "restored-fake",
+        };
+        let _ =
+            nk_ord::wallet::restore_wallet(&executor, &restored_target, fake_mnemonic, "0").await;
+        assert_no_broadcast_event_contains(&mut events, fake_mnemonic);
+
+        fixture
+            .stop_ord()
+            .await
+            .expect("ord should stop gracefully");
+        fixture.stop().await.expect("bitcoind should stop cleanly");
+    }
+
+    /// Drains every event currently queued on `events` and asserts none
+    /// of them (in their full `Debug` form, so both `command_display`
+    /// and any output chunk are covered) contain `secret`.
+    fn assert_no_broadcast_event_contains(
+        events: &mut tokio::sync::broadcast::Receiver<nk_exec::ExecEvent>,
+        secret: &str,
+    ) {
+        let mut checked_at_least_one = false;
+        while let Ok(event) = events.try_recv() {
+            checked_at_least_one = true;
+            let text = format!("{event:?}");
+            assert!(
+                !text.contains(secret),
+                "a broadcast event leaked the secret: {text}"
+            );
+        }
+        assert!(
+            checked_at_least_one,
+            "expected at least one broadcast event to check"
+        );
+    }
+
     /// Real-node coverage for the dashboard's RPC methods (docs/SPEC.md
     /// item 2: peers, mempool) -- their field names were VERIFY'd live
     /// against a throwaway node during development (DECISIONS.md, Phase
