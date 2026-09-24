@@ -645,6 +645,45 @@ including the real regtest bitcoind spawn, passed. Pushed and confirmed
 green on all 3 OSes: run `35795672861`, with `cargo test` actually
 executing (not skipping) the real regtest integration test on every OS.
 
+## Phase 4 — pinned ord 0.29.0 SHA-256 hashes (2026-09-24)
+
+Before pinning any values, re-verified rather than reusing Phase 0's
+spike findings from two days ago (`gh api repos/ordinals/ord/releases/
+latest`): still **0.29.0** (published 2026-08-05), no newer release.
+Confirms Phase 0's other ord 0.29.0 findings (stdin support, dry-run
+flags, reinscribe syntax, index-option mapping, etc., all in this file
+under the Phase 0 spike entries) are still current.
+
+ord publishes no maintainer-signed checksums file (confirmed again —
+no `SHA256SUMS`/`.asc` in the release assets or body), so per docs/
+SPEC.md item 1 ("in all cases also check against SHA-256 hashes pinned
+inside Nodekeeper for each supported ord version"), Nodekeeper's own
+pinned hash *is* the verification, not a supplement to one. Rather than
+trusting GitHub's reported per-asset `digest` field alone, downloaded
+all 4 release assets for real and computed SHA-256 locally
+(`Get-FileHash`) as an independent cross-check:
+
+| Asset | SHA-256 |
+|---|---|
+| `ord-0.29.0-x86_64-pc-windows-msvc.zip` | `93de82db792ccc37ae385c49646c0f649d38049f4e959499c6e7c5d1a81bf2ad` |
+| `ord-0.29.0-x86_64-unknown-linux-gnu.tar.gz` | `f65c758d71549954470aa7fe23b197478688fb4f910e84c2956cf9144078a94e` |
+| `ord-0.29.0-x86_64-apple-darwin.tar.gz` | `a0085f296057563a31258402437c1182fc13bb9559826d1f5490feb4be6dbb75` |
+| `ord-0.29.0-aarch64-apple-darwin.tar.gz` | `9360e97054a1d96624190634882c187126b02647a889b344cb601627ed1bd80c` |
+
+All 4 matched GitHub's reported `digest` exactly. Source:
+https://github.com/ordinals/ord/releases/tag/0.29.0 — the same
+[MANUAL] acceptance criterion Bitcoin Core's builder keys got applies
+here too: the user independently checks these same 4 hashes against
+the official release from a separate machine/browser before Phase 4
+closes.
+
+Also checked the archive layout live (listed both the Windows `.zip`
+and Linux `.tar.gz`, not assumed identical to Bitcoin Core's): both
+nest the binary one level down in a version-named folder
+(`ord-0.29.0/ord.exe` / `ord-0.29.0/ord`), same as Bitcoin Core's
+release layout, **except** there is no `bin/` subfolder — the binary
+sits directly in `ord-0.29.0/`, not `ord-0.29.0/bin/`.
+
 ## Phase 3 — windows-latest CI flakiness, take 4: reconsidering the diagnosis (2026-09-23)
 
 CI run 35916368300 hit the exact same `Bitcoind(StartupTimeout)` failure
