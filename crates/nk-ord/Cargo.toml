@@ -10,3 +10,4 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots", "json"] }
 nk-exec = { workspace = true }
+nk-core = { workspace = true }

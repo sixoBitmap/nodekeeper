@@ -819,21 +819,34 @@ planning this phase) — **done**
       `wallet_lock` re-locks it and the RPC fails again -- **ran live
       on this Windows machine, passed**.
 
-`nk-ord` (wallet CLI wrapper)
-- [ ] `wallet_args(environment, server_url, wallet_name)` argument
-      builder, mirroring `ord_conf`'s shape.
-- [ ] `create_wallet`/`restore_wallet` (stdin mnemonic, `Sensitivity::
-      Sensitive` -- the mnemonic must never reach the broadcast/
-      history path, only the direct `ExecOutcome` return value).
-- [ ] `wallet_balance`/`wallet_receive`/`wallet_addresses`/
+`nk-ord` (wallet CLI wrapper) — **done**
+- [x] `WalletTarget` (`environment`/`cookie_path`/`bitcoin_datadir`/
+      `server_url`/`wallet_name`) + `base_args()`, mirroring
+      `ord_conf`'s shape. `--server-url`/`--name` placement (on
+      `wallet`, not top-level) pinned by a unit test after getting it
+      wrong live while VERIFYing.
+- [x] `create_wallet`/`restore_wallet` (stdin mnemonic,
+      `Sensitivity::Sensitive` -- the mnemonic never reaches the
+      broadcast/history path, only the direct `ExecOutcome` return
+      value). `restore_wallet` takes `timestamp` as a caller-supplied
+      parameter (`"now"`/unix-ts/`"0"`), not hardcoded.
+- [x] `wallet_balance`/`wallet_receive`/`wallet_addresses`/
       `wallet_inscriptions`/`wallet_transactions`/`wallet_cardinals`
-      (all `Sensitivity::Normal` -- none of this output is secret).
-- [ ] `wallet_send` (dry-run and real, `Sensitivity::Normal` -- a PSBT/
-      txid isn't a secret either, unlike the mnemonic).
-- [ ] Tests: real regtest wallet create -> mine -> balance -> dry-run
-      send -> real send (encrypted, unlock/lock around the real send)
-      -> restore-from-mnemonic-matches-original-balance, via
-      `nk-testkit`.
+      (all `Sensitivity::Normal`).
+- [x] `wallet_send` (dry-run and real, `Sensitivity::Normal`).
+- [x] Real test, `wallet_cli_create_fund_send_and_restore`
+      (`nk-testkit`): create -> mine -> wait for ord to catch up ->
+      balance -> dry-run send -> encrypt -> locked real send fails ->
+      unlock -> real send succeeds -> lock -> restore from the same
+      mnemonic under a different name (full rescan) -> restored
+      balance matches. **Ran live on this Windows machine, passed.**
+      Along the way, found and documented (DECISIONS.md) a real ord
+      behavior: every `ord wallet` subcommand refuses to run while
+      ord's index is behind bitcoind, exactly matching docs/SPEC.md
+      item 3's "Until ord is caught up, show... instead of errors"
+      warning -- the real app must gate wallet actions on
+      `wait_until_caught_up`/`ord_status().caught_up`, not just call
+      through and handle the error.
 
 Foundation D (webview security model, CSP)
 - [ ] `frame-src` CSP directive scoped to each default environment's

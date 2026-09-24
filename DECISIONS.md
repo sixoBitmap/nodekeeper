@@ -1390,6 +1390,44 @@ passphrase and a short timeout, run the ord wallet command, then call
 waiting out the timeout. No ord-side special-casing, no workaround, no
 STOP AND ASK needed -- this can be built exactly as the spec describes.
 
+## Phase 5 — nk-ord wallet wrapper, and confirming ord's own sync gate (2026-09-24)
+
+Built `nk-ord::wallet` (`WalletTarget` + `create_wallet`/
+`restore_wallet`/`wallet_balance`/`wallet_receive`/`wallet_addresses`/
+`wallet_inscriptions`/`wallet_transactions`/`wallet_cardinals`/
+`wallet_send`), routed through `nk-exec` like every other `ord` CLI
+invocation, `create`/`restore` tagged `Sensitivity::Sensitive` since
+their I/O carries the mnemonic.
+
+While building the real `nk-testkit` integration test (create wallet,
+mine to fund it, check balance), hit a real, live failure immediately
+after mining:
+```
+error: `ord server` 6 blocks behind `bitcoind`, consider using
+`--no-sync` to ignore this error
+```
+`ord wallet balance` (and, by the same mechanism, every other `ord
+wallet` subcommand) refuses to run at all while ord's index is behind
+bitcoind's current height -- this is exactly docs/SPEC.md item 3's own
+warning ("ord wallet commands depend on a running, synced ord server...
+Until ord is caught up, show a clear 'Waiting for ord to catch up
+(block X of Y)' state instead of errors"), now empirically confirmed
+rather than just quoted from the spec. Fixed the test by calling
+`nk_proc::wait_until_caught_up` after mining and before any wallet
+command -- the real app must do the same: call it (or otherwise confirm
+`ord_status().caught_up`) before enabling any wallet action after new
+blocks arrive, and show the spec's "waiting to catch up" state rather
+than letting a wallet command surface this as a raw error.
+
+Full test (`wallet_cli_create_fund_send_and_restore`) exercises the
+whole chain live: create -> receive address -> mine 101 blocks -> wait
+for ord to catch up -> balance (nonzero) -> dry-run send (succeeds,
+needs no unlock) -> encrypt the wallet -> real send fails while locked
+-> `wallet_passphrase` unlocks it -> real send succeeds -> `wallet_lock`
+re-locks it -> restore the same mnemonic under a different wallet name
+with a full rescan (`--timestamp 0`) -> restored wallet's balance
+matches the original's. **Ran live on this Windows machine, passed.**
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

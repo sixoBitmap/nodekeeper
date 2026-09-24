@@ -3150,6 +3150,7 @@ dependencies = [
 name = "nk-ord"
 version = "0.1.0"
 dependencies = [
+ "nk-core",
  "nk-exec",
  "reqwest",
  "serde_json",

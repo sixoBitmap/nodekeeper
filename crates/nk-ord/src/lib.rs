@@ -19,6 +19,8 @@ use nk_exec::{CommandSource, Executor, RecordSpec, Sensitivity};
 use serde_json::Value;
 use thiserror::Error;
 
+pub mod wallet;
+
 #[derive(Debug, Error)]
 pub enum OrdApiError {
     #[error("http error: {0}")]

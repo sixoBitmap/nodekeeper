@@ -393,6 +393,175 @@ mod tests {
         fixture.stop().await.expect("bitcoind should stop cleanly");
     }
 
+    /// Real end-to-end coverage for `nk-ord`'s wallet CLI wrapper
+    /// (docs/SPEC.md item 3, Phase 5): create a wallet, fund it,
+    /// preview a send (dry-run, needs no unlock), encrypt the wallet,
+    /// confirm a real send fails while locked and succeeds once
+    /// unlocked, then restore the same mnemonic under a different
+    /// wallet name and confirm the restored wallet finds the same
+    /// funds via a full rescan.
+    #[tokio::test]
+    #[serial(real_bitcoind)]
+    async fn wallet_cli_create_fund_send_and_restore() {
+        let (Some(bitcoind_path), Some(ord_path)) = (
+            std::env::var_os("NK_TEST_BITCOIND"),
+            std::env::var_os("NK_TEST_ORD"),
+        ) else {
+            eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
+            return;
+        };
+        let bitcoind_path = std::path::PathBuf::from(bitcoind_path);
+        let ord_path = std::path::PathBuf::from(ord_path);
+
+        let mut fixture = RegtestFixture::start(&bitcoind_path)
+            .await
+            .expect("bitcoind should start");
+        fixture
+            .start_ord(&ord_path)
+            .await
+            .expect("ord should start and become ready");
+
+        let executor = Executor::new();
+        let cookie_path = fixture.environment.bitcoin_cookie_path();
+        let bitcoin_datadir = fixture.environment.bitcoin_datadir_arg();
+        let server_url = format!("http://127.0.0.1:{}", fixture.environment.ord_port);
+        let target = nk_ord::wallet::WalletTarget {
+            binary_path: &ord_path,
+            environment: &fixture.environment,
+            cookie_path: &cookie_path,
+            bitcoin_datadir: &bitcoin_datadir,
+            server_url: &server_url,
+            wallet_name: "ord",
+        };
+
+        let created = nk_ord::wallet::create_wallet(&executor, &target)
+            .await
+            .expect("wallet create should succeed");
+        let mnemonic = created
+            .get("mnemonic")
+            .and_then(|v| v.as_str())
+            .expect("create response should include a mnemonic")
+            .to_string();
+
+        let receive = nk_ord::wallet::wallet_receive(&executor, &target, None)
+            .await
+            .expect("wallet receive should succeed");
+        let address = receive["addresses"][0]
+            .as_str()
+            .expect("receive response should include an address")
+            .to_string();
+
+        fixture
+            .rpc
+            .generate_to_address(101, &address)
+            .await
+            .expect("mining to fund the wallet should succeed");
+
+        // ord wallet commands refuse to run while ord's index is
+        // behind bitcoind -- confirmed live, reproduced as a real
+        // "ord server N blocks behind bitcoind" failure from
+        // `wallet_balance` immediately after mining. Exactly the
+        // behavior docs/SPEC.md item 3 already warns about ("Until ord
+        // is caught up, show... instead of errors").
+        nk_proc::wait_until_caught_up(
+            fixture.ord.as_ref().unwrap(),
+            &fixture.rpc,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("ord should catch up after mining");
+
+        let balance = nk_ord::wallet::wallet_balance(&executor, &target)
+            .await
+            .expect("wallet balance should succeed");
+        let funded_total = balance["total"].as_u64().unwrap_or(0);
+        assert!(
+            funded_total > 0,
+            "funded wallet should have a nonzero balance"
+        );
+
+        // Dry-run needs no unlock -- confirmed live even against a
+        // *locked* wallet (DECISIONS.md Phase 5 VERIFY); here the
+        // wallet isn't even encrypted yet, so this also just confirms
+        // the wrapper's argument/response shape is right.
+        let preview = nk_ord::wallet::wallet_send(&executor, &target, &address, "1btc", 2.0, true)
+            .await
+            .expect("dry-run send should succeed");
+        assert!(preview.get("psbt").is_some());
+        assert!(preview.get("fee").is_some());
+
+        fixture
+            .rpc
+            .encrypt_wallet("ord", "test-passphrase-456")
+            .await
+            .expect("encrypt_wallet should succeed");
+
+        let locked_send =
+            nk_ord::wallet::wallet_send(&executor, &target, &address, "1btc", 2.0, false).await;
+        assert!(
+            matches!(
+                locked_send,
+                Err(nk_ord::wallet::WalletError::NonZeroExit { .. })
+            ),
+            "a real send against a locked wallet should fail, got {locked_send:?}"
+        );
+
+        fixture
+            .rpc
+            .wallet_passphrase("ord", "test-passphrase-456", 60)
+            .await
+            .expect("wallet_passphrase should unlock the wallet");
+        nk_ord::wallet::wallet_send(&executor, &target, &address, "1btc", 2.0, false)
+            .await
+            .expect("send should succeed once unlocked");
+        fixture
+            .rpc
+            .wallet_lock("ord")
+            .await
+            .expect("wallet_lock should re-lock the wallet");
+
+        // Captured *after* the real send above (which paid a real fee,
+        // even though it was a self-send) -- comparing the restored
+        // wallet against this, not the earlier `funded_total`, so the
+        // assertion below isn't tripped up by that fee.
+        let pre_restore_balance = nk_ord::wallet::wallet_balance(&executor, &target)
+            .await
+            .expect("wallet balance should succeed")["total"]
+            .as_u64()
+            .unwrap_or(0);
+
+        // Full rescan (`--timestamp 0`) so the restored wallet finds
+        // every historical UTXO, not just ones after some cutoff --
+        // proves restore genuinely recovers funds from the mnemonic
+        // alone, not that it merely runs without error.
+        let restored_target = nk_ord::wallet::WalletTarget {
+            binary_path: &ord_path,
+            environment: &fixture.environment,
+            cookie_path: &cookie_path,
+            bitcoin_datadir: &bitcoin_datadir,
+            server_url: &server_url,
+            wallet_name: "restored",
+        };
+        nk_ord::wallet::restore_wallet(&executor, &restored_target, &mnemonic, "0")
+            .await
+            .expect("restore should succeed");
+        let restored_balance = nk_ord::wallet::wallet_balance(&executor, &restored_target)
+            .await
+            .expect("restored wallet balance should succeed");
+        assert_eq!(
+            restored_balance["total"].as_u64(),
+            Some(pre_restore_balance),
+            "restoring from the mnemonic alone should recover the same balance the \
+             original wallet had"
+        );
+
+        fixture
+            .stop_ord()
+            .await
+            .expect("ord should stop gracefully");
+        fixture.stop().await.expect("bitcoind should stop cleanly");
+    }
+
     /// Real-node coverage for the dashboard's RPC methods (docs/SPEC.md
     /// item 2: peers, mempool) -- their field names were VERIFY'd live
     /// against a throwaway node during development (DECISIONS.md, Phase
