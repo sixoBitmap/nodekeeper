@@ -1314,6 +1314,82 @@ both `start_ord` calls in the test (the fixture's `Environment` is
 reused, not recreated), matching how the real app would restart ord
 after a stop (same environment, same `--data-dir`).
 
+## Phase 5 — VERIFY: ord's wallet CLI surface, live against a real encrypted wallet (2026-09-24)
+
+Before writing any Phase 5 code, re-verified live (not trusted from
+Phase 0's 2-day-old spike notes, though this confirms them) against the
+same cached ord 0.29.0 binary, a real regtest bitcoind, and a real ord
+server -- exactly the setup `nk-testkit` uses.
+
+**`ord wallet` CLI surface** (`ord wallet --help` and each
+subcommand's own `--help`, this exact build):
+- `--server-url <SERVER_URL>` and `--name <NAME>` (default `ord`) are
+  flags on the `wallet` subcommand itself, *after* `wallet`, not
+  top-level flags before it (`ord <base-args> wallet --server-url
+  <url> --name <name> <command>`) -- easy to get wrong, confirmed by
+  hitting the "unexpected argument" error live while setting this up.
+  Default `--server-url` is `http://localhost:80`, always overridden.
+- Subcommands relevant to Phase 5: `create`, `restore`, `balance`,
+  `cardinals`, `receive`, `send`, `addresses`, `inscriptions`,
+  `transactions`, `dump`, `sign`. (`inscribe`/`batch`/`mint`/etc. are
+  Phase 6+.)
+- `wallet create [--passphrase <P>]`: prints `{"mnemonic": "...",
+  "passphrase": ""}` to stdout -- this JSON, specifically the
+  `mnemonic` field, is the sensitive output that must go through
+  Foundation B's sensitive channel end to end, never the normal
+  command-display/monitor/history path. Per the existing "no BIP39
+  passphrase support" approved deviation, `--passphrase` is never
+  passed (ord's own default is `""`).
+- `wallet restore --from mnemonic --timestamp <now|unix-ts>`: reads
+  the mnemonic from stdin (confirmed live: `echo "<12 words>" | ord
+  ... wallet --name restored ... restore --from mnemonic --timestamp
+  now` exited 0 and produced a working wallet with a real balance).
+  `--from descriptor` also exists (not used by Nodekeeper's UI, which
+  only offers mnemonic restore).
+- `wallet send --dry-run --fee-rate <RATE> <ADDRESS> <ASSET>`: prints
+  `{"txid", "psbt", "asset", "fee"}`. Confirmed this is genuinely safe
+  to call at any time, including against a **locked** encrypted
+  wallet -- it needs no signing key access, so a fee/PSBT preview can
+  always be shown without prompting for the wallet passphrase.
+- The underlying Bitcoin Core wallet `ord wallet create` makes is a
+  real, ordinary Core wallet, named via `--name` (confirmed via
+  `listwallets` after `wallet create`) -- not some separate ord-only
+  wallet abstraction. This is *why* the encryption story below is just
+  "it's a normal Core wallet," not something ord-specific.
+
+**Encrypted-wallet interaction** (docs/SPEC.md item 3's explicit
+STOP-AND-ASK trigger if this doesn't work cleanly -- it does, confirmed
+live end to end, so no stop needed): created a real wallet via `ord
+wallet create`, mined regtest coinbase to it, called bitcoind's
+`encryptwallet` RPC directly (the standard Core RPC, not anything
+ord-specific), then:
+- Read-only commands (`wallet balance`, `wallet receive`) work
+  identically whether the wallet is locked or unlocked -- no special
+  handling needed for the parts of the UI that only read.
+- `wallet send --dry-run` also works while locked (see above).
+- A **real** (non-dry-run) `wallet send` while locked fails cleanly:
+  `JSON-RPC error: RPC error response: RpcError { code: -13, message:
+  "Error: Please enter the wallet passphrase with walletpassphrase
+  first." }` -- a real, parseable RPC error, not a hang or a crash.
+- Calling bitcoind's `walletpassphrase <passphrase> <timeout_secs>`
+  RPC (already available via `nk_rpc::RpcClient::call`, nothing new
+  needed there) unlocks it; the same `wallet send` command immediately
+  afterward succeeds, producing a real signed txid.
+- `encryptwallet`'s own response text ("The keypool has been flushed
+  and a new HD seed was generated") sounds alarming but is Core's
+  standard message about its *own* internally-generated future
+  addresses -- it did not disturb ord's already-imported,
+  mnemonic-derived descriptors; the wallet kept signing correctly
+  afterward.
+
+**Conclusion**: Nodekeeper's wallet-unlock flow is exactly what
+Foundation D/item 3 already assumed: before any real (non-dry-run)
+signing action, call `walletpassphrase` with the user-entered
+passphrase and a short timeout, run the ord wallet command, then call
+`walletlock` (standard Core RPC) immediately afterward rather than
+waiting out the timeout. No ord-side special-casing, no workaround, no
+STOP AND ASK needed -- this can be built exactly as the spec describes.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

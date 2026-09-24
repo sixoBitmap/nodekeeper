@@ -786,7 +786,105 @@ resolved to close out the remaining `[CI]` acceptance criteria above.
 
 ## Phase 5 — Wallet
 
-Not started. See docs/SPEC.md Phase 5.
+In progress. Tasks (one at a time: implement -> test -> quality gate ->
+commit -> tick). VERIFY'd live before starting (DECISIONS.md): ord's
+`wallet` CLI surface (`--server-url`/`--name` are flags *on* `wallet`,
+not top-level; `create`/`restore --from mnemonic` stdin syntax;
+`send --dry-run` needs no unlock), and the encrypted-Core-wallet
+interaction end to end against a real regtest wallet (works cleanly,
+standard `walletpassphrase`/`walletlock` RPCs, no ord-specific
+handling or workaround needed -- the spec's STOP-AND-ASK trigger for
+this did not fire).
+
+`nk-rpc` (wallet-unlock RPCs, with real redaction -- a gap found while
+planning this phase)
+- [ ] `RpcClient::call()` currently hardcodes `redact: vec![]` and
+      `Sensitivity::Normal` -- fine for every RPC used so far (none
+      carried a secret parameter), but `walletpassphrase <passphrase>
+      <timeout>`'s equivalent-bitcoin-cli `command_display` would
+      leak the passphrase straight into the Live Command Monitor and
+      `command_history` otherwise. Add a `redact: Vec<String>`
+      parameter to `call()` (breaking change, update every existing
+      call site to pass `vec![]`), then `wallet_passphrase`/
+      `wallet_lock`/`encrypt_wallet` typed wrappers that actually use
+      it.
+- [ ] Test: a call carrying a fake passphrase never appears in the
+      redacted `command_display` -- the real, automatable slice of the
+      Phase 5 [CI] "fake-passphrase search test" acceptance criterion
+      (the fake-mnemonic half lives with the sensitive-channel work
+      below).
+
+`nk-ord` (wallet CLI wrapper)
+- [ ] `wallet_args(environment, server_url, wallet_name)` argument
+      builder, mirroring `ord_conf`'s shape.
+- [ ] `create_wallet`/`restore_wallet` (stdin mnemonic, `Sensitivity::
+      Sensitive` -- the mnemonic must never reach the broadcast/
+      history path, only the direct `ExecOutcome` return value).
+- [ ] `wallet_balance`/`wallet_receive`/`wallet_addresses`/
+      `wallet_inscriptions`/`wallet_transactions`/`wallet_cardinals`
+      (all `Sensitivity::Normal` -- none of this output is secret).
+- [ ] `wallet_send` (dry-run and real, `Sensitivity::Normal` -- a PSBT/
+      txid isn't a secret either, unlike the mnemonic).
+- [ ] Tests: real regtest wallet create -> mine -> balance -> dry-run
+      send -> real send (encrypted, unlock/lock around the real send)
+      -> restore-from-mnemonic-matches-original-balance, via
+      `nk-testkit`.
+
+Foundation D (webview security model, CSP)
+- [ ] `frame-src` CSP directive scoped to each default environment's
+      exact `http://127.0.0.1:<ord-port>` origin (the 4 fixed default
+      ports) -- currently absent entirely (Phase 1 baseline, no
+      iframes allowed yet).
+- [ ] Sandboxed inscription-preview component: `<iframe sandbox=
+      "allow-scripts">` (no `allow-same-origin`), `src` from the
+      environment's own ord server -- built once there's real
+      inscription content to render (gallery, below), not in the
+      abstract.
+- [ ] [CI] acceptance criterion: a malicious test HTML/SVG inscription
+      cannot call Tauri IPC or read app data.
+
+`SensitiveSeedView` (frontend) + mnemonic display Tauri command
+- [ ] `create_wallet`/`restore_wallet` Tauri commands returning the
+      mnemonic directly in the IPC response (never through any logged/
+      stored path) -- a dedicated response type, not reused elsewhere.
+- [ ] Full-screen view: screenshot warning, mnemonic shown once,
+      require confirming several words before proceeding, zeroize
+      (frontend-side: clear component state, no lingering references)
+      immediately after.
+- [ ] Test: the fake-mnemonic half of the search-test acceptance
+      criterion -- a wallet created with a known fake mnemonic never
+      appears in monitor records, `command_history`, logs, or exports.
+
+Wallet screen (frontend + backend orchestration)
+- [ ] Wallet-unlock flow: passphrase prompt before a signing action,
+      optional "Remember for this session" (in-memory only, cleared on
+      lock/app-exit/idle timeout, default 15 min).
+- [ ] Balance (cardinal vs inscribed), receive (address + QR), multiple
+      named wallets.
+- [ ] Inscriptions gallery (static previews, Foundation D sandboxing
+      above), rune balances gated on `index_runes` being enabled
+      (Foundation F) -- and note the Phase 0 finding that rune listing
+      fails *soft* (empty, not an error) without it, so gate
+      proactively rather than trusting ord's own error.
+- [ ] Send: wrong-network address rejection, non-Taproot-inscription
+      warning, fee-rate estimate from `estimatesmartfee` with a
+      regtest fallback / mainnet manual-entry requirement, absurd-fee
+      guard, dry-run preview + review screen, MAINNET extra
+      confirmation via the existing shared `ConfirmDialog`.
+- [ ] Transaction history.
+
+Acceptance criteria (from docs/SPEC.md Phase 5 "Done when"):
+- [ ] [CI] the fake-mnemonic and fake-passphrase search test passes
+- [ ] [CI] a malicious test HTML/SVG inscription cannot call Tauri IPC
+      or read app data
+- [ ] [CI] wrong-network addresses are rejected; an inscription send
+      completes on regtest
+- [ ] [MANUAL] mainnet confirmation appears for a mainnet send (cancel
+      it before broadcasting); encrypted wallet unlock/lock works; the
+      session remember clears after the idle timeout
+- [x] Encryption compatibility with ord VERIFIED (DECISIONS.md,
+      2026-09-24) -- works cleanly, no workaround needed
+- [ ] Security self-review completed
 
 ## Phase 6 — Inscribe studio
 
