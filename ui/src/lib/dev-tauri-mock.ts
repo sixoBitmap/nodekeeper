@@ -6,6 +6,7 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import type { Chain } from "@/bindings/Chain";
 import type { Environment } from "@/bindings/Environment";
 import type { NodeStatus } from "@/bindings/NodeStatus";
+import type { OrdStatus } from "@/bindings/OrdStatus";
 import type { SystemCheck } from "@/bindings/SystemCheck";
 import type { LogWindow } from "@/bindings/LogWindow";
 import type { TypedError } from "@/bindings/TypedError";
@@ -69,6 +70,8 @@ const settings = new Map<string, string>();
 // show in the browser preview: "starting" (a few seconds of headers-
 // only sync) then "ready", entirely client-side.
 const runningSince = new Map<Chain, number>();
+// Same idea for ord: "indexing" for a few seconds, then "caught up".
+const ordRunningSince = new Map<Chain, number>();
 
 const MOCK_LOG_LINES = [
   "2026-09-23T12:00:00Z Bitcoin Core version v31.1",
@@ -92,6 +95,24 @@ function mockNodeStatus(chain: Chain): NodeStatus {
     mempool_transactions: 1_284,
     mempool_bytes: 3_402_112,
     disk: { used_by_data_bytes: 612_040_192_000, free_on_volume_bytes: 128_849_018_880 },
+    uptime_seconds: uptimeSeconds,
+  };
+}
+
+function mockOrdStatus(chain: Chain): OrdStatus {
+  const startedAt = ordRunningSince.get(chain) ?? Date.now();
+  const uptimeSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const indexing = uptimeSeconds < 6;
+  const nodeHeight = mockNodeStatus(chain).blocks;
+  const indexOptions =
+    MOCK_ENVIRONMENTS.find((e) => e.chain === chain)?.index_options ?? NO_INDEX_OPTIONS;
+  return {
+    index_height: indexing ? Math.floor(nodeHeight * (uptimeSeconds / 6)) : nodeHeight,
+    node_height: nodeHeight,
+    caught_up: !indexing,
+    index_sats: indexOptions.index_sats,
+    index_runes: indexOptions.index_runes,
+    index_addresses: indexOptions.index_addresses,
     uptime_seconds: uptimeSeconds,
   };
 }
@@ -150,6 +171,22 @@ export function installDevTauriMockIfNeeded() {
       }
       case "list_command_history":
         return [];
+      case "is_ord_running":
+        return ordRunningSince.has((args as { chain: Chain }).chain);
+      case "start_ord":
+        ordRunningSince.set((args as { chain: Chain }).chain, Date.now());
+        return undefined;
+      case "stop_ord":
+        ordRunningSince.delete((args as { chain: Chain }).chain);
+        return undefined;
+      case "restart_ord":
+        ordRunningSince.set((args as { chain: Chain }).chain, Date.now());
+        return undefined;
+      case "ord_status": {
+        const { chain } = args as { chain: Chain };
+        if (!ordRunningSince.has(chain)) return Promise.reject(notRunningError(chain));
+        return mockOrdStatus(chain);
+      }
       default:
         throw new Error(`dev-tauri-mock: no mock for IPC command "${cmd}"`);
     }

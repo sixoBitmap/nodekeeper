@@ -112,6 +112,24 @@
       "ready": "Ready"
     }
   },
+  "ord": {
+    "title": "Ordinals (ord)",
+    "indexHeight": "Index height",
+    "indexOptions": "Index options",
+    "notRunning": "ord isn't running.",
+    "status": {
+      "stopped": "Stopped",
+      "starting": "Starting",
+      "indexing": "Indexing",
+      "caughtUp": "Ready"
+    },
+    "indexOption": {
+      "sats": "Sats",
+      "runes": "Runes",
+      "addresses": "Addresses",
+      "none": "None enabled"
+    }
+  },
   "diskMonitor": {
     "title": "Disk usage",
     "used": "Used by this environment",

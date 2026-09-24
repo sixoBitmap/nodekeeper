@@ -3251,6 +3251,7 @@ version = "0.1.0"
 dependencies = [
  "nk-core",
  "nk-exec",
+ "nk-ord",
  "nk-proc",
  "nk-rpc",
  "nk-store",

@@ -102,6 +102,9 @@ impl From<std::io::Error> for TypedError {
 /// see `node_manager`'s doc comment for why start/stop reads this
 /// instead of locating a binary itself.
 const BITCOIND_PATH_SETTING: &str = "bitcoind_path";
+/// Same scoping note as `BITCOIND_PATH_SETTING` -- no setup-wizard flow
+/// downloads/verifies an ord binary yet either.
+const ORD_PATH_SETTING: &str = "ord_path";
 
 fn configured_bitcoind_path(store: &tauri::State<Arc<Mutex<Store>>>) -> Result<String, TypedError> {
     let path = store
@@ -112,6 +115,18 @@ fn configured_bitcoind_path(store: &tauri::State<Arc<Mutex<Store>>>) -> Result<S
     path.ok_or_else(|| TypedError {
         code: Some(AppErrorCode::BinaryNotVerified),
         message: "No verified Bitcoin Core binary is configured yet.".to_string(),
+    })
+}
+
+fn configured_ord_path(store: &tauri::State<Arc<Mutex<Store>>>) -> Result<String, TypedError> {
+    let path = store
+        .lock()
+        .unwrap()
+        .get_setting(ORD_PATH_SETTING)
+        .map_err(|e| TypedError::from(e.to_string()))?;
+    path.ok_or_else(|| TypedError {
+        code: Some(AppErrorCode::BinaryNotVerified),
+        message: "No verified ord binary is configured yet.".to_string(),
     })
 }
 
@@ -185,6 +200,79 @@ async fn node_status(
 #[tauri::command]
 fn is_node_running(chain: Chain, node_manager: tauri::State<'_, NodeManager>) -> bool {
     node_manager.is_running(chain)
+}
+
+#[tauri::command]
+async fn start_ord(
+    chain: Chain,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<(), TypedError> {
+    let binary_path = configured_ord_path(&store)?;
+    let environment = Environment::new_default(chain, data_root());
+    node_manager
+        .start_ord(
+            chain,
+            std::path::Path::new(&binary_path),
+            executor.inner().clone(),
+            environment,
+        )
+        .await
+        .map_err(TypedError::from)
+}
+
+#[tauri::command]
+async fn stop_ord(
+    chain: Chain,
+    node_manager: tauri::State<'_, NodeManager>,
+) -> Result<(), TypedError> {
+    node_manager
+        .stop_ord(chain, std::time::Duration::from_secs(30))
+        .await
+        .map_err(TypedError::from)
+}
+
+#[tauri::command]
+async fn restart_ord(
+    chain: Chain,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<(), TypedError> {
+    node_manager
+        .stop_ord(chain, std::time::Duration::from_secs(30))
+        .await
+        .map_err(TypedError::from)?;
+    let binary_path = configured_ord_path(&store)?;
+    let environment = Environment::new_default(chain, data_root());
+    node_manager
+        .start_ord(
+            chain,
+            std::path::Path::new(&binary_path),
+            executor.inner().clone(),
+            environment,
+        )
+        .await
+        .map_err(TypedError::from)
+}
+
+#[tauri::command]
+async fn ord_status(
+    chain: Chain,
+    node_manager: tauri::State<'_, NodeManager>,
+) -> Result<node_manager::OrdStatus, TypedError> {
+    node_manager
+        .ord_status(chain)
+        .await
+        .map_err(TypedError::from)
+}
+
+/// Same "cheaper than status, no error on not-running" reasoning as
+/// `is_node_running`, for ord.
+#[tauri::command]
+fn is_ord_running(chain: Chain, node_manager: tauri::State<'_, NodeManager>) -> bool {
+    node_manager.is_ord_running(chain)
 }
 
 /// Default tail/page window: generous enough to show a useful amount of
@@ -316,6 +404,11 @@ pub fn run() {
             restart_node,
             node_status,
             is_node_running,
+            start_ord,
+            stop_ord,
+            restart_ord,
+            ord_status,
+            is_ord_running,
             tail_debug_log,
             page_debug_log_before,
             search_debug_log,
@@ -343,6 +436,7 @@ mod tests {
         AppErrorCode::export_all(&config).unwrap();
         TypedError::export_all(&config).unwrap();
         node_manager::NodeStatus::export_all(&config).unwrap();
+        node_manager::OrdStatus::export_all(&config).unwrap();
         nk_core::log_tail::LogWindow::export_all(&config).unwrap();
         nk_store::CommandHistoryEntry::export_all(&config).unwrap();
         nk_exec::ExecEvent::export_all(&config).unwrap();

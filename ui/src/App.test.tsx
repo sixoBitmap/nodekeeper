@@ -51,6 +51,8 @@ function mockInvoke(disclaimerAcknowledged: boolean) {
         return Promise.resolve(SYSTEM_CHECK);
       case "list_command_history":
         return Promise.resolve([]);
+      case "is_ord_running":
+        return Promise.resolve(false);
       default:
         return Promise.reject(new Error(`unexpected invoke: ${cmd}`));
     }

@@ -730,23 +730,55 @@ that comparison itself).
       below (needed it to actually stand a real ord server up).
 
 Frontend — Dashboard: ord section (item 2, previously omitted with a
-note in Phase 3 since nothing backed it yet)
-- [ ] Index height vs node height, indexing/caught-up status, which
-      index options are enabled — extends `DashboardScreen`
-- [ ] Start/stop wired to `OrdProcess` the same way bitcoind's controls
-      already are
+note in Phase 3 since nothing backed it yet) — **done**
+- [x] Index height vs node height, indexing/caught-up status, which
+      index options are enabled — `OrdSection` + `useOrdStatus`,
+      extends `DashboardScreen`. Status badge uses item 2's exact
+      wording ("Indexing", distinct from bitcoind's "Syncing").
+      Index-options list reads ord's own `/status` report, not just
+      what Nodekeeper configured. Verified live in the browser (dev
+      preview, mocked IPC) for both an all-options-off and an
+      all-options-on environment.
+- [x] Start/stop/restart wired to `OrdProcess` via `NodeManager`
+      (`start_ord`/`stop_ord`/`restart_ord`/`ord_status`/
+      `is_ord_running`, mirroring bitcoind's own Tauri commands
+      exactly) — real end-to-end test
+      (`starts_ord_reports_status_and_stops_it`), ran live against a
+      real bitcoind + ord on this Windows machine, passed.
 
 Acceptance criteria (from docs/SPEC.md Phase 4 "Done when"):
-- [ ] [CI] ord verifies; an unpinned version is refused
-- [ ] [CI] ord indexes regtest with all index options and stays caught up
+- [x] [CI] ord verifies; an unpinned version is refused — `nk-verify`,
+      confirmed in CI before this session's later GitHub Actions
+      billing interruption (see below)
+- [x] [CI] ord indexes regtest with all index options and stays caught
+      up — `wait_until_caught_up` + `ord_status`, both with real
+      integration tests, **run live on this Windows machine** (not
+      yet re-confirmed by a fresh CI run — see note below)
 - [ ] [CI] ord stops gracefully on Windows, macOS, and Linux and
-      restarts without reindexing
+      restarts without reindexing — graceful stop itself is confirmed
+      live on Windows and (via CI, before the billing interruption) on
+      Linux/macOS; "restarts without reindexing" specifically has no
+      test yet (redb persists to disk so this should hold, but it's
+      an assumption, not something asserted)
 - [ ] [MANUAL] ord server is not reachable from another machine on the LAN
 - [ ] [MANUAL] I have checked every pinned ord SHA-256 hash against the
       official ord release from a separate machine or browser
 - [ ] VERIFY results for Foundation F recorded in DECISIONS.md (mostly
       done in Phase 0's spike; revisit once index-option settings are
       actually wired to real feature gating, not just spike commands)
+
+**Note (2026-09-24):** GitHub Actions CI on this repo is currently
+blocked — a run triggered mid-Phase-4 failed immediately on all 3 OSes
+with "recent account payments have failed or your spending limit needs
+to be increased," not a code issue. The last CI run that actually
+completed (`nk-ord`'s `/status` client, and the `OrdProcess` commit's
+Linux/macOS jobs) was green. Everything built afterward
+(`wait_until_caught_up`, the `NodeManager`/Dashboard ord wiring) has
+only been verified by running the real test suite locally on Windows
+(`cargo test --workspace` with `NK_TEST_BITCOIND`/`NK_TEST_ORD` set to
+real, freshly-verified binaries) — genuinely real verification, just
+not yet cross-platform-confirmed by CI. Re-run CI once billing is
+resolved to close out the remaining `[CI]` acceptance criteria above.
 
 ## Phase 5 — Wallet
 

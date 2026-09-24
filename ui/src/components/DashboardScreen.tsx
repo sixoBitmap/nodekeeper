@@ -6,6 +6,7 @@ import { StatusBadge, type StatusVariant } from "@/components/StatusBadge";
 import { DiskMonitor } from "@/components/DiskMonitor";
 import { LogViewer } from "@/components/LogViewer";
 import { ErrorPanel } from "@/components/ErrorPanel";
+import { OrdSection } from "@/components/OrdSection";
 import { useDashboardStatus } from "@/hooks/useDashboardStatus";
 import { friendlyError } from "@/lib/error-messages";
 import { formatBytes, formatUptime } from "@/lib/format";
@@ -15,10 +16,6 @@ import { formatBytes, formatUptime } from "@/lib/format";
  * aren't fund-moving actions, so they don't go through `ConfirmDialog`'s
  * mainnet extra step (item 3/4/10 scope that to actions that move
  * funds) — plain buttons are enough here.
- *
- * The ord section from the spec (index height vs node height, indexing
- * status) is intentionally absent: ord integration is Phase 4, nothing
- * backs it yet.
  */
 export function DashboardScreen({ environment }: { environment: Environment }) {
   const { t } = useTranslation();
@@ -90,6 +87,8 @@ export function DashboardScreen({ environment }: { environment: Environment }) {
       ) : (
         running === false && <p className="text-sm text-muted-foreground">{t("dashboard.notRunning")}</p>
       )}
+
+      <OrdSection chain={environment.chain} />
 
       <LogViewer chain={environment.chain} />
     </div>

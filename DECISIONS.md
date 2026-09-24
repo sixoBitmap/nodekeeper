@@ -1232,6 +1232,64 @@ the "[CI] ord indexes regtest with all index options and stays caught
 up" acceptance criterion for Windows; Linux/macOS confirmation lands
 via the same CI run as the rest of this session's `nk-proc` work.
 
+## Phase 4 — Dashboard: ord section, wired to a real OrdProcess (2026-09-24)
+
+Extended `NodeManager` (`src-tauri/src/node_manager.rs`) to track ord
+processes alongside bitcoind, per chain, in a second map
+(`running_ord`) rather than folding ord into the existing one --
+docs/SPEC.md item 2 treats them as independently startable/stoppable
+("Start / stop / restart per service through the process manager"),
+not a bundled unit. New methods: `start_ord` (refuses if bitcoind for
+that chain isn't running yet -- ord always connects to Nodekeeper's own
+bitcoind, never a default one), `stop_ord`, `ord_status`,
+`is_ord_running`. `OrdStatus` composes ord's `/status` with bitcoind's
+`getblockchaininfo` in the *same* call (not read from two separately-
+polled, potentially-stale results) so `caught_up` never compares
+against a stale node height.
+
+Renamed `NodeManagerError::AlreadyRunning`/`NotRunning` to
+`BitcoindAlreadyRunning`/`BitcoindNotRunning` now that ord has its own
+`OrdAlreadyRunning`/`OrdNotRunning` variants -- avoids "is already
+running" being ambiguous about which service.
+
+New Tauri commands mirroring the existing bitcoind ones exactly:
+`start_ord`/`stop_ord`/`restart_ord`/`ord_status`/`is_ord_running`,
+reading a binary path from a new `ord_path` setting (same scoping note
+as `bitcoind_path`: no setup-wizard download/verify flow writes it yet,
+so this is manually configured for now).
+
+Frontend: a new `useOrdStatus` hook (mirrors `useDashboardStatus`
+exactly, deliberately separate rather than parameterized, since ord and
+bitcoind are independent services with independent start/stop/restart)
+and `OrdSection` component, rendered inside `DashboardScreen` below the
+existing bitcoind section. Shows index height vs node height, a status
+badge (Stopped/Starting/**Indexing**/Ready -- "Indexing" is
+docs/SPEC.md item 2's exact wording, distinct from bitcoind's
+"Syncing"), and which index options are actually enabled (reads
+`/status`'s own `*_index` booleans via `OrdStatus`, not just what
+Nodekeeper configured).
+
+Found and fixed the *same* port-reservation-race bug as `nk-testkit`'s
+`RegtestFixture` (see the "nk-proc: OrdProcess" entry above) in this
+layer's own new integration test
+(`starts_ord_reports_status_and_stops_it`): `ord_port` was picked once
+at test setup, alongside `rpc_port`/`p2p_port`, then not used until
+after bitcoind's own startup -- reproduced as a real `PortInUse { port
+}` failure. Fixed the same way: pick `ord_port` immediately before the
+`start_ord` call that actually uses it.
+
+Verified live in the browser (`npm run dev`, the dev-Tauri-mock IPC
+layer extended with `is_ord_running`/`start_ord`/`stop_ord`/
+`restart_ord`/`ord_status`): started both mock services on Mainnet
+(all index options off) and Regtest (all on), watched the ord badge
+move Indexing -> Ready as its mocked height caught up, and confirmed
+the index-options list renders correctly for both ("None enabled" vs.
+"Sats, Runes, Addresses"). Real backend coverage is the
+`starts_ord_reports_status_and_stops_it` test above (ran live against
+real bitcoind + ord on this Windows machine, passed) -- `just check`
+(fmt, clippy, full `cargo test --workspace`, frontend typecheck/lint/
+vitest) all green.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
