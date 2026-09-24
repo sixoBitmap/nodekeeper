@@ -1537,6 +1537,81 @@ to check these against the real Tauri app (real mainnet-shaped
 ConfirmDialog copy review, and the 15-minute idle-timeout expiry, which
 isn't practical to wait out in an automated or live-browser check).
 
+## Phase 5 — VERIFY: inscription content serving and rune balance shape (2026-09-24)
+
+Before building the inscriptions gallery (Foundation D) and rune-balance
+display, stood up a separate scratch regtest bitcoind + ord pair (not
+`nk-testkit`, since this only needed manual CLI/HTTP probing, not an
+automated test) to check ord's real output shapes rather than assume
+them from its docs.
+
+**`ord wallet inscriptions`** (after a real `wallet inscribe --file
+test.html`, confirmed on-chain):
+```json
+[
+  {
+    "inscription": "<inscription id>",
+    "location": "<txid>:<vout>:<offset>",
+    "explorer": "http://localhost/inscription/<id>",
+    "postage": 10000
+  }
+]
+```
+The `explorer` field is a bare `http://localhost/...` URL regardless of
+the real `--server-url` used -- not useful, ignored. `inscription` (not
+`id`) is the field name here, unlike the single-inscription detail
+endpoint (`/r/inscription/<id>`) which uses `id` -- confirmed both are
+real, distinct field names, not a typo.
+
+**Content-serving endpoints** (`GET /content/<id>` vs `GET
+/preview/<id>`), checked against both an HTML and a plain-text
+inscription:
+- `/content/<id>` returns the raw inscription bytes with the
+  inscription's actual `content-type`, `access-control-allow-origin: *`
+  (CORS-open), and ord's own CSP header allowing `'unsafe-inline'
+  'unsafe-eval'` -- i.e. an HTML/SVG inscription's embedded script runs
+  freely if this is what gets iframed directly.
+- `/preview/<id>` always returns `text/html` -- for non-HTML content
+  (checked with plain text) it's ord's own wrapper page (`<pre>` +
+  `/static/preview-text.js`) that fetches `/content/<id>` client-side;
+  for HTML content it serves the same bytes directly (content is already
+  a full HTML document). Crucially, `/preview/<id>` sends a *tighter*
+  `content-security-policy: default-src 'self'` -- scoped to ord's own
+  origin, not the permissive `unsafe-inline`/`unsafe-eval` one `/content`
+  sends. This is the endpoint ord itself designed for cross-embedding
+  (matches how ord's own explorer embeds inscriptions), so it's the one
+  the sandboxed gallery iframe's `src` uses -- never `/content`.
+- The `sandbox="allow-scripts"` (no `allow-same-origin`) iframe this
+  requires still works even though `/preview`'s own JS fetches
+  `/content` same-origin-to-*ord*: the sandboxed iframe's origin is
+  opaque/null regardless, but `/content`'s wildcard CORS header permits
+  the null-origin fetch to succeed anyway -- this is exactly the
+  cross-origin-embedding case ord's CORS header exists for.
+
+**Rune balance** (`ord wallet balance`), checked with `--index-runes`
+off vs on against the same funded wallet:
+- Index off: `{"cardinal": ..., "ordinal": ..., "total": ...}` -- no
+  `runes`/`runic` keys at all (not present-but-empty; genuinely absent).
+- Index on: gains `"runes": {}` (a name -> balance map, empty since this
+  wallet owns none) and `"runic": 0` (sats held in runic outputs,
+  distinct from `ordinal`). Confirms Foundation F's gating is correct at
+  the JSON level, not just the UI level: presence of the fields tracks
+  the *running server's* actual index options, not just what Nodekeeper
+  thinks it configured.
+- **Gap, not resolved**: the non-empty `runes` map's per-entry value
+  shape was not confirmed -- etching a real rune on the scratch regtest
+  (`wallet batch` with a YAML etching + a `turbo` field ord's schema
+  requires but doesn't document in `--help`) got as far as broadcasting
+  a commit transaction before the command hung past a 2-minute budget
+  and was killed; not worth further scratch-environment time for a
+  rendering-precision detail. **Decision**: `wallet_balance`'s rune
+  field is parsed and forwarded as an opaque `serde_json::Value` map
+  rather than a strongly-typed `{amount, symbol, divisibility}` struct,
+  and the frontend renders each entry defensively (name plus a
+  best-effort stringified value) rather than a firmly-formatted amount.
+  Revisit with a real typed shape once Phase 6 or later work actually
+  etches/owns a rune to check against.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

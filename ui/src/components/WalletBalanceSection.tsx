@@ -49,6 +49,28 @@ export function WalletBalanceSection({ chain }: { chain: Chain }) {
         </div>
         <code className="break-all rounded bg-muted px-2 py-1 text-xs">{address}</code>
       </div>
+
+      {/* docs/SPEC.md item 3: rune balances only shown when the running
+          ord server's runes index is enabled (Foundation F) -- `null`
+          means the index is off, not that the wallet owns none. */}
+      {balance.runes !== null && (
+        <div className="space-y-1 border-t border-border pt-3 sm:col-span-2">
+          <p className="text-sm text-muted-foreground">{t("wallet.runes.title")}</p>
+          {balance.runes.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{t("wallet.runes.none")}</p>
+          ) : (
+            <ul className="space-y-1 text-sm">
+              {balance.runes.map((rune) => (
+                <li key={rune.name} className="flex justify-between gap-4">
+                  <span>{rune.name}</span>
+                  <code className="text-xs text-muted-foreground">{rune.raw}</code>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs text-muted-foreground">{t("wallet.runes.viewOnlyNotice")}</p>
+        </div>
+      )}
     </div>
   );
 }

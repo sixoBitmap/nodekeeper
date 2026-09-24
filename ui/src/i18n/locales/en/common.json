@@ -154,6 +154,17 @@
     "inscribedBalance": "Inscribed",
     "totalBalance": "Total",
     "receiveAddress": "Receive address",
+    "runes": {
+      "title": "Runes",
+      "none": "No runes yet.",
+      "viewOnlyNotice": "Rune transfers are not supported in Nodekeeper yet -- view-only."
+    },
+    "gallery": {
+      "title": "Inscriptions",
+      "loading": "Loading inscriptions…",
+      "none": "No inscriptions yet.",
+      "itemLabel": "Inscription {{id}}"
+    },
     "send": {
       "title": "Send",
       "address": "Recipient address",

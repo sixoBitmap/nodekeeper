@@ -855,13 +855,22 @@ Foundation D (webview security model, CSP)
       `cargo build -p nodekeeper` confirms it's valid config; real
       enforcement isn't testable until the iframe component below
       exists to load something into.
-- [ ] Sandboxed inscription-preview component: `<iframe sandbox=
-      "allow-scripts">` (no `allow-same-origin`), `src` from the
-      environment's own ord server -- built once there's real
-      inscription content to render (gallery, below), not in the
-      abstract.
+- [x] Sandboxed inscription-preview component: `InscriptionGallery`'s
+      `<iframe sandbox="allow-scripts">` (no `allow-same-origin`, and
+      also no `allow-forms`/`allow-popups`/top-navigation -- omitted
+      entirely, not just left off by accident), `src` built from the
+      environment's own `ord_port` pointed at `/preview/<id>` (not
+      `/content/<id>` -- DECISIONS.md Phase 5 VERIFY explains why).
 - [ ] [CI] acceptance criterion: a malicious test HTML/SVG inscription
-      cannot call Tauri IPC or read app data.
+      cannot call Tauri IPC or read app data. **Not yet verified against
+      the real thing**: the sandbox attributes are in place and
+      reasoned through in DECISIONS.md (opaque iframe origin, no Tauri
+      IPC surface reachable from inside an iframe regardless, ord's own
+      CORS/CSP headers), but that's code-level reasoning, not a live
+      test -- doing so needs the real Tauri webview (the browser
+      dev-preview has no real Tauri IPC to try calling at all, so it
+      can't exercise this). Tracked as part of the Phase 5 security
+      self-review below, not skipped.
 
 `SensitiveSeedView` (frontend) + mnemonic display Tauri command
 - [x] `create_wallet`/`restore_wallet` Tauri commands (`src-tauri/src/
@@ -943,11 +952,45 @@ Wallet screen (frontend + backend orchestration)
       for the restored chain. "Multiple named wallets" not done yet --
       every wallet command hardcodes `DEFAULT_WALLET_NAME = "ord"`
       for now, tracked as a separate follow-up.
-- [ ] Inscriptions gallery (static previews, Foundation D sandboxing
-      above), rune balances gated on `index_runes` being enabled
-      (Foundation F) -- and note the Phase 0 finding that rune listing
-      fails *soft* (empty, not an error) without it, so gate
-      proactively rather than trusting ord's own error.
+- [x] Inscriptions gallery + rune balances. VERIFY'd live first
+      (DECISIONS.md) against a real scratch regtest+ord with an actual
+      inscribed HTML file: `ord wallet inscriptions`'s real field names
+      (`inscription`/`location`/`postage`, not `id`), and that
+      `/preview/<id>` (not `/content/<id>`) is ord's own
+      cross-embedding-safe endpoint (tighter CSP, CORS-open, wraps
+      every content type uniformly) -- confirming the Foundation D
+      sandboxed-iframe component finally has a real target. New
+      `wallet_inscriptions` Tauri command (`WalletInscriptionEntry {id,
+      postage}`) backs `InscriptionGallery`: a grid of `<iframe
+      sandbox="allow-scripts">` (no `allow-same-origin`, no
+      `allow-forms`/`allow-popups`/top-navigation), `src` built from the
+      environment's own `ord_port` -- already scoped by the existing
+      CSP `frame-src` (Foundation D, done earlier this phase). Rune
+      balances: extended `WalletBalance` with `runes: Option<Vec<{name,
+      raw}>>` -- VERIFY'd live that ord's `wallet balance` JSON gains
+      `"runes"`/`"runic"` keys only when the *running* server's
+      index-runes is actually on (absent, not empty/zero, otherwise),
+      so this checks the real response rather than trusting Nodekeeper's
+      own `Environment.index_options` record (same "verify the real
+      state, not just the config" reasoning as `OrdStatus`'s
+      index-option booleans, Phase 4). Each rune's value is forwarded as
+      opaque JSON text rather than a typed amount/symbol struct --
+      etching a real rune on the scratch regtest to check the non-empty
+      shape hit a 2-minute wall (a stuck `wallet batch` after
+      broadcasting its commit tx) and wasn't worth further time for a
+      rendering-precision detail; documented as an open gap in
+      DECISIONS.md. Per docs/SPEC.md item 3, "Runes are VIEW-ONLY": the
+      balance section always shows an explicit "not supported... yet"
+      notice alongside any rune balance, and no send/mint/etch UI exists
+      anywhere. Verified live in the browser (dev IPC mock extended with
+      two fake inscription ids and a fake rune entry): the gallery grid
+      renders with real ids (the iframes themselves can't load real
+      content in the mocked browser preview -- no real ord server behind
+      it there, same limitation as every other IPC-only mock); Regtest
+      (index-runes on by default) shows the rune balance + view-only
+      notice; Mainnet (index-runes off) shows no Runes section at all,
+      not an empty one -- confirms the `null`-vs-`[]` distinction
+      actually reaches the UI correctly.
 - [x] Send: `WalletSendForm` (address, amount, fee rate) ->
       `wallet_send_dry_run` preview (fee shown, or the friendly
       wrong-network-address error with technical details expandable)

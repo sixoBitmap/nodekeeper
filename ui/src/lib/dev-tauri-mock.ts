@@ -103,11 +103,25 @@ function mockAddressValidation(
 }
 
 function mockWallet(chain: Chain): { address: string; balance: WalletBalance } {
+  // Demonstrates Foundation F gating for both directions: regtest's
+  // default environment enables index-runes (ALL_INDEX_OPTIONS above),
+  // so it gets a fake nonempty `runes` map; every other chain gets
+  // `null` (index disabled -- absent, not empty, matching the real ord
+  // behavior confirmed in DECISIONS.md Phase 5 VERIFY).
+  const runes =
+    chain === "regtest"
+      ? [{ name: "MOCKRUNE•EXAMPLE", raw: '{"amount":"1000","symbol":"$"}' }]
+      : null;
   return {
     address: `bcrt1p${chain}mockaddress0000000000000000000000000000000000000000`,
-    balance: { cardinal: 4_998_990_000, ordinal: 10_000, total: 4_999_000_000 },
+    balance: { cardinal: 4_998_990_000, ordinal: 10_000, total: 4_999_000_000, runes },
   };
 }
+
+const MOCK_INSCRIPTIONS = [
+  { id: "0000000000000000000000000000000000000000000000000000000000000000i0", postage: 10_000 },
+  { id: "1111111111111111111111111111111111111111111111111111111111111111i0", postage: 546 },
+];
 
 const MOCK_LOG_LINES = [
   "2026-09-23T12:00:00Z Bitcoin Core version v31.1",
@@ -250,6 +264,17 @@ export function installDevTauriMockIfNeeded() {
           return Promise.reject({ code: null, message: `${chain} has no wallet yet` });
         }
         return wallet.address;
+      }
+      case "wallet_inscriptions": {
+        const { chain } = args as { chain: Chain };
+        if (!wallets.has(chain)) {
+          return Promise.reject({ code: null, message: `${chain} has no wallet yet` });
+        }
+        // Real ids so the grid layout/ids render; the iframes themselves
+        // can't load real content in this browser-only preview -- there's
+        // no real ord server behind it, same limitation as every other
+        // IPC-only mock here.
+        return MOCK_INSCRIPTIONS;
       }
       case "wallet_fee_estimate": {
         const { chain } = args as { chain: Chain };

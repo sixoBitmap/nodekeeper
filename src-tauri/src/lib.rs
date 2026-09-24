@@ -300,6 +300,18 @@ async fn wallet_exists(
         .map_err(TypedError::from)
 }
 
+/// docs/SPEC.md item 3: "rune balances only when the runes index is
+/// enabled" (Foundation F). Forwarded as opaque JSON text rather than a
+/// typed amount/symbol/divisibility struct -- DECISIONS.md Phase 5
+/// VERIFY found `"runes": {}"` (name -> per-rune object) appears only
+/// when the running ord server's runes index is on, but couldn't
+/// confirm the non-empty per-rune value shape live.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct WalletRuneBalance {
+    pub name: String,
+    pub raw: String,
+}
+
 /// docs/SPEC.md item 3: "Balance: cardinal vs inscribed sats."
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct WalletBalance {
@@ -309,6 +321,12 @@ pub struct WalletBalance {
     pub ordinal: u64,
     #[ts(type = "number")]
     pub total: u64,
+    /// `None` when ord's runes index is disabled for this environment
+    /// -- absent, not empty, in that case (DECISIONS.md Phase 5
+    /// VERIFY: the field is genuinely missing from ord's JSON, not
+    /// zero). `Some(vec![])` means the index is on but the wallet owns
+    /// no runes yet.
+    pub runes: Option<Vec<WalletRuneBalance>>,
 }
 
 #[tauri::command]
@@ -329,11 +347,76 @@ async fn wallet_balance(
             ))
         })
     };
+    let runes = response
+        .get("runes")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .map(|(name, value)| WalletRuneBalance {
+                    name: name.clone(),
+                    raw: value.to_string(),
+                })
+                .collect()
+        });
     Ok(WalletBalance {
         cardinal: field("cardinal")?,
         ordinal: field("ordinal")?,
         total: field("total")?,
+        runes,
     })
+}
+
+/// docs/SPEC.md item 3: "Inscriptions gallery: static previews... loaded
+/// from the ord server" -- just enough per entry (id + postage) for the
+/// gallery to render a sandboxed `<iframe src="<ord-origin>/preview/
+/// <id>">` per Foundation D; DECISIONS.md Phase 5 VERIFY confirmed
+/// `/preview/<id>` (not `/content/<id>`) is the right embed target.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct WalletInscriptionEntry {
+    pub id: String,
+    #[ts(type = "number")]
+    pub postage: u64,
+}
+
+#[tauri::command]
+async fn wallet_inscriptions(
+    chain: Chain,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<Vec<WalletInscriptionEntry>, TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
+    let response = nk_ord::wallet::wallet_inscriptions(&executor, &ctx.target())
+        .await
+        .map_err(TypedError::from)?;
+    let entries = response.as_array().ok_or_else(|| {
+        TypedError::from("ord did not return a JSON array of inscriptions".to_string())
+    })?;
+    entries
+        .iter()
+        .map(|entry| {
+            let id = entry
+                .get("inscription")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    TypedError::from(
+                        "ord inscription entry is missing an \"inscription\" id".to_string(),
+                    )
+                })?;
+            let postage = entry
+                .get("postage")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| {
+                    TypedError::from(
+                        "ord inscription entry is missing a numeric \"postage\"".to_string(),
+                    )
+                })?;
+            Ok(WalletInscriptionEntry {
+                id: id.to_string(),
+                postage,
+            })
+        })
+        .collect()
 }
 
 /// docs/SPEC.md item 3: "Receive: address with a QR code" -- just the
@@ -776,6 +859,7 @@ pub fn run() {
             wallet_exists,
             wallet_balance,
             wallet_receive_address,
+            wallet_inscriptions,
             wallet_send_dry_run,
             wallet_send,
             wallet_fee_estimate,
@@ -809,6 +893,7 @@ mod tests {
         node_manager::OrdStatus::export_all(&config).unwrap();
         CreateWalletResult::export_all(&config).unwrap();
         WalletBalance::export_all(&config).unwrap();
+        WalletInscriptionEntry::export_all(&config).unwrap();
         WalletSendResult::export_all(&config).unwrap();
         nk_core::log_tail::LogWindow::export_all(&config).unwrap();
         nk_store::CommandHistoryEntry::export_all(&config).unwrap();
