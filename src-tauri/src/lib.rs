@@ -419,6 +419,98 @@ async fn wallet_inscriptions(
         .collect()
 }
 
+/// How many of the wallet's most recent transactions to show -- same
+/// "last N" cap philosophy as `command_history`'s per-environment cap,
+/// not configurable yet.
+const TRANSACTION_HISTORY_LIMIT: u32 = 50;
+
+/// docs/SPEC.md item 3: "Transaction history." `ord wallet
+/// transactions` only reports `{transaction, confirmations}` per entry
+/// (DECISIONS.md Phase 5 VERIFY) -- no amount, direction, or time -- so
+/// this joins each txid against bitcoind's own wallet-scoped
+/// `gettransaction` for the fields a history list actually needs.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct WalletTransactionEntry {
+    pub txid: String,
+    /// Net effect on the wallet's balance: negative for a send,
+    /// positive for a receive (bitcoind's `gettransaction.amount`,
+    /// already netted across every output -- no manual summing of
+    /// `details[]` needed).
+    #[ts(type = "number")]
+    pub amount_sats: i64,
+    /// Bitcoin Core's `gettransaction.confirmations` can go negative
+    /// for a conflicted/abandoned transaction, hence `i64` not `u64`.
+    #[ts(type = "number")]
+    pub confirmations: i64,
+    #[ts(type = "number")]
+    pub time: u64,
+    pub generated: bool,
+}
+
+#[tauri::command]
+async fn wallet_transaction_history(
+    chain: Chain,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<Vec<WalletTransactionEntry>, TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
+    let response = nk_ord::wallet::wallet_transactions(
+        &executor,
+        &ctx.target(),
+        Some(TRANSACTION_HISTORY_LIMIT),
+    )
+    .await
+    .map_err(TypedError::from)?;
+    let entries = response.as_array().ok_or_else(|| {
+        TypedError::from("ord did not return a JSON array of transactions".to_string())
+    })?;
+
+    let mut history = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let txid = entry
+            .get("transaction")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                TypedError::from(
+                    "ord transaction entry is missing a \"transaction\" id".to_string(),
+                )
+            })?;
+        let detail = ctx
+            .rpc
+            .wallet_get_transaction(DEFAULT_WALLET_NAME, txid)
+            .await
+            .map_err(|e| TypedError::from(e.to_string()))?;
+        let field_f64 = |key: &str| {
+            detail.get(key).and_then(|v| v.as_f64()).ok_or_else(|| {
+                TypedError::from(format!(
+                    "bitcoind did not return a numeric \"{key}\" transaction field"
+                ))
+            })
+        };
+        history.push(WalletTransactionEntry {
+            txid: txid.to_string(),
+            amount_sats: (field_f64("amount")? * 100_000_000.0).round() as i64,
+            confirmations: detail
+                .get("confirmations")
+                .and_then(|v| v.as_i64())
+                .ok_or_else(|| {
+                    TypedError::from(
+                        "bitcoind did not return a numeric \"confirmations\" field".to_string(),
+                    )
+                })?,
+            time: detail.get("time").and_then(|v| v.as_u64()).ok_or_else(|| {
+                TypedError::from("bitcoind did not return a numeric \"time\" field".to_string())
+            })?,
+            generated: detail
+                .get("generated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
+        });
+    }
+    Ok(history)
+}
+
 /// docs/SPEC.md item 3: "Receive: address with a QR code" -- just the
 /// single next address; `nk_ord::wallet::wallet_receive` supports
 /// requesting several at once, not needed by this screen yet.
@@ -860,6 +952,7 @@ pub fn run() {
             wallet_balance,
             wallet_receive_address,
             wallet_inscriptions,
+            wallet_transaction_history,
             wallet_send_dry_run,
             wallet_send,
             wallet_fee_estimate,
@@ -894,6 +987,7 @@ mod tests {
         CreateWalletResult::export_all(&config).unwrap();
         WalletBalance::export_all(&config).unwrap();
         WalletInscriptionEntry::export_all(&config).unwrap();
+        WalletTransactionEntry::export_all(&config).unwrap();
         WalletSendResult::export_all(&config).unwrap();
         nk_core::log_tail::LogWindow::export_all(&config).unwrap();
         nk_store::CommandHistoryEntry::export_all(&config).unwrap();

@@ -165,6 +165,13 @@
       "none": "No inscriptions yet.",
       "itemLabel": "Inscription {{id}}"
     },
+    "history": {
+      "title": "Transaction history",
+      "loading": "Loading transaction history…",
+      "none": "No transactions yet.",
+      "mined": "Mined",
+      "pending": "Pending"
+    },
     "send": {
       "title": "Send",
       "address": "Recipient address",

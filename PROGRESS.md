@@ -1025,7 +1025,22 @@ Wallet screen (frontend + backend orchestration)
       + "remember" succeeds and returns to the balance view; a second
       send immediately afterward succeeds with **no** passphrase
       re-prompt, confirming the remembered-passphrase path end to end.
-- [ ] Transaction history.
+- [x] Transaction history. VERIFY'd live first (DECISIONS.md): `ord
+      wallet transactions` only returns `{transaction, confirmations}`
+      per entry -- too sparse on its own -- so the new
+      `wallet_transaction_history` Tauri command joins each txid
+      against bitcoind's own wallet-scoped `gettransaction` (its
+      top-level `amount` is already netted across every output, no
+      manual summing) for amount/time/confirmations/`generated`.
+      `TransactionHistorySection` lists them newest-first as ord
+      already orders them, green `+`-prefixed amounts for receives,
+      plain `-`-prefixed for sends, a "Mined"/"Pending" note per entry.
+      Capped at the 50 most recent (`TRANSACTION_HISTORY_LIMIT`, same
+      "last N" cap philosophy as `command_history`'s per-environment
+      cap) -- not paginated yet. Verified live in the browser (dev IPC
+      mock, three fake entries: a mined coinbase, a confirmed send, a
+      pending receive) -- all three render with the correct sign,
+      color, and label.
 
 Acceptance criteria (from docs/SPEC.md Phase 5 "Done when"):
 - [x] [CI] the fake-mnemonic and fake-passphrase search test passes --

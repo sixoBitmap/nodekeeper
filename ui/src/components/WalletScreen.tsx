@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorPanel } from "@/components/ErrorPanel";
 import { InscriptionGallery } from "@/components/InscriptionGallery";
 import { RestoreWalletForm } from "@/components/RestoreWalletForm";
+import { TransactionHistorySection } from "@/components/TransactionHistorySection";
 import { SensitiveSeedView } from "@/components/SensitiveSeedView";
 import { WalletBalanceSection } from "@/components/WalletBalanceSection";
 import { WalletSendForm } from "@/components/WalletSendForm";
@@ -16,9 +17,8 @@ import { friendlyError } from "@/lib/error-messages";
 
 /**
  * The visual ord wallet (docs/SPEC.md item 3), scoped to the current
- * environment. Create/restore, balance/receive, send, and the
- * inscriptions gallery are covered; transaction history is a separate,
- * later task (PROGRESS.md).
+ * environment: create/restore, balance/receive, send, the inscriptions
+ * gallery, and transaction history.
  */
 export function WalletScreen({ environment }: { environment: Environment }) {
   const { t } = useTranslation();
@@ -86,6 +86,7 @@ export function WalletScreen({ environment }: { environment: Environment }) {
         <div className="space-y-4">
           <WalletBalanceSection chain={chain} />
           <InscriptionGallery environment={environment} />
+          <TransactionHistorySection chain={chain} />
           {sending ? (
             <WalletSendForm
               environment={environment}

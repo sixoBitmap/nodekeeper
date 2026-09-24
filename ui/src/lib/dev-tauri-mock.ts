@@ -123,6 +123,31 @@ const MOCK_INSCRIPTIONS = [
   { id: "1111111111111111111111111111111111111111111111111111111111111111i0", postage: 546 },
 ];
 
+const nowSeconds = () => Math.floor(Date.now() / 1000);
+const MOCK_TRANSACTIONS = [
+  {
+    txid: "2222222222222222222222222222222222222222222222222222222222222222",
+    amount_sats: 5_000_000_000,
+    confirmations: 101,
+    time: nowSeconds() - 3600,
+    generated: true,
+  },
+  {
+    txid: "3333333333333333333333333333333333333333333333333333333333333333",
+    amount_sats: -500_000,
+    confirmations: 3,
+    time: nowSeconds() - 600,
+    generated: false,
+  },
+  {
+    txid: "4444444444444444444444444444444444444444444444444444444444444444",
+    amount_sats: 10_000,
+    confirmations: 0,
+    time: nowSeconds() - 30,
+    generated: false,
+  },
+];
+
 const MOCK_LOG_LINES = [
   "2026-09-23T12:00:00Z Bitcoin Core version v31.1",
   "2026-09-23T12:00:00Z Using the 'x86_shani(1way,2way)' SHA256 implementation",
@@ -275,6 +300,13 @@ export function installDevTauriMockIfNeeded() {
         // no real ord server behind it, same limitation as every other
         // IPC-only mock here.
         return MOCK_INSCRIPTIONS;
+      }
+      case "wallet_transaction_history": {
+        const { chain } = args as { chain: Chain };
+        if (!wallets.has(chain)) {
+          return Promise.reject({ code: null, message: `${chain} has no wallet yet` });
+        }
+        return MOCK_TRANSACTIONS;
       }
       case "wallet_fee_estimate": {
         const { chain } = args as { chain: Chain };

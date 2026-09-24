@@ -253,6 +253,30 @@ impl RpcClient {
         Ok(())
     }
 
+    /// docs/SPEC.md item 3's "Transaction history": `ord wallet
+    /// transactions` only returns `{transaction, confirmations}` per
+    /// entry (DECISIONS.md Phase 5 VERIFY) -- no amount, direction, or
+    /// time -- so the history screen joins each txid against bitcoind's
+    /// own wallet-scoped `gettransaction`, whose top-level `amount` is
+    /// already the net effect on the wallet's balance (positive for a
+    /// receive, negative for a send), no need to sum `details[]`
+    /// manually.
+    pub async fn wallet_get_transaction(
+        &self,
+        wallet: &str,
+        txid: &str,
+    ) -> Result<Value, RpcError> {
+        self.wallet_call(
+            wallet,
+            "gettransaction",
+            vec![json!(txid)],
+            "look up wallet transaction",
+            vec![],
+            false,
+        )
+        .await
+    }
+
     /// Encrypts a not-yet-encrypted wallet (docs/SPEC.md item 3: every
     /// MAINNET wallet must be encrypted). Same redaction reasoning as
     /// `wallet_passphrase`.

@@ -1612,6 +1612,40 @@ off vs on against the same funded wallet:
   Revisit with a real typed shape once Phase 6 or later work actually
   etches/owns a rune to check against.
 
+## Phase 5 — VERIFY: transaction history data source (2026-09-24)
+
+`ord wallet transactions` (same scratch regtest+ord as the gallery
+VERIFY above, restarted against its persisted data) returns only:
+```json
+[{"transaction": "<txid>", "confirmations": 0}]
+```
+No amount, direction, or timestamp -- too little for a useful history
+list on its own. Checked bitcoind's own wallet-scoped `gettransaction
+<txid>` against the same wallet (`-rpcwallet=<name>`) for what it adds:
+```json
+{
+  "amount": 0.00000000, "confirmations": 0, "generated": true,
+  "trusted": false, "txid": "...", "time": 1790275528,
+  "timereceived": 1790275528, "details": [ {"address": "...",
+  "category": "orphan", "amount": 50.0, "vout": 0, "abandoned": true} ],
+  "hex": "...", "lastprocessedblock": {...}
+}
+```
+Confirmed the top-level `amount` field is *already netted* across
+every output for the wallet (no need to sum `details[]` manually) --
+positive for a receive, negative for a send. **Decision**: the
+transaction-history screen joins `ord wallet transactions`'s txid list
+against `gettransaction` per txid for amount/time/confirmations/
+`generated`, rather than trying to get everything from one call. Also
+confirmed `confirmations` can be observed at 0 for old, previously-
+mined transactions after a force-killed (not gracefully stopped)
+regtest restart in this scratch environment -- an artifact of an
+unclean shutdown corrupting that particular scratch chainstate back to
+genesis height, not a real Nodekeeper concern: the real app only ever
+force-kills as `nk-proc`'s documented cleanup-only fallback, never as
+its primary stop path (Phase 2), and this was purely a throwaway manual
+VERIFY environment, not `nk-testkit`.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
