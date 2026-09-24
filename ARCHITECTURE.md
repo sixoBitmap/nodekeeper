@@ -88,13 +88,20 @@ rather than left `null`, since a strict default doesn't need inscription
 rendering to be worth having): `default-src 'self'` with `connect-src`/
 `img-src` scoped to exactly what Tauri's own IPC and asset protocol need,
 `style-src 'self' 'unsafe-inline'` (Radix/shadcn inject inline styles for
-popover/dialog positioning), and no `frame-src` at all — which means no
-iframes are allowed yet, the correct fail-closed state until Phase 4 wires
-up inscription rendering and adds each environment's `http://127.0.0.1:
-<ord-port>` explicitly. `capabilities/default.json` is already scoped to
-`"windows": ["main"]` (the scaffold default) — with exactly one window and
-no untrusted content source yet, this is sufficient for now; revisit
+popover/dialog positioning). `capabilities/default.json` is already scoped
+to `"windows": ["main"]` (the scaffold default) — with exactly one window
+and no untrusted content source yet, this is sufficient for now; revisit
 alongside the CSP once the ord-content webview/iframe exists.
+
+Phase 5: `frame-src` now lists the 4 fixed default ord ports
+(`http://127.0.0.1:8080` mainnet, `8081` regtest, `8082` signet, `8083`
+testnet4 — `Chain::default_ord_port`) explicitly, no wildcard — this is
+what makes iframes possible at all; the sandboxed
+`<iframe sandbox="allow-scripts">` component itself (no
+`allow-same-origin`) lands with the inscriptions gallery, once there's
+real inscription content to render and the "malicious test HTML/SVG
+inscription cannot call Tauri IPC or read app data" acceptance
+criterion has something real to test against.
 
 ## Secrets storage (`nk-secrets`)
 

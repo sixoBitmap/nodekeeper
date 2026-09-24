@@ -849,10 +849,12 @@ planning this phase) — **done**
       through and handle the error.
 
 Foundation D (webview security model, CSP)
-- [ ] `frame-src` CSP directive scoped to each default environment's
-      exact `http://127.0.0.1:<ord-port>` origin (the 4 fixed default
-      ports) -- currently absent entirely (Phase 1 baseline, no
-      iframes allowed yet).
+- [x] `frame-src` CSP directive scoped to the 4 fixed default
+      `http://127.0.0.1:<ord-port>` origins (8080/8081/8082/8083 --
+      `Chain::default_ord_port`), no wildcard (`tauri.conf.json`).
+      `cargo build -p nodekeeper` confirms it's valid config; real
+      enforcement isn't testable until the iframe component below
+      exists to load something into.
 - [ ] Sandboxed inscription-preview component: `<iframe sandbox=
       "allow-scripts">` (no `allow-same-origin`), `src` from the
       environment's own ord server -- built once there's real

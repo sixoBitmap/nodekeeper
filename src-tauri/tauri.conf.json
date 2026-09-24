@@ -24,7 +24,8 @@
         "img-src": "'self' asset: http://asset.localhost data:",
         "style-src": "'self' 'unsafe-inline'",
         "font-src": "'self'",
-        "script-src": "'self'"
+        "script-src": "'self'",
+        "frame-src": "http://127.0.0.1:8080 http://127.0.0.1:8081 http://127.0.0.1:8082 http://127.0.0.1:8083"
       }
     }
   },
