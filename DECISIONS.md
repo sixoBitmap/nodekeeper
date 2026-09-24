@@ -645,6 +645,67 @@ including the real regtest bitcoind spawn, passed. Pushed and confirmed
 green on all 3 OSes: run `35795672861`, with `cargo test` actually
 executing (not skipping) the real regtest integration test on every OS.
 
+## Phase 4 — VERIFY: ord's CLI surface and sync-status API (2026-09-24)
+
+Re-checked live against the cached ord 0.29.0 binary from Phase 0's
+spike (`spikes/ord/ord-0.29.0/ord.exe` — confirmed still `ord 0.29.0`
+via `--version`) rather than trusting Phase 0's notes alone, since this
+phase actually builds the process-manager code that depends on exact
+flag names:
+
+- **Chain selection**: `--chain <mainnet|regtest|signet|testnet|
+  testnet4>`, or the shorthand flags `--regtest`/`--signet`/`--testnet`/
+  `--testnet4` (no short form for testnet4). Note `testnet` and
+  `testnet4` are *separate* values — legacy testnet3 vs. testnet4 are
+  not aliases of each other in ord's CLI, so Nodekeeper must pass
+  `--testnet4` explicitly, never `--testnet`.
+- **Index options**: top-level flags `--index-sats`, `--index-
+  addresses`, `--index-runes` (matches Phase 0's mapping). Also
+  `--index-transactions`, not currently used by Nodekeeper.
+- **Paths**: `--data-dir <DIR>` (ord's index location — already
+  confirmed in Phase 1 to nest a chain subfolder under this even when
+  given explicitly), `--cookie-file <FILE>` and `--bitcoin-data-dir
+  <DIR>` for connecting to Nodekeeper's own bitcoind instead of ord's
+  default (`~/.bitcoin`), matching how Nodekeeper's bitcoind is never
+  in the default location.
+- **`ord server` subcommand**: `--address <ADDR>` (default `0.0.0.0`,
+  confirmed again — must be set to `127.0.0.1` explicitly, matches
+  Phase 0), `--http` + `--http-port <PORT>` (HTTP is *not* served by
+  default — only HTTPS is attempted otherwise, matching Phase 0's "both
+  required" finding), `--no-sync` (exists, not used by Nodekeeper —
+  always want ord indexing while its server runs), `--polling-interval`
+  (default 5s — how often ord checks bitcoind for new blocks).
+
+**Sync-status API**, verified against a real running regtest ord server
+(mined 110 blocks on a real regtest bitcoind, pointed a real ord server
+at it, queried the running server) — this is new ground Phase 0 didn't
+cover: `GET /status` with header `Accept: application/json` (without
+that header it serves the HTML explorer UI at the same path, confirmed
+by checking the response `Content-Type` — an easy mistake to make).
+Real response against the 110-block regtest chain:
+```json
+{
+  "address_index": true, "sat_index": true, "rune_index": false,
+  "inscription_index": true, "transaction_index": false,
+  "json_api": true, "chain": "regtest", "height": 110,
+  "inscriptions": 0, "runes": 0, "blessed_inscriptions": 0,
+  "cursed_inscriptions": 0, "lost_sats": 0,
+  "unrecoverably_reorged": false,
+  "started": "...", "uptime": {"secs": 10, "nanos": ...},
+  "initial_sync_time": {"secs": 0, "nanos": ...}
+}
+```
+`height` is ord's own indexed height, not compared against the node's
+height by ord itself — "is ord caught up" (docs/SPEC.md's wait-for-sync
+logic) means Nodekeeper polling `/status`'s `height` and comparing it
+against `getblockchaininfo`'s `blocks` (already available via nk-rpc)
+until they match. The `*_index` booleans directly reflect which
+`--index-*` flags were passed (confirmed: passed `--index-sats
+--index-addresses`, got `sat_index: true, address_index: true,
+rune_index: false` back) — a second, independent way to confirm an
+environment's actual running index configuration beyond just trusting
+what Nodekeeper itself passed as flags.
+
 ## Phase 4 — pinned ord 0.29.0 SHA-256 hashes (2026-09-24)
 
 Before pinning any values, re-verified rather than reusing Phase 0's
