@@ -13,4 +13,4 @@ mod process_check;
 
 pub use bitcoind::{detect_running_bitcoind, BitcoindError, BitcoindProcess};
 pub use lock::{LockError, SingleInstanceLock};
-pub use ord::{detect_running_ord, OrdProcess, OrdProcessError};
+pub use ord::{detect_running_ord, wait_until_caught_up, OrdProcess, OrdProcessError};

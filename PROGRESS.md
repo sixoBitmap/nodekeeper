@@ -696,15 +696,19 @@ that comparison itself).
       Linux/macOS coverage now runs via the same test in CI (added an
       ord fetch+cache CI step mirroring Bitcoin Core's); cross-platform
       confirmation lands once this commit's CI run completes.
-- [ ] Wait-for-sync: poll ord's `/status`, compare `height` against the
-      node's `getblockchaininfo.blocks` via nk-rpc, until caught up (or
-      a timeout) — **not yet built**. `start_and_wait_ready()` above
-      only waits for ord's HTTP server to respond at all (a short,
-      bounded startup check), not for the index to catch up with the
-      chain tip — deliberately kept separate since "wait until caught
-      up" can be open-ended on a real chain and shouldn't block
-      startup. Still needs its own function + real regtest integration
-      test via nk-testkit.
+- [x] Wait-for-sync: `wait_until_caught_up(ord, bitcoin_rpc, timeout)` —
+      a free function, not an `OrdProcess` method (only needs the two
+      already-running clients; the caller decides how long is
+      acceptable, since a bounded regtest wait and a real mainnet
+      catch-up are very different timescales). Polls both `/status` and
+      `getblockchaininfo` until `height`/`blocks` match or the timeout
+      elapses (`AppErrorCode::OrdNotSynced` on timeout — distinct from
+      `start_and_wait_ready`'s `StartupTimeout`, which only means "HTTP
+      server not answering yet"). Real regtest integration test in
+      `nk-testkit` (extends `ord_starts_indexes_regtest_and_stops_
+      gracefully`): mines 5 blocks, starts ord, waits for it to catch
+      up, asserts `/status`'s `height` equals 5 — **ran live on this
+      Windows machine, passed**.
 
 `nk-ord` (new crate) — ord's HTTP JSON API — **done**
 - [x] A client for `GET /status` (`Accept: application/json`) —

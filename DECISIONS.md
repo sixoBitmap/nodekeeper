@@ -1202,6 +1202,36 @@ version) so `NK_TEST_ORD` is set in CI the same way `NK_TEST_BITCOIND`
 already is -- without this the new ord integration test would only
 ever run locally.
 
+## Phase 4 — nk-proc: wait-for-sync (2026-09-24)
+
+Added `wait_until_caught_up(ord, bitcoin_rpc, timeout)`, completing
+`nk-proc`'s three-item task list: polls ord's `/status` and bitcoind's
+`getblockchaininfo` until ord's `height` reaches the node's `blocks`,
+or a timeout elapses. Deliberately a free function rather than an
+`OrdProcess` method -- it only needs the two already-running clients,
+and its caller decides how long "open-ended" should mean (a bounded
+regtest test and a real chain catching up over hours are very
+different timescales), unlike `start_and_wait_ready`'s short,
+always-bounded startup check.
+
+New `OrdProcessError::SyncTimeout` (distinct from `StartupTimeout`:
+ord's HTTP server was already responding, it just hadn't finished
+indexing) maps to `AppErrorCode::OrdNotSynced` rather than
+`IndexBehind` -- the spec lists both as separate codes with no further
+distinction in its own text; read `OrdNotSynced` as the general "ord
+hasn't caught up with the chain tip yet" case (this function's exact
+job) and reserved `IndexBehind` for a more specific future case (e.g.
+a particular `--index-*` feature the user is trying to use isn't
+enabled/caught up), since that reading best fits each name.
+
+Real regtest integration test (extends `ord_starts_indexes_regtest_
+and_stops_gracefully` in `nk-testkit`): mines 5 blocks, starts ord,
+calls `wait_until_caught_up`, then asserts `/status`'s `height` is
+exactly 5. **Ran live on this Windows machine, passed** -- this closes
+the "[CI] ord indexes regtest with all index options and stays caught
+up" acceptance criterion for Windows; Linux/macOS confirmation lands
+via the same CI run as the rest of this session's `nk-proc` work.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

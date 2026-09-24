@@ -366,6 +366,18 @@ mod tests {
             .expect("ord should start and become ready");
         let ord_pid = fixture.ord_process.as_ref().unwrap().pid;
 
+        // The actual Phase 4 [CI] acceptance criterion: ord indexes
+        // regtest and stays caught up. A fresh regtest chain is small
+        // enough that this should resolve in well under the timeout;
+        // if it doesn't, that's a real regression, not flakiness.
+        nk_proc::wait_until_caught_up(
+            fixture.ord.as_ref().unwrap(),
+            &fixture.rpc,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("ord should catch up with the node's height");
+
         let status = fixture
             .ord
             .as_ref()
@@ -377,6 +389,7 @@ mod tests {
             status.get("chain").and_then(|v| v.as_str()),
             Some("regtest")
         );
+        assert_eq!(status.get("height").and_then(|v| v.as_u64()), Some(5));
         // All three index options default on for regtest
         // (Chain::default_index_options) and were passed through to the
         // real spawned process -- confirming ord's own report of its

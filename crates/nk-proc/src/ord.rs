@@ -35,12 +35,18 @@ pub enum OrdProcessError {
     StopTimeout,
     #[error("ord did not become ready (HTTP /status responding) within the timeout")]
     StartupTimeout,
+    /// Distinct from `StartupTimeout`: ord's HTTP server was already
+    /// responding, it just hadn't finished indexing up to the node's
+    /// current height yet.
+    #[error("ord did not catch up with the node's block height within the timeout")]
+    SyncTimeout,
 }
 
 impl OrdProcessError {
     pub fn code(&self) -> Option<AppErrorCode> {
         match self {
             Self::PortInUse { .. } => Some(AppErrorCode::PortInUse),
+            Self::SyncTimeout => Some(AppErrorCode::OrdNotSynced),
             Self::AlreadyRunning { .. }
             | Self::Spawn(_)
             | Self::Io(_)
@@ -181,6 +187,54 @@ impl OrdProcess {
     /// `BitcoindProcess::kill_sync`.
     pub fn kill_sync(&mut self) {
         let _ = self.child.start_kill();
+    }
+}
+
+/// Polls ord's `/status` and the node's `getblockchaininfo` until ord's
+/// own indexed `height` reaches the node's `blocks` (docs/SPEC.md's
+/// wait-for-sync logic, DECISIONS.md Phase 4: ord never does this
+/// comparison itself). Deliberately a free function, not an
+/// `OrdProcess` method -- it only needs the two already-running
+/// clients, not the process handle, and its caller decides how long an
+/// "open-ended" wait is acceptable (a bounded regtest test vs. a real
+/// mainnet chain catching up are very different timescales, unlike
+/// `start_and_wait_ready`'s short, always-bounded startup check).
+///
+/// Any error from either poll is treated the same as "not caught up
+/// yet" and retried -- same convention `BitcoindProcess::
+/// start_and_wait_ready`'s RPC-ready loop and `OrdProcess::
+/// start_and_wait_ready` above both already use: a real, persistent
+/// failure surfaces as `SyncTimeout` once the deadline passes, rather
+/// than needing this loop to distinguish "transiently unavailable"
+/// from "genuinely broken".
+pub async fn wait_until_caught_up(
+    ord: &nk_ord::OrdClient,
+    bitcoin_rpc: &nk_rpc::RpcClient,
+    timeout: Duration,
+) -> Result<(), OrdProcessError> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let node_height = bitcoin_rpc
+            .get_blockchain_info(true)
+            .await
+            .ok()
+            .and_then(|v| v.get("blocks").and_then(|b| b.as_u64()));
+        let ord_height = ord
+            .status(true)
+            .await
+            .ok()
+            .and_then(|v| v.get("height").and_then(|h| h.as_u64()));
+
+        if let (Some(node_height), Some(ord_height)) = (node_height, ord_height) {
+            if ord_height >= node_height {
+                return Ok(());
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return Err(OrdProcessError::SyncTimeout);
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
 
