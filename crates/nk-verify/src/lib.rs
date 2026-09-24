@@ -7,5 +7,6 @@
 pub mod armor;
 pub mod bitcoin_core;
 pub mod download;
+pub mod ord;
 pub mod pinned_keys;
 pub mod verify;

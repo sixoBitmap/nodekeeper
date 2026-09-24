@@ -641,17 +641,21 @@ json`, returns ord's own indexed height — "caught up" means comparing
 that against `getblockchaininfo`'s `blocks` via nk-rpc, ord doesn't do
 that comparison itself).
 
-`nk-verify` (ord download + verification, pinned hashes)
-- [ ] Pin ord 0.29.0's per-platform SHA-256 hashes (from DECISIONS.md,
+`nk-verify` (ord download + verification, pinned hashes) — **done**
+- [x] Pin ord 0.29.0's per-platform SHA-256 hashes (from DECISIONS.md,
       independently computed, not just GitHub's reported digest);
       refuse any unpinned version rather than skipping verification
-- [ ] `download_and_verify_ord_asset`, mirroring `nk-verify::bitcoin_
+- [x] `download_and_verify_ord_asset`, mirroring `nk-verify::bitcoin_
       core`'s shape (no builder-key/PGP step — ord has no maintainer
       checksums file, so the pinned hash *is* the verification per
-      docs/SPEC.md item 1)
-- [ ] Tests: a real download of the live ord 0.29.0 release verifies
+      docs/SPEC.md item 1). Checks the pin *before* downloading, so an
+      unpinned version never wastes bandwidth
+- [x] Tests: a real download of the live ord 0.29.0 release verifies
       successfully (network test, not mocked); a tampered/corrupted
-      file is rejected; an unpinned version is refused
+      file is rejected; an unpinned version is refused, proven to
+      happen *before* any network call (points at a nonexistent host —
+      the test would fail with a network error instead of
+      `UnpinnedVersion` if the check happened after downloading)
 
 `nk-core` (ord paths, CLI argument generation, index options)
 - [ ] Per-environment index-option settings (index-sats, index-runes,
