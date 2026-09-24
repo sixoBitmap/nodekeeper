@@ -562,6 +562,73 @@ mod tests {
         fixture.stop().await.expect("bitcoind should stop cleanly");
     }
 
+    /// Real coverage for the Wallet screen's "does this chain already
+    /// have a wallet" check: `false` before `create_wallet`, `true`
+    /// immediately after. The actual "survives a full bitcoind/ord
+    /// restart with no explicit reload" claim was verified by hand
+    /// against a real regtest pair (DECISIONS.md Phase 5 VERIFY) --
+    /// restarting both processes mid-test isn't something this
+    /// fixture supports, so this test covers the boolean logic against
+    /// the real, exact ord error text instead.
+    #[tokio::test]
+    #[serial(real_bitcoind)]
+    async fn wallet_exists_reflects_whether_create_has_run() {
+        let (Some(bitcoind_path), Some(ord_path)) = (
+            std::env::var_os("NK_TEST_BITCOIND"),
+            std::env::var_os("NK_TEST_ORD"),
+        ) else {
+            eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
+            return;
+        };
+        let bitcoind_path = std::path::PathBuf::from(bitcoind_path);
+        let ord_path = std::path::PathBuf::from(ord_path);
+
+        let mut fixture = RegtestFixture::start(&bitcoind_path)
+            .await
+            .expect("bitcoind should start");
+        fixture
+            .start_ord(&ord_path)
+            .await
+            .expect("ord should start and become ready");
+
+        let executor = Executor::new();
+        let cookie_path = fixture.environment.bitcoin_cookie_path();
+        let bitcoin_datadir = fixture.environment.bitcoin_datadir_arg();
+        let server_url = format!("http://127.0.0.1:{}", fixture.environment.ord_port);
+        let target = nk_ord::wallet::WalletTarget {
+            binary_path: &ord_path,
+            environment: &fixture.environment,
+            cookie_path: &cookie_path,
+            bitcoin_datadir: &bitcoin_datadir,
+            server_url: &server_url,
+            wallet_name: "ord",
+        };
+
+        assert!(
+            !nk_ord::wallet::wallet_exists(&executor, &target)
+                .await
+                .expect("wallet_exists should succeed even with no wallet yet"),
+            "a wallet that was never created should report as not existing"
+        );
+
+        nk_ord::wallet::create_wallet(&executor, &target)
+            .await
+            .expect("wallet create should succeed");
+
+        assert!(
+            nk_ord::wallet::wallet_exists(&executor, &target)
+                .await
+                .expect("wallet_exists should succeed once a wallet exists"),
+            "a just-created wallet should report as existing"
+        );
+
+        fixture
+            .stop_ord()
+            .await
+            .expect("ord should stop gracefully");
+        fixture.stop().await.expect("bitcoind should stop cleanly");
+    }
+
     /// The real, automatable half of Phase 5's [CI] "fake-mnemonic...
     /// search test" acceptance criterion (the passphrase half already
     /// lives in `nk-rpc`): neither a real, ord-generated mnemonic

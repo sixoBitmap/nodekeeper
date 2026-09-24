@@ -57,6 +57,15 @@ impl WalletError {
             Self::Exec(_) | Self::InvalidJson(_) => None,
         }
     }
+
+    /// Whether this failure means "the named wallet has never been
+    /// created," not a real error -- confirmed live (DECISIONS.md
+    /// Phase 5 VERIFY): `ord wallet --name <nonexistent> <any command>`
+    /// fails with `Failed to load wallet <name>: ... "Path does not
+    /// exist."`. Used by `wallet_exists`.
+    fn is_wallet_not_found(&self) -> bool {
+        matches!(self, Self::NonZeroExit { stderr, .. } if stderr.contains("Path does not exist"))
+    }
 }
 
 /// Everything needed to run a single `ord wallet` subcommand, bundled
@@ -185,6 +194,27 @@ pub async fn wallet_addresses(
         "list wallet addresses",
     )
     .await
+}
+
+/// Whether `target`'s wallet has ever been created or restored.
+/// Confirmed live (DECISIONS.md Phase 5 VERIFY): `ord wallet` commands
+/// call `loadwallet` internally before running, transparently
+/// reloading an existing on-disk wallet even after a full bitcoind/ord
+/// restart -- Nodekeeper needs no explicit reload logic anywhere. A
+/// wallet that was never created fails with a distinguishable "Path
+/// does not exist" error, which this treats as `Ok(false)` rather than
+/// an error; any other failure (ord not synced, connection refused,
+/// ...) still propagates normally. Uses `wallet_addresses` as a cheap,
+/// side-effect-free probe.
+pub async fn wallet_exists(
+    executor: &Executor,
+    target: &WalletTarget<'_>,
+) -> Result<bool, WalletError> {
+    match wallet_addresses(executor, target).await {
+        Ok(_) => Ok(true),
+        Err(e) if e.is_wallet_not_found() => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// `ord wallet inscriptions` -- the gallery's data source.
@@ -345,6 +375,25 @@ mod tests {
             stderr: "some other ord error".to_string(),
         };
         assert_eq!(other.code(), None);
+    }
+
+    #[test]
+    fn is_wallet_not_found_matches_the_exact_real_error_text() {
+        let not_found = WalletError::NonZeroExit {
+            exit_code: Some(1),
+            stderr: "error: Failed to load wallet never-created: JSON-RPC error: RPC error \
+                     response: RpcError { code: -18, message: \"Wallet file verification \
+                     failed. Failed to load database path '...\\wallets\\never-created'. Path \
+                     does not exist.\" }"
+                .to_string(),
+        };
+        assert!(not_found.is_wallet_not_found());
+
+        let locked = WalletError::NonZeroExit {
+            exit_code: Some(1),
+            stderr: "Please enter the wallet passphrase with walletpassphrase first.".to_string(),
+        };
+        assert!(!locked.is_wallet_not_found());
     }
 
     fn target(environment: &Environment) -> WalletTarget<'_> {

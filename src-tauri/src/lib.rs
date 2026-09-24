@@ -249,6 +249,24 @@ async fn restore_wallet(
         .map_err(TypedError::from)
 }
 
+/// Whether `chain` already has a wallet, so the Wallet screen knows
+/// whether to show create/restore or the wallet itself. `ord wallet`
+/// commands transparently reload an existing on-disk wallet on every
+/// call (confirmed live, DECISIONS.md Phase 5 VERIFY) -- Nodekeeper
+/// never needs to explicitly (re)load one, on startup or otherwise.
+#[tauri::command]
+async fn wallet_exists(
+    chain: Chain,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<bool, TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store)?;
+    nk_ord::wallet::wallet_exists(&executor, &ctx.target())
+        .await
+        .map_err(TypedError::from)
+}
+
 #[tauri::command]
 async fn start_node(
     chain: Chain,
@@ -530,6 +548,7 @@ pub fn run() {
             is_ord_running,
             create_wallet,
             restore_wallet,
+            wallet_exists,
             tail_debug_log,
             page_debug_log_before,
             search_debug_log,

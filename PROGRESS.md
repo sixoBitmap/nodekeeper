@@ -897,6 +897,17 @@ Foundation D (webview security model, CSP)
       live on this Windows machine, passed.**
 
 Wallet screen (frontend + backend orchestration)
+- [x] `wallet_exists(chain)` Tauri command + `nk_ord::wallet::
+      wallet_exists`, so the screen knows whether to show create/
+      restore or the wallet itself. VERIFY'd live first (DECISIONS.md):
+      `ord wallet` commands transparently reload an existing on-disk
+      wallet after a full bitcoind/ord restart with no explicit reload
+      logic needed anywhere in Nodekeeper -- a nonexistent wallet fails
+      with a distinguishable "Path does not exist" error, treated as
+      `false` rather than propagated. Real test,
+      `wallet_exists_reflects_whether_create_has_run` (`nk-testkit`):
+      false before `create_wallet`, true immediately after. **Ran live
+      on this Windows machine, passed.**
 - [ ] Wallet-unlock flow: passphrase prompt before a signing action,
       optional "Remember for this session" (in-memory only, cleared on
       lock/app-exit/idle timeout, default 15 min).

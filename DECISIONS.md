@@ -1428,6 +1428,38 @@ re-locks it -> restore the same mnemonic under a different wallet name
 with a full rescan (`--timestamp 0`) -> restored wallet's balance
 matches the original's. **Ran live on this Windows machine, passed.**
 
+## Phase 5 — VERIFY: wallets survive a bitcoind/ord restart with no explicit reload (2026-09-24)
+
+Before designing the Wallet screen's "does this chain already have a
+wallet" detection, checked live whether an `ord`-created wallet
+persists and needs any explicit re-loading after a full restart --
+directly relevant, since Nodekeeper's `NodeManager::start` doesn't pass
+bitcoind any `-wallet=` autoload flag, and bitcoind normally starts
+with zero wallets loaded.
+
+Sequence: created a real wallet via `ord wallet create` against a real
+regtest bitcoind+ord pair, confirmed `listwallets` showed `["ord"]`,
+then force-killed *both* processes entirely (not a graceful stop) and
+restarted them fresh from the same data directories. Immediately after
+restart, before touching anything else:
+- `listwallets` -> `[]` (confirms bitcoind itself never auto-loads).
+- `ord wallet balance` (no explicit `loadwallet` call from Nodekeeper
+  anywhere) -> succeeded immediately, and `listwallets` right
+  afterward showed `["ord"]` again -- ord issues `loadwallet` itself
+  before running any wallet subcommand, transparently reloading the
+  existing on-disk wallet. No data loss, no silent duplicate creation.
+- Confirmed it's real detect-vs-create behavior, not "any name just
+  works": `ord wallet --name never-created balance` against a name
+  that was never created fails cleanly: `Failed to load wallet
+  never-created: ... "Path does not exist."`
+
+**Conclusion**: Nodekeeper needs no explicit wallet-reload logic
+anywhere -- every `ord wallet` command already handles this. The
+"does chain X have a wallet yet" check the Wallet screen needs is just
+a cheap wallet RPC (`wallet_addresses`) with `NonZeroExit` whose stderr
+contains `"Path does not exist"` treated as "no wallet", not an error
+(`nk_ord::wallet::wallet_exists`, added following this VERIFY).
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
