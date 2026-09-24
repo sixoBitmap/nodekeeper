@@ -99,7 +99,7 @@ export function LiveCommandMonitor() {
             <FilterSelect
               value={filters.source}
               onChange={(v) => setFilter({ source: v })}
-              options={["ordcli", "bitcoincli", "rpc"]}
+              options={["ordcli", "bitcoincli", "rpc", "ordapi"]}
               placeholder={t("monitor.allSources")}
             />
             <FilterSelect

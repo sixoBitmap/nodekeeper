@@ -3149,6 +3149,12 @@ dependencies = [
 [[package]]
 name = "nk-ord"
 version = "0.1.0"
+dependencies = [
+ "nk-exec",
+ "reqwest",
+ "serde_json",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "nk-proc"

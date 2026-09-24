@@ -689,8 +689,25 @@ that comparison itself).
       node's `getblockchaininfo.blocks` via nk-rpc, until caught up (or
       a timeout) — real regtest integration test via nk-testkit
 
-`nk-rpc` (or a small new module) — ord's HTTP JSON API
-- [ ] A typed client for `GET /status` (`Accept: application/json`)
+`nk-ord` (new crate) — ord's HTTP JSON API — **done**
+- [x] A client for `GET /status` (`Accept: application/json`) —
+      `OrdClient::status()`, mirroring `nk-rpc::RpcClient::call()`'s
+      shape exactly: routed through the central `Executor` (shown in the
+      Live Command Monitor as the equivalent `curl` command), returns
+      the raw `serde_json::Value` rather than a strongly-typed struct —
+      same convention `nk-rpc`'s typed methods use for bitcoind's
+      responses, so callers pick out only the fields they need (e.g.
+      `nk-proc`'s future wait-for-sync loop reading just `height`).
+      Added `CommandSource::OrdApi` (nk-exec) so this shows up as its
+      own Live Command Monitor filter, distinct from actual `OrdCli`
+      subprocess invocations — same reasoning as `Rpc` being separate
+      from `BitcoinCli`. Unit-tested the pure URL-building logic only
+      (no network) — same layering as `nk-rpc` (whose own tests are
+      network-free; live-server verification lives in `nk-testkit`
+      once a real fixture exists). A live integration test against a
+      real running ord server belongs in `nk-testkit` once `nk-proc`'s
+      `OrdProcess` can actually stand one up — tracked as part of the
+      `nk-proc` task below, not duplicated here.
 
 Frontend — Dashboard: ord section (item 2, previously omitted with a
 note in Phase 3 since nothing backed it yet)

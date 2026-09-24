@@ -4,3 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots", "json"] }
+nk-exec = { workspace = true }

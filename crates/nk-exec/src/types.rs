@@ -32,6 +32,11 @@ pub enum CommandSource {
     /// (docs/SPEC.md item 7: "RPC calls shown as their equivalent
     /// bitcoin-cli command so users can learn them").
     Rpc,
+    /// A call to `ord server`'s HTTP API (currently just `/status`),
+    /// shown as its equivalent `curl` command. Distinct from `OrdCli`
+    /// because it's not an `ord` subprocess invocation at all -- same
+    /// reasoning as `Rpc` being distinct from `BitcoinCli`.
+    OrdApi,
 }
 
 impl CommandSource {
@@ -45,6 +50,7 @@ impl CommandSource {
             Self::OrdCli => "ordcli",
             Self::BitcoinCli => "bitcoincli",
             Self::Rpc => "rpc",
+            Self::OrdApi => "ordapi",
         }
     }
 }
@@ -179,6 +185,7 @@ mod tests {
             CommandSource::OrdCli,
             CommandSource::BitcoinCli,
             CommandSource::Rpc,
+            CommandSource::OrdApi,
         ] {
             let via_serde = serde_json::to_value(source).unwrap();
             assert_eq!(via_serde.as_str().unwrap(), source.as_str());

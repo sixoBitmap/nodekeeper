@@ -1083,6 +1083,46 @@ aren't forgotten):
   builder-key fingerprint check) remain open in PROGRESS.md — they're the
   user's part of this phase, not something completable in-session.
 
+## Phase 4 — nk-ord: ord's `/status` HTTP client (2026-09-24)
+
+Built the new `nk-ord` crate's `OrdClient::status()` — `GET /status` with
+header `Accept: application/json` (DECISIONS.md's earlier Phase 4 VERIFY
+entry has the exact response shape). Two implementation choices worth
+recording since they're not fully dictated by PROGRESS.md's "typed
+client" phrasing:
+
+- **Returns `serde_json::Value`, not a typed `OrdStatus` struct.**
+  Matches `nk-rpc::RpcClient`'s established convention exactly — its
+  "typed" methods (`get_blockchain_info`, `get_network_info`, ...) are
+  typed only in the sense of a fixed method signature per RPC method;
+  they still return `Value`, and the caller (`NodeManager::status`)
+  picks out individual fields with `.get(...).and_then(...)` and a
+  default. `nk-ord::OrdClient::status()` follows the same pattern so the
+  future ord status-aggregator (Dashboard's ord section, `nk-proc`'s
+  wait-for-sync loop) reads the same way `NodeManager::status` does.
+  Avoids a struct that would need updating every time a new `/status`
+  field becomes relevant, or that silently drops fields serde doesn't
+  know about.
+- **New `CommandSource::OrdApi` variant** (`nk-exec`), instead of
+  reusing `OrdCli`. `/status` is an HTTP GET against `ord server`, not
+  an `ord` subprocess invocation — same reasoning that already separates
+  `Rpc` (HTTP JSON-RPC, displayed as its bitcoin-cli equivalent) from
+  `BitcoinCli` (an actual `bitcoin-cli` subprocess). Shown in the Live
+  Command Monitor as the equivalent `curl -H "Accept: application/json"
+  <url>` a user could run by hand (docs/SPEC.md item 7). Added
+  `"ordapi"` to the Live Command Monitor's source filter
+  (`LiveCommandMonitor.tsx`) alongside the existing three.
+
+Tests are network-free (pure URL-building logic only), matching how
+`nk-rpc`'s own test module has no live-network tests — the real,
+against-a-running-server verification is deferred to `nk-testkit`,
+which needs `nk-proc`'s `OrdProcess` (not yet built) to actually stand a
+real ord server up. Live-verified during this session (separately, by
+hand, not as an automated test) that a real regtest ord server's
+`/status` response matches the shape this client expects to parse
+(same VERIFY run recorded in the "ord's CLI surface and sync-status
+API" entry above).
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
