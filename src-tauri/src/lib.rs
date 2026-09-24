@@ -1,4 +1,5 @@
 mod node_manager;
+mod wallet_session;
 
 use nk_core::system_check::{run_system_check, SystemCheck};
 use nk_core::{AppErrorCode, Chain, Environment};
@@ -9,6 +10,7 @@ use serde::Serialize;
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 use ts_rs::TS;
+use wallet_session::WalletSession;
 
 /// Runs the setup-wizard system check (OS/CPU/RAM/disk) for the given data
 /// directory. Doubles as the Phase 1 typed-IPC scaffold: a real command
@@ -158,6 +160,12 @@ struct WalletContext {
     cookie_path: std::path::PathBuf,
     bitcoin_datadir: std::path::PathBuf,
     server_url: String,
+    /// For `walletpassphrase`/`walletlock` around a real signing
+    /// action -- a fresh client built straight from the cookie file
+    /// (readable by anyone with filesystem access, same as
+    /// `NodeManager`'s own internal one), not reused from `NodeManager`
+    /// (which doesn't expose its tracked client publicly).
+    rpc: nk_rpc::RpcClient,
 }
 
 impl WalletContext {
@@ -177,6 +185,7 @@ fn wallet_context(
     chain: Chain,
     node_manager: &tauri::State<'_, NodeManager>,
     store: &tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: &tauri::State<'_, Executor>,
 ) -> Result<WalletContext, TypedError> {
     if !node_manager.is_running(chain) {
         return Err(TypedError::from(format!(
@@ -193,12 +202,21 @@ fn wallet_context(
     let cookie_path = environment.bitcoin_cookie_path();
     let bitcoin_datadir = environment.bitcoin_datadir_arg();
     let server_url = format!("http://127.0.0.1:{}", environment.ord_port);
+    let rpc = nk_rpc::RpcClient::from_cookie_file(
+        format!("http://127.0.0.1:{}", environment.rpc_port),
+        &cookie_path,
+        executor.inner().clone(),
+        environment.name.clone(),
+        chain,
+    )
+    .map_err(|e| TypedError::from(e.to_string()))?;
     Ok(WalletContext {
         ord_binary_path,
         environment,
         cookie_path,
         bitcoin_datadir,
         server_url,
+        rpc,
     })
 }
 
@@ -218,7 +236,7 @@ async fn create_wallet(
     store: tauri::State<'_, Arc<Mutex<Store>>>,
     executor: tauri::State<'_, Executor>,
 ) -> Result<CreateWalletResult, TypedError> {
-    let ctx = wallet_context(chain, &node_manager, &store)?;
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
     let response = nk_ord::wallet::create_wallet(&executor, &ctx.target())
         .await
         .map_err(TypedError::from)?;
@@ -243,7 +261,7 @@ async fn restore_wallet(
     store: tauri::State<'_, Arc<Mutex<Store>>>,
     executor: tauri::State<'_, Executor>,
 ) -> Result<(), TypedError> {
-    let ctx = wallet_context(chain, &node_manager, &store)?;
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
     nk_ord::wallet::restore_wallet(&executor, &ctx.target(), &mnemonic, &timestamp)
         .await
         .map_err(TypedError::from)
@@ -261,7 +279,7 @@ async fn wallet_exists(
     store: tauri::State<'_, Arc<Mutex<Store>>>,
     executor: tauri::State<'_, Executor>,
 ) -> Result<bool, TypedError> {
-    let ctx = wallet_context(chain, &node_manager, &store)?;
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
     nk_ord::wallet::wallet_exists(&executor, &ctx.target())
         .await
         .map_err(TypedError::from)
@@ -285,7 +303,7 @@ async fn wallet_balance(
     store: tauri::State<'_, Arc<Mutex<Store>>>,
     executor: tauri::State<'_, Executor>,
 ) -> Result<WalletBalance, TypedError> {
-    let ctx = wallet_context(chain, &node_manager, &store)?;
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
     let response = nk_ord::wallet::wallet_balance(&executor, &ctx.target())
         .await
         .map_err(TypedError::from)?;
@@ -313,7 +331,7 @@ async fn wallet_receive_address(
     store: tauri::State<'_, Arc<Mutex<Store>>>,
     executor: tauri::State<'_, Executor>,
 ) -> Result<String, TypedError> {
-    let ctx = wallet_context(chain, &node_manager, &store)?;
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
     let response = nk_ord::wallet::wallet_receive(&executor, &ctx.target(), None)
         .await
         .map_err(TypedError::from)?;
@@ -324,6 +342,108 @@ async fn wallet_receive_address(
         .and_then(|v| v.as_str())
         .map(String::from)
         .ok_or_else(|| TypedError::from("ord did not return a receive address".to_string()))
+}
+
+/// A signing RPC's unlock timeout at the bitcoind level (docs/SPEC.md
+/// item 3: "a short timeout") -- distinct from `WalletSession`'s much
+/// longer app-level "remember" timeout. This only needs to outlive one
+/// send; `wallet_lock` runs immediately after regardless.
+const WALLET_UNLOCK_TIMEOUT_SECS: u32 = 60;
+
+/// `ord wallet send`'s `{"txid", "fee"}` (sats) -- `psbt`/`asset` are
+/// dropped rather than exposed, since nothing in the UI uses them yet.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct WalletSendResult {
+    pub txid: String,
+    #[ts(type = "number")]
+    pub fee: u64,
+}
+
+fn parse_wallet_send_result(response: serde_json::Value) -> Result<WalletSendResult, TypedError> {
+    let txid = response
+        .get("txid")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| TypedError::from("ord did not return a txid".to_string()))?
+        .to_string();
+    let fee = response
+        .get("fee")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| TypedError::from("ord did not return a fee".to_string()))?;
+    Ok(WalletSendResult { txid, fee })
+}
+
+/// Preview only -- confirmed live (DECISIONS.md Phase 5 VERIFY) that
+/// `--dry-run` needs no wallet unlock at all, even against a locked
+/// encrypted wallet, so this never touches `WalletSession` or calls
+/// `walletpassphrase`.
+#[tauri::command]
+async fn wallet_send_dry_run(
+    chain: Chain,
+    address: String,
+    asset: String,
+    fee_rate: f64,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<WalletSendResult, TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
+    let response =
+        nk_ord::wallet::wallet_send(&executor, &ctx.target(), &address, &asset, fee_rate, true)
+            .await
+            .map_err(TypedError::from)?;
+    parse_wallet_send_result(response)
+}
+
+/// The real, signing send (docs/SPEC.md item 3: unlock with
+/// `walletpassphrase` for a short timeout, run the action, lock again
+/// afterward regardless of the outcome). The frontend's expected flow:
+/// try with `passphrase: None` first (relying on anything
+/// `WalletSession` already has remembered); if that fails with
+/// `AppErrorCode::WalletLocked`, prompt the user and retry with
+/// `passphrase: Some(...)`, which always takes priority over whatever
+/// (if anything, possibly now-expired) is remembered.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn wallet_send(
+    chain: Chain,
+    address: String,
+    asset: String,
+    fee_rate: f64,
+    passphrase: Option<String>,
+    remember: bool,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+    wallet_session: tauri::State<'_, WalletSession>,
+) -> Result<WalletSendResult, TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
+
+    let passphrase = match passphrase.or_else(|| wallet_session.get(chain)) {
+        Some(p) => p,
+        None => {
+            return Err(TypedError {
+                code: Some(AppErrorCode::WalletLocked),
+                message: "This wallet is locked; enter its passphrase to continue.".to_string(),
+            })
+        }
+    };
+
+    ctx.rpc
+        .wallet_passphrase(DEFAULT_WALLET_NAME, &passphrase, WALLET_UNLOCK_TIMEOUT_SECS)
+        .await
+        .map_err(|e| TypedError::from(e.to_string()))?;
+    if remember {
+        wallet_session.remember(chain, passphrase);
+    }
+
+    let response =
+        nk_ord::wallet::wallet_send(&executor, &ctx.target(), &address, &asset, fee_rate, false)
+            .await;
+    // Best-effort: a lock failure here shouldn't hide the send's own
+    // result (success or failure) from the caller.
+    let _ = ctx.rpc.wallet_lock(DEFAULT_WALLET_NAME).await;
+
+    parse_wallet_send_result(response.map_err(TypedError::from)?)
 }
 
 #[tauri::command]
@@ -549,12 +669,14 @@ pub fn run() {
 
     let executor = Executor::new();
     let node_manager = NodeManager::new();
+    let wallet_session = WalletSession::new();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(store.clone())
         .manage(executor.clone())
         .manage(node_manager)
+        .manage(wallet_session)
         .setup(move |app| {
             // Feeds every command the Live Command Monitor will show
             // (Phase 3) into the rolling history table (docs/SPEC.md
@@ -610,6 +732,8 @@ pub fn run() {
             wallet_exists,
             wallet_balance,
             wallet_receive_address,
+            wallet_send_dry_run,
+            wallet_send,
             tail_debug_log,
             page_debug_log_before,
             search_debug_log,
@@ -640,6 +764,7 @@ mod tests {
         node_manager::OrdStatus::export_all(&config).unwrap();
         CreateWalletResult::export_all(&config).unwrap();
         WalletBalance::export_all(&config).unwrap();
+        WalletSendResult::export_all(&config).unwrap();
         nk_core::log_tail::LogWindow::export_all(&config).unwrap();
         nk_store::CommandHistoryEntry::export_all(&config).unwrap();
         nk_exec::ExecEvent::export_all(&config).unwrap();

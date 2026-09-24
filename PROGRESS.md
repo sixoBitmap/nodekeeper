@@ -908,9 +908,25 @@ Wallet screen (frontend + backend orchestration)
       `wallet_exists_reflects_whether_create_has_run` (`nk-testkit`):
       false before `create_wallet`, true immediately after. **Ran live
       on this Windows machine, passed.**
-- [ ] Wallet-unlock flow: passphrase prompt before a signing action,
-      optional "Remember for this session" (in-memory only, cleared on
-      lock/app-exit/idle timeout, default 15 min).
+- [x] Backend half done: `WalletSession` (`src-tauri/src/
+      wallet_session.rs`) -- in-memory-only per-chain remembered
+      passphrase, 15-min idle timeout, never persisted, zeroized on
+      expiry/forget (4 unit tests). `wallet_send_dry_run` (no unlock,
+      confirmed live it needs none even against a locked wallet) and
+      `wallet_send` (`WalletSendResult` TS-exported) Tauri commands:
+      tries an explicit `passphrase` first, falls back to
+      `WalletSession`, fails with `AppErrorCode::WalletLocked` before
+      ever calling ord if neither exists; unlocks, optionally
+      remembers, sends, always re-locks afterward regardless of the
+      send's own outcome. The underlying unlock-send-lock cycle itself
+      was already proven live by `wallet_cli_create_fund_send_and_
+      restore` (`nk-testkit`) -- this just orchestrates the same
+      already-tested pieces, consistent with every other thin Tauri
+      command in this file having no command-layer test of its own.
+      **Frontend half (passphrase-prompt dialog, "remember" checkbox,
+      wiring into an actual Send screen) not built yet** -- there's no
+      Send UI to trigger it from; tracked as part of the Send bullet
+      below, not done.
 - [x] Balance (cardinal vs inscribed), receive (address + QR). New
       typed Tauri commands `wallet_balance`/`wallet_receive_address`
       (`WalletBalance` TS-exported), a `WalletScreen` composing
