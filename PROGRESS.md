@@ -436,6 +436,20 @@ Newly tracked here, not built yet:
       detected on the target data directory and its cookie
       authenticates, let the user attach instead of refusing outright
       (the detection primitive already exists in `nk-proc`, per above)
+- [ ] Point at an already-installed Bitcoin Core/ord binary instead of
+      downloading a fresh one. Deliberately not built alongside the
+      download-and-verify screens (DECISIONS.md, "Setup wizard UI:
+      binary download + verify screens") because doing so without
+      verification would let a user configure an arbitrary,
+      completely unverified executable -- a direct violation of
+      CLAUDE.md's "binary verification fails closed" rule. Needs a new
+      `nk-verify` entry point first: today it only exposes combined
+      `download_and_verify_*`/`download_verify_and_install_*`
+      functions, no standalone "verify this file that's already on
+      disk" function (checksum + signature check against pinned
+      values, same as the download path, just skipping the network
+      fetch) -- design and build that, then the file picker becomes
+      safe to add
 
 ## Phase 3 — Dashboard and monitor
 
