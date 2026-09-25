@@ -1364,7 +1364,75 @@ Acceptance criteria (from docs/SPEC.md Phase 6 "Done when"):
 
 ## Phase 7 — Console, scripts, explorer (MVP complete)
 
-Not started. See docs/SPEC.md Phase 7.
+In progress. Tasks (one at a time: implement -> test -> quality gate ->
+commit -> tick):
+
+Backend — Explorer (docs/SPEC.md item 5)
+- [ ] VERIFY live against ord 0.29.0: the `/search`-style endpoint (or
+      per-type lookups if no unified one exists) for inscriptions,
+      sats, transactions, addresses, blocks, and runes -- record exact
+      request/response shapes and index-option gating (Foundation F:
+      address/rune/sat searches need `--index-addresses`/`--index-
+      runes`/`--index-sats` respectively) in DECISIONS.md
+- [ ] `OrdClient` additions for whatever the VERIFY finds, following
+      the existing `sat`/`inscription` methods' shape (redacted
+      command recording, `get_json` helper)
+- [ ] `explorer_search(chain, query)` Tauri command, gated per
+      Foundation F the same way other index-dependent commands already
+      are (`AppErrorCode::IndexOptionDisabled`)
+
+Frontend — Explorer
+- [ ] `ExplorerScreen`: a search bar plus a result view per resource
+      type (inscription/sat/tx/address/block/rune), each showing what
+      that type's `/content`, `/preview`, or JSON detail already
+      renders elsewhere (reuse `InscriptionPreviewTile` where it
+      applies) -- "index-dependent searches gated per Foundation F"
+      shown the same way `IndexOptionsScreen`/`OrdSection` already
+      explain a missing index option, not a raw error
+- [ ] Add to the main nav alongside Dashboard/Wallet/Inscribe
+
+Backend — Console command execution + safety layer (docs/SPEC.md item 6)
+- [ ] `console_run(chain, command_line)`: parses a raw `bitcoin-cli`/
+      `ord` command line the same way a human would type it, runs it
+      through the existing executor (never a new ad hoc process path),
+      returns pretty-printable JSON output
+- [ ] Safety classification: read-only vs. state-changing (confirm
+      dialog with the exact command, "Learn mode"-style, matching
+      `ConfirmDialog`'s existing pattern) vs. blocked outright
+      (`sendtoaddress`/`sendmany`/`send`/`bumpfee`-and-similar against
+      an ord-used wallet -- VERIFY the exact command list against the
+      installed Core version's RPC surface, don't guess) vs. needs a
+      PSBT preview (`walletcreatefundedpsbt`/`testmempoolaccept`) vs.
+      needs `--dry-run` first (ord commands that support it)
+- [ ] Mainnet fund-moving commands route through the same mainnet
+      extra-confirmation `ConfirmDialog` every other fund-moving screen
+      already uses -- no new confirmation flow
+
+Frontend — Console UI
+- [ ] `ConsoleScreen`: tabs, each locked to one environment and showing
+      it in the prompt (e.g. "[regtest] $"), command history,
+      autocomplete for bitcoin-cli/ord subcommands, pretty-printed JSON
+      output
+- [ ] Saved command templates with fill-in fields
+- [ ] Add to the main nav
+
+Backend + frontend — Script runner
+- [ ] Detect Python/Node on the machine (bash unavailable on stock
+      Windows -- say so); scripts run with `NKP_NETWORK`, RPC URL,
+      cookie path, and ord server URL as env/args, through the executor
+- [ ] Environment must be chosen before running; "regtest only" is
+      enforced by the runner reading the script's own declared
+      restriction, not trusted from the script's content
+- [ ] Import/create warning: scripts are trusted code with full node
+      control
+- [ ] Live output streaming (reuse the executor's existing event
+      broadcast, same as every other live-output surface)
+- [ ] 3 example scripts: export inscriptions to CSV, alert when the
+      node falls behind, daily disk-usage report
+
+Security self-review (docs/SPEC.md Phase 7's own "Done when" item) --
+do this once the console's safety layer is actually built, same as
+Phases 2/5.
 
 ## Phase 8 — Multi-environment UI and Test Lab
 
