@@ -1452,12 +1452,29 @@ Backend — Console command execution + safety layer (docs/SPEC.md item 6)
       `wallet_send_dry_run` already previews ord-wallet sends
 
 Frontend — Console UI
-- [ ] `ConsoleScreen`: tabs, each locked to one environment and showing
-      it in the prompt (e.g. "[regtest] $"), command history,
-      autocomplete for bitcoin-cli/ord subcommands, pretty-printed JSON
-      output
+- [x] `ConsoleScreen`: prompt shows "[chain] $", scrollback-style
+      history with pretty-printed JSON output. Drives the full safety
+      flow: read-only runs instantly, state-changing goes through the
+      shared `ConfirmDialog` (Learn Mode shows the exact command,
+      mainnet gets its own extra step automatically since it's the
+      same shared dialog every other fund-moving screen uses), a
+      `blocked_reason` is shown as a refusal with nothing run, and a
+      dry-run-capable ord command fetches and shows its preview inside
+      the confirm dialog before the real run. Live-verified in the
+      browser dev preview: all five paths (read-only, blocked
+      bitcoin-cli fund-move, mainnet-confirmed state-changing, blocked
+      `ord create`, dry-run-previewed `ord send`) exercised end to end.
+      One console per environment (matching every other screen), not
+      independently-tabbed multiple consoles per docs/SPEC.md's literal
+      "each console tab" wording -- tracked below as a scope
+      simplification, not equivalent functionality.
+- [ ] Multiple simultaneous console tabs, each independently locked to
+      its own environment (this pass built one console bound to the
+      globally-selected environment, matching Dashboard/Wallet/
+      Inscribe/Explorer's existing pattern)
+- [ ] Autocomplete for bitcoin-cli/ord subcommands as the user types
 - [ ] Saved command templates with fill-in fields
-- [ ] Add to the main nav
+- [x] Add to the main nav
 
 Backend + frontend — Script runner
 - [ ] Detect Python/Node on the machine (bash unavailable on stock

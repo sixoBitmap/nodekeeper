@@ -2423,6 +2423,47 @@ status: `signmessagewithprivkey` is genuinely read-only in the "doesn't
 mutate state" sense, but still carries a private key argument that must
 never appear in the Live Command Monitor, history, or an export).
 
+## Phase 7 — Console UI built, one console per environment not per tab (2026-09-25)
+
+Built `ConsoleScreen` on top of the classify/execute backend above:
+prompt, scrollback history, and the full confirm/block/dry-run flow
+driven entirely by `console_classify`'s response -- the screen itself
+contains no safety logic of its own, just renders what the backend
+already decided (same "the backend is the enforcement point" shape as
+`console_run` re-checking `blocked_reason` itself).
+
+**Scope simplification**: docs/SPEC.md says "each console tab is
+locked to one environment" (plural tabs, each independently pinned).
+Built one console bound to the currently-selected environment instead,
+matching every other screen in the app (Dashboard/Wallet/Inscribe/
+Explorer all work this way, switched via the shared environment
+switcher). Multiple simultaneous tabs -- e.g. a mainnet tab and a
+regtest tab open side by side -- is real, additional work (tab state,
+per-tab history, a tab strip UI) tracked as its own follow-up in
+PROGRESS.md, not silently treated as equivalent to what got built.
+
+**Live-verified in the browser dev preview**, all five paths a raw
+console realistically hits: a read-only bitcoin-cli command runs and
+prints its result immediately; a fund-moving one (`sendtoaddress`) is
+refused in red with no dialog at all; a plain state-changing one
+(`createwallet`) opens the shared `ConfirmDialog` with the mainnet
+extra-acknowledgment checkbox and Learn Mode showing the exact command,
+and actually runs on confirm; `ord create` is refused outright with the
+mnemonic-protection message; `ord send` (dry-run-capable) fetches and
+shows a preview inside the dialog before the real confirmation.
+
+**Found and worked around a browser-automation limitation, not an app
+bug**: the automation tool's synthetic "Return" keypress dispatches a
+`keydown` with empty `key`/`code` properties (confirmed by installing a
+temporary listener and inspecting the event directly) rather than
+`"Enter"`, so neither the form's native submit-on-Enter nor an explicit
+`onKeyDown` check for `e.key === "Enter"` can catch it. Added the
+explicit handler anyway (defensible on its own terms for a command-
+line-style input, and correct for a real keypress, which always
+populates `key` properly) and verified the actual submit flow via the
+Run button instead -- this is a testing-tool artifact, not something to
+chase further in the app's own code.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

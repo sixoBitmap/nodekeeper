@@ -6,7 +6,8 @@
     "dashboard": "Dashboard",
     "wallet": "Wallet",
     "inscribe": "Inscribe",
-    "explorer": "Explorer"
+    "explorer": "Explorer",
+    "console": "Console"
   },
   "theme": {
     "toggleToLight": "Switch to light theme",
@@ -296,6 +297,15 @@
     "placeholder": "Inscription ID, sat number, block.offset, transaction, block hash, or address",
     "search": "Search",
     "empty": "Search above to look something up on this environment's own ord server."
+  },
+  "console": {
+    "title": "Console",
+    "placeholder": "getblockchaininfo, or ord balance, send, inscribe…",
+    "run": "Run",
+    "empty": "Type a bitcoin-cli command (e.g. getblockchaininfo) or an ord one prefixed with \"ord\" (e.g. ord balance).",
+    "confirmTitle": "Run this command?",
+    "confirmDescription": "This changes state and can't be undone from here.",
+    "confirmDescriptionWithPreview": "Preview of what this would do:\n{{preview}}"
   },
   "diskMonitor": {
     "title": "Disk usage",

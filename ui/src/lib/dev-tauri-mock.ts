@@ -196,6 +196,59 @@ function notRunningError(chain: Chain): TypedError {
   return { code: null, message: `${chain} is not running` };
 }
 
+/** A simplified stand-in for `nk_core::console_safety` -- just enough
+ * of the real classifier's behavior to exercise every UI state
+ * (read-only, needs confirmation, blocked, dry-run preview) in the
+ * dev-browser preview; not a full reimplementation. */
+function mockConsoleClassify(commandLine: string) {
+  const trimmed = commandLine.trim();
+  const tokens = trimmed.split(/\s+/);
+
+  if (tokens[0] === "ord") {
+    const sub = tokens[1] ?? "";
+    const display = `ord wallet ${tokens.slice(1).join(" ")}`;
+    if (sub === "create" || sub === "restore") {
+      return {
+        source: "ordcli",
+        display,
+        read_only: false,
+        supports_dry_run: false,
+        blocked_reason:
+          "This can print a recovery phrase -- use the Wallet screen's create/restore flow instead.",
+      };
+    }
+    const readOnly = ["balance", "receive", "addresses", "inscriptions", "transactions", "sats"];
+    const dryRun = ["send", "inscribe", "batch", "burn", "split", "sweep", "resume"];
+    return {
+      source: "ordcli",
+      display,
+      read_only: readOnly.includes(sub),
+      supports_dry_run: dryRun.includes(sub),
+      blocked_reason: null,
+    };
+  }
+
+  const fundMoving = ["sendtoaddress", "sendmany", "send", "sendall", "bumpfee", "psbtbumpfee"];
+  const readOnly = ["getblockchaininfo", "getbalance", "listunspent", "getblockcount", "gettransaction"];
+  if (fundMoving.includes(tokens[0])) {
+    return {
+      source: "bitcoincli",
+      display: trimmed,
+      read_only: false,
+      supports_dry_run: false,
+      blocked_reason:
+        "This can move funds and is blocked for the wallet ord uses -- use the Send screen instead.",
+    };
+  }
+  return {
+    source: "bitcoincli",
+    display: trimmed,
+    read_only: readOnly.includes(tokens[0]),
+    supports_dry_run: false,
+    blocked_reason: null,
+  };
+}
+
 export function installDevTauriMockIfNeeded() {
   if (!import.meta.env.DEV || "__TAURI_INTERNALS__" in window) return;
 
@@ -496,6 +549,14 @@ export function installDevTauriMockIfNeeded() {
           location: `mockbatchtxidmockbatchtxidmockbatchtxidmockbatchtxidmockbatchtx:${i}:0`,
           fee: 500,
         }));
+      }
+      case "console_classify": {
+        const { commandLine } = args as { commandLine: string };
+        return mockConsoleClassify(commandLine);
+      }
+      case "console_run": {
+        const { commandLine } = args as { commandLine: string; chain: Chain; dryRun: boolean };
+        return { mock: true, ranInDevPreview: commandLine };
       }
       default:
         throw new Error(`dev-tauri-mock: no mock for IPC command "${cmd}"`);
