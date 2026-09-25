@@ -405,6 +405,28 @@ Acceptance criteria (from docs/SPEC.md Phase 2 "Done when"):
       line, point to the code/test enforcing each, list any gaps) — see
       DECISIONS.md "Phase 2 — security self-review"
 
+**Gap found and tracked (2026-09-25):** docs/SPEC.md's phase overview
+states "the setup wizard grows phase by phase (system check and
+disclaimer in Phase 1, Bitcoin Core in Phase 2...)" — that Bitcoin Core
+step never got a real screen. Only the backend verification engine
+(`nk-verify`, above) was built; the actual UI (download with progress,
+choosing the data directory including external drives, showing the
+verification result) does not exist. It slipped through because Phase
+2's own "Done when" criteria are all backend-testable and didn't force
+a screen into existence. Also still open from this same phase: the
+"offer to attach" decision noted above (an already-running bitcoind
+whose data directory matches and cookie authenticates) was deferred
+"before Phase 3" and never picked back up in any later phase either.
+Newly tracked here, not built yet:
+- [ ] Setup wizard screen: trigger `nk_verify::bitcoin_core`'s download
+      + verify, show progress and the verification result (fail closed,
+      same as the backend already does), let the user pick the data
+      directory (including external drives) before starting
+- [ ] "Offer to attach" UI: when an already-running bitcoind is
+      detected on the target data directory and its cookie
+      authenticates, let the user attach instead of refusing outright
+      (the detection primitive already exists in `nk-proc`, per above)
+
 ## Phase 3 — Dashboard and monitor
 
 In progress. Tasks (one at a time: implement -> test -> quality gate ->
@@ -783,6 +805,22 @@ only been verified by running the real test suite locally on Windows
 real, freshly-verified binaries) — genuinely real verification, just
 not yet cross-platform-confirmed by CI. Re-run CI once billing is
 resolved to close out the remaining `[CI]` acceptance criteria above.
+
+**Gap found and tracked (2026-09-25):** same pattern as Phase 2's note
+above — docs/SPEC.md's phase overview says the wizard should have grown
+to include "ord and index options in Phase 4," and again only the
+backend (`nk-verify`'s pinned-hash ord verification, `nk_core::
+ord_conf`'s index-option plumbing) was built, no screen. Newly tracked
+here, not built yet:
+- [ ] Setup wizard screen: trigger `nk_verify::ord`'s download + verify
+      with progress/result, then the index-options step -- explain disk/
+      time cost per option, list which app features each unlocks
+      (Foundation F), and state clearly the choice is effectively
+      permanent (changing it later means a full reindex)
+- [ ] Wizard default: per spec, start ord indexing automatically once
+      Bitcoin Core finishes its initial sync, with a "start now anyway"
+      override and warning -- no such sequencing exists yet; today
+      bitcoind and ord are started independently by the user
 
 ## Phase 5 — Wallet
 

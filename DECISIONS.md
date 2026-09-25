@@ -2033,6 +2033,45 @@ the frontend checks this field on the real response, not a cached
 server's actual state" reasoning used for rune balances and
 `OrdStatus`'s index-option booleans elsewhere in this project.
 
+## Setup wizard UI: a real gap, tracked retroactively (2026-09-25)
+
+The user asked how binary install/data-directory-choice/connecting to
+an already-installed Bitcoin Core or ord works, and asked for
+screenshots. Checked the actual app (browser dev preview) and the
+codebase directly rather than answer from memory: there is no such UI
+anywhere. The only real setup-flow screen that exists is the Phase 1
+system check; clicking past it goes straight to the Dashboard.
+
+What exists: `nk-verify`'s download-and-verify engine for both Bitcoin
+Core (SHA256SUMS + >=3 pinned-key signatures) and ord (pinned hashes),
+solid and tested against live releases -- but only ever exercised via
+`cargo run -p nk-verify --example fetch_bitcoin_core`/`fetch_ord` and
+CI, never through the app. The binary path Nodekeeper actually launches
+is read from a `bitcoind_path`/`ord_path` settings key that has no UI
+to set at all. Also confirmed by grepping the whole codebase: the
+spec's Foundation C "offer to attach" flow (an already-running
+bitcoind/ord -- from a service, a crash, or the user's own separate
+install -- offered as attach when its data directory matches and cookie
+authenticates) has zero implementation beyond the bare detection
+primitive `nk-proc` already has.
+
+Root cause: docs/SPEC.md's phase overview explicitly assigns the wizard
+"Bitcoin Core in Phase 2, ord and index options in Phase 4," but
+neither phase's own "Done when" acceptance criteria require a screen to
+exist -- both are satisfiable with backend tests alone. So the wizard
+silently never grew, and nothing in PROGRESS.md tracked it as an open
+task (it only ever appeared as an aside inside other *completed* tasks'
+notes) -- it would likely have kept being silently carried forward
+until Phase 8 broke on its own assumption ("'Try it safely' in the
+setup wizard now opens the full Test Lab").
+
+**Decision**: don't build it in the same turn it was discovered --
+track it properly first. Added explicit, newly-dated `[ ]` tasks to
+Phase 2 and Phase 4 in PROGRESS.md (matching the spec's own phase
+assignment, rather than inventing a new phase for it) so it can't
+silently disappear again, and left it for the user to decide when to
+build it.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
