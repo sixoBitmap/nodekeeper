@@ -3303,6 +3303,7 @@ dependencies = [
  "nk-ord",
  "nk-proc",
  "nk-rpc",
+ "nk-scripts",
  "nk-store",
  "nk-verify",
  "serde",

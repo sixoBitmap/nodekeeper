@@ -2500,6 +2500,70 @@ assert "at least one real interpreter was found" and run the actual
 env-var-passing test against whichever one that is, since the whole
 point of this module is that availability varies by machine.
 
+## Phase 7 — script runner wired up, 3 example scripts, VERIFY: cookie-auth RPC over the wire (2026-09-25)
+
+Finished what the script-runner-foundation entry started: `list_scripts`/
+`list_available_interpreters`/`run_script` Tauri commands, the 3
+example scripts docs/SPEC.md item 6 names, and `ScriptsScreen`.
+
+**Where the 3 example scripts live and how they run**: embedded at
+compile time (`include_str!("../scripts/*.py")` in `src-tauri/scripts/`)
+rather than bundled as Tauri resources -- avoids the dev-vs-bundled
+resource-path distinction entirely. `run_script` rewrites the current
+build's copy to `data_root()/scripts/<id>.<ext>` on every single run
+before executing it, trading a few KB of redundant disk writes for the
+guarantee that an app update can never leave a stale on-disk example
+script behind.
+
+**None of the 3 are `regtest_only`**: all three only ever read state
+(two HTTP GETs to ord, one read-only RPC call, local `os.walk`/
+`shutil.disk_usage`) -- nothing they do is unsafe to run against a real
+mainnet node. `ScriptInfo.regtest_only` is a field Nodekeeper's own
+`built_in_scripts()` sets, never derived from the script file's
+content, and `run_script` re-checks it itself against the `chain`
+argument regardless of what `list_scripts`/the frontend already
+returned -- same enforcement-lives-in-the-backend shape as
+`console_run`'s re-check of `blocked_reason`.
+
+**VERIFY: the RPC cookie-auth wire protocol**, needed by
+`alert_node_behind.py` (bitcoind JSON-RPC has no HTTP client library
+built into a scripting language's stdlib the way `nk-rpc` is for Rust,
+so the script hand-rolls the request). Real regtest bitcoind, cookie
+file read directly (confirmed format: `__cookie__:<hex>`, matching
+`nk_rpc::RpcClient::from_cookie_file`'s own parsing exactly), Basic
+Auth built from `user:password`, JSON-RPC 1.0 POST body
+(`{"jsonrpc":"1.0","id":...,"method":...,"params":[...]}`) -- the exact
+shape `nk-rpc`'s own `do_call` sends. Tested with a Node.js stand-in
+script rather than the real Python file directly: real Python isn't
+installed on this dev machine (only the Microsoft Store stub, per the
+script-runner-foundation entry above), so there's no way to execute
+the actual `.py` file here. Node's `fetch`-based request against the
+real bitcoind confirmed the wire protocol is correct end-to-end
+(returned a real `getblockchaininfo` response); Python's
+`urllib.request` + manual `Authorization` header do the identical HTTP
+steps, so the same protocol understanding carries over. This is a real
+gap in this session's usual "run it for real" discipline, worth being
+explicit about rather than silently claiming full E2E coverage: the
+Python file's own syntax was reviewed by hand, not executed.
+
+**Frontend**: `ScriptsScreen`'s warning banner is always visible, not a
+one-time dismissable acknowledgment -- docs/SPEC.md says "show a clear
+warning when a script is imported or created," and since this pass
+doesn't yet build an import flow (only the 3 built-ins are listed), an
+always-visible warning is the safer reading until that's built. No
+live-output rendering in the screen itself: `run_script` runs through
+the same executor as everything else, tagged `CommandSource::Script`,
+so its output already reaches the Live Command Monitor for free --
+confirmed by inspection of the executor path, not a new mechanism.
+
+**Not verified this pass, tracked explicitly**: the 3 scripts' actual
+runtime correctness against a real interpreter (blocked on this
+machine having no real Python -- see above), and the full Tauri-command
+composition end-to-end (this project's established precedent for thin
+command layers: trust the underlying crate's real tests + browser
+dev-preview UI verification, same standard applied to every other
+command in this session, not a new exception).
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

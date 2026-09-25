@@ -1102,6 +1102,193 @@ async fn console_run(
         .map_err(|e| TypedError::from(e.to_string()))
 }
 
+/// One script offered by the script runner (docs/SPEC.md item 6).
+/// Every field here is Nodekeeper's own, never read from the script
+/// file's own content -- `regtest_only` in particular: "the 'regtest
+/// only' restriction is enforced by the runner, not the script," since
+/// a script file could be edited to lie about it.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct ScriptInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// Matches `nk_scripts::Interpreter`'s variant names, lowercased --
+    /// only "python" exists today (all 3 built-ins), but the shape
+    /// supports node/bash scripts later without changing it.
+    pub language: String,
+    pub regtest_only: bool,
+}
+
+/// The 3 built-in example scripts (docs/SPEC.md item 6), embedded at
+/// compile time so the app never depends on a separate install step or
+/// bundled-resource path resolution -- `run_script` writes the current
+/// build's copy to disk fresh on every run (cheap: these are a few KB
+/// of text), so there's no risk of a stale on-disk copy surviving an
+/// app update. None are regtest-only: all three only ever read state
+/// (HTTP GETs to ord, a read-only RPC call, local disk stats), nothing
+/// they do is unsafe on mainnet.
+fn built_in_scripts() -> Vec<(ScriptInfo, &'static str)> {
+    vec![
+        (
+            ScriptInfo {
+                id: "export_inscriptions_csv".to_string(),
+                name: "Export inscriptions to CSV".to_string(),
+                description: "Exports every inscription held by an address to a CSV file. \
+                    Argument: the address to export."
+                    .to_string(),
+                language: "python".to_string(),
+                regtest_only: false,
+            },
+            include_str!("../scripts/export_inscriptions_csv.py"),
+        ),
+        (
+            ScriptInfo {
+                id: "alert_node_behind".to_string(),
+                name: "Alert when the node falls behind".to_string(),
+                description: "Exits non-zero (suitable for a scheduled task) if Bitcoin Core \
+                    hasn't caught up to its own peers' tip. Optional argument: max blocks \
+                    behind before alerting (default 2)."
+                    .to_string(),
+                language: "python".to_string(),
+                regtest_only: false,
+            },
+            include_str!("../scripts/alert_node_behind.py"),
+        ),
+        (
+            ScriptInfo {
+                id: "disk_usage_report".to_string(),
+                name: "Daily disk-usage report".to_string(),
+                description: "Reports how much space this environment is using and how much \
+                    is free on the volume, warning if free space is low."
+                    .to_string(),
+                language: "python".to_string(),
+                regtest_only: false,
+            },
+            include_str!("../scripts/disk_usage_report.py"),
+        ),
+    ]
+}
+
+#[tauri::command]
+fn list_scripts() -> Vec<ScriptInfo> {
+    built_in_scripts()
+        .into_iter()
+        .map(|(info, _)| info)
+        .collect()
+}
+
+/// Whether each interpreter the script runner supports is actually
+/// usable on this machine (docs/SPEC.md item 6: "Detect whether Python
+/// and Node are installed... bash is unavailable on stock Windows, so
+/// say so") -- a real probe (`nk_scripts::detect_interpreters`), not a
+/// PATH-presence guess; see DECISIONS.md for why that distinction
+/// matters (Windows' Python Store stub, the WSL `bash.exe` stub).
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct InterpreterAvailability {
+    pub language: String,
+    pub available: bool,
+}
+
+#[tauri::command]
+async fn list_available_interpreters(
+    executor: tauri::State<'_, Executor>,
+) -> Result<Vec<InterpreterAvailability>, TypedError> {
+    let found = nk_scripts::detect_interpreters(&executor, "system").await;
+    Ok(nk_scripts::Interpreter::ALL
+        .iter()
+        .map(|interpreter| InterpreterAvailability {
+            language: format!("{interpreter:?}").to_lowercase(),
+            available: found.iter().any(|d| d.interpreter == *interpreter),
+        })
+        .collect())
+}
+
+fn scripts_root() -> std::path::PathBuf {
+    data_root().join("scripts")
+}
+
+/// Runs a built-in script (docs/SPEC.md item 6) against `chain`'s
+/// environment. Refuses outright if the script is `regtest_only` and
+/// `chain` isn't Regtest -- re-checked here regardless of what the
+/// frontend already knew, same "the backend is the enforcement point"
+/// shape as `console_run`. Does not require bitcoind/ord to be
+/// running: a script that needs one will simply get a connection error
+/// from it, same as a user's own script would.
+#[tauri::command]
+async fn run_script(
+    chain: Chain,
+    script_id: String,
+    args: Vec<String>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<String, TypedError> {
+    let (info, source) = built_in_scripts()
+        .into_iter()
+        .find(|(info, _)| info.id == script_id)
+        .ok_or_else(|| TypedError::from(format!("unknown script: {script_id}")))?;
+
+    if info.regtest_only && chain != Chain::Regtest {
+        return Err(TypedError::from(format!(
+            "\"{}\" is restricted to Regtest -- not available on {chain:?}.",
+            info.name
+        )));
+    }
+
+    let interpreter = match info.language.as_str() {
+        "python" => nk_scripts::Interpreter::Python,
+        other => {
+            return Err(TypedError::from(format!(
+                "unsupported script language: {other}"
+            )))
+        }
+    };
+    let found = nk_scripts::detect_interpreters(&executor, "system").await;
+    let detected = found
+        .into_iter()
+        .find(|d| d.interpreter == interpreter)
+        .ok_or_else(|| {
+            TypedError::from(format!(
+                "No working {} interpreter was found on this machine.",
+                info.language
+            ))
+        })?;
+
+    let environment = Environment::new_default(chain, &environment_data_root(&store));
+    let cookie_path = environment.bitcoin_cookie_path();
+    let rpc_url = format!("http://127.0.0.1:{}", environment.rpc_port);
+    let ord_url = format!("http://127.0.0.1:{}", environment.ord_port);
+    let env_vars = nk_scripts::script_env_vars(&environment.name, &rpc_url, &cookie_path, &ord_url);
+
+    let dir = scripts_root();
+    std::fs::create_dir_all(&dir).map_err(|e| TypedError::from(e.to_string()))?;
+    let script_path = dir.join(format!("{script_id}.{}", interpreter.file_extension()));
+    std::fs::write(&script_path, source).map_err(|e| TypedError::from(e.to_string()))?;
+
+    let outcome = nk_scripts::run_script(
+        &executor,
+        &detected,
+        &script_path,
+        args,
+        env_vars,
+        &environment.name,
+    )
+    .await
+    .map_err(|e| TypedError::from(e.to_string()))?;
+
+    let mut output = String::from_utf8_lossy(&outcome.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&outcome.stderr);
+    if !stderr.is_empty() {
+        output.push_str(&stderr);
+    }
+    if outcome.exit_code != Some(0) {
+        return Err(TypedError::from(format!(
+            "script exited with status {:?}:\n{output}",
+            outcome.exit_code
+        )));
+    }
+    Ok(output)
+}
+
 /// Fee-rate estimate in sat/vB for the Send screen (docs/SPEC.md item
 /// 3: "estimates only from the local node"). `conf_target` is in
 /// blocks (a smaller number asks for a faster, more expensive
@@ -1837,6 +2024,9 @@ pub fn run() {
             wallet_send,
             console_classify,
             console_run,
+            list_scripts,
+            list_available_interpreters,
+            run_script,
             wallet_fee_estimate,
             wallet_inscribe_dry_run,
             wallet_inscribe,
@@ -1886,5 +2076,7 @@ mod tests {
         nk_exec::ExecEvent::export_all(&config).unwrap();
         DownloadProgress::export_all(&config).unwrap();
         ConsoleCommandPreview::export_all(&config).unwrap();
+        ScriptInfo::export_all(&config).unwrap();
+        InterpreterAvailability::export_all(&config).unwrap();
     }
 }

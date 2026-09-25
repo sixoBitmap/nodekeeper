@@ -7,7 +7,8 @@
     "wallet": "Wallet",
     "inscribe": "Inscribe",
     "explorer": "Explorer",
-    "console": "Console"
+    "console": "Console",
+    "scripts": "Scripts"
   },
   "theme": {
     "toggleToLight": "Switch to light theme",
@@ -306,6 +307,17 @@
     "confirmTitle": "Run this command?",
     "confirmDescription": "This changes state and can't be undone from here.",
     "confirmDescriptionWithPreview": "Preview of what this would do:\n{{preview}}"
+  },
+  "scripts": {
+    "title": "Scripts",
+    "warning": "Scripts are trusted code with full control over this node: they can read your data, spend funds, and change settings. Only run scripts you trust.",
+    "regtestOnly": "Regtest only",
+    "argsPlaceholder": "Arguments (space-separated)",
+    "run": "Run",
+    "running": "Running…",
+    "noOutput": "(no output)",
+    "interpreterUnavailable": "No working {{language}} was found on this machine -- install it to run this script.",
+    "blockedByRegtest": "This script is restricted to Regtest. Switch environment to run it."
   },
   "diskMonitor": {
     "title": "Disk usage",

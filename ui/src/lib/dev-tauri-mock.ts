@@ -118,6 +118,34 @@ function mockWallet(chain: Chain): { address: string; balance: WalletBalance } {
   };
 }
 
+// Mirrors src-tauri/src/lib.rs's built_in_scripts() exactly (id/name/
+// description/language/regtest_only) so the dev preview shows the
+// same 3 example scripts the real app does.
+const MOCK_SCRIPTS = [
+  {
+    id: "export_inscriptions_csv",
+    name: "Export inscriptions to CSV",
+    description: "Exports every inscription held by an address to a CSV file. Argument: the address to export.",
+    language: "python",
+    regtest_only: false,
+  },
+  {
+    id: "alert_node_behind",
+    name: "Alert when the node falls behind",
+    description:
+      "Exits non-zero (suitable for a scheduled task) if Bitcoin Core hasn't caught up to its own peers' tip. Optional argument: max blocks behind before alerting (default 2).",
+    language: "python",
+    regtest_only: false,
+  },
+  {
+    id: "disk_usage_report",
+    name: "Daily disk-usage report",
+    description: "Reports how much space this environment is using and how much is free on the volume, warning if free space is low.",
+    language: "python",
+    regtest_only: false,
+  },
+];
+
 const MOCK_INSCRIPTIONS = [
   { id: "0000000000000000000000000000000000000000000000000000000000000000i0", postage: 10_000 },
   { id: "1111111111111111111111111111111111111111111111111111111111111111i0", postage: 546 },
@@ -557,6 +585,19 @@ export function installDevTauriMockIfNeeded() {
       case "console_run": {
         const { commandLine } = args as { commandLine: string; chain: Chain; dryRun: boolean };
         return { mock: true, ranInDevPreview: commandLine };
+      }
+      case "list_scripts":
+        return MOCK_SCRIPTS;
+      case "list_available_interpreters":
+        return [
+          { language: "python", available: true },
+          { language: "node", available: true },
+          { language: "bash", available: false },
+        ];
+      case "run_script": {
+        const { scriptId, args: scriptArgs } = args as { scriptId: string; args: string[]; chain: Chain };
+        const script = MOCK_SCRIPTS.find((s) => s.id === scriptId);
+        return `[dev preview] ran "${script?.name ?? scriptId}" with args: ${scriptArgs.join(" ") || "(none)"}\n(no real interpreter or node in this preview -- this is a fake result)`;
       }
       default:
         throw new Error(`dev-tauri-mock: no mock for IPC command "${cmd}"`);

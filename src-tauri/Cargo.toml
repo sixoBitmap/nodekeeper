@@ -33,6 +33,7 @@ nk-proc = { workspace = true }
 nk-rpc = { workspace = true }
 nk-ord = { workspace = true }
 nk-verify = { workspace = true }
+nk-scripts = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 zeroize = "1"
 base64 = "0.22"

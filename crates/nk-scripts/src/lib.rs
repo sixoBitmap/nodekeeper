@@ -129,22 +129,26 @@ pub enum ScriptError {
     Exec(#[from] ExecError),
 }
 
-/// Runs `script_path` with `interpreter`, passing `env_vars` (build
-/// with `script_env_vars`). The caller has already done the "regtest
-/// only" check and shown the mandatory warning -- this just runs what
-/// it's given, same division of responsibility as `nk_ord::wallet::
+/// Runs `script_path` with `interpreter`, passing `script_args` as its
+/// command-line arguments and `env_vars` (build with
+/// `script_env_vars`). The caller has already done the "regtest only"
+/// check and shown the mandatory warning -- this just runs what it's
+/// given, same division of responsibility as `nk_ord::wallet::
 /// run_console_subcommand`.
 pub async fn run_script(
     executor: &Executor,
     interpreter: &DetectedInterpreter,
     script_path: &Path,
+    script_args: Vec<String>,
     env_vars: Vec<(String, String)>,
     environment_name: &str,
 ) -> Result<ExecOutcome, ScriptError> {
+    let mut args = vec![script_path.display().to_string()];
+    args.extend(script_args);
     let outcome = executor
         .execute(CommandSpec {
             program: interpreter.program.clone(),
-            args: vec![script_path.display().to_string()],
+            args,
             stdin: None,
             environment: environment_name.to_string(),
             source: CommandSource::Script,
@@ -260,9 +264,16 @@ mod tests {
             Path::new("/data/regtest/.cookie"),
             "http://127.0.0.1:8081",
         );
-        let outcome = run_script(&executor, &detected, &script_path, env_vars, "regtest")
-            .await
-            .unwrap();
+        let outcome = run_script(
+            &executor,
+            &detected,
+            &script_path,
+            vec![],
+            env_vars,
+            "regtest",
+        )
+        .await
+        .unwrap();
 
         assert_eq!(outcome.exit_code, Some(0));
         assert_eq!(String::from_utf8_lossy(&outcome.stdout).trim(), "regtest");

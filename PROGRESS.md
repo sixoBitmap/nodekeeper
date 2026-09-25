@@ -1497,19 +1497,46 @@ Backend — Script runner foundation
       child process, not just that the field was set). See
       DECISIONS.md "Phase 7 — script runner foundation" for the full
       write-up.
-- [ ] `run_script` Tauri command wiring: choose environment before
-      running, "regtest only" enforced by a flag Nodekeeper itself
-      stores per script (never read from the script file's own
-      content, which a user could edit to lie about it)
-- [ ] Import/create warning: scripts are trusted code with full node
-      control
-- [ ] Script library UI: list, import, the mandatory warning, run
-      button, live output (the executor's existing event broadcast
-      already streams script output to the Live Command Monitor for
-      free once `run_script` is wired to a Tauri command -- this item
-      is the dedicated Scripts screen on top of that)
-- [ ] 3 example scripts: export inscriptions to CSV, alert when the
-      node falls behind, daily disk-usage report
+- [x] `run_script`/`list_scripts`/`list_available_interpreters` Tauri
+      commands: `regtest_only` is a field on `ScriptInfo` Nodekeeper
+      itself defines per script (never read from the script file's own
+      content, which a user could edit to lie about it), re-checked by
+      `run_script` itself against `chain` regardless of what the
+      frontend already knew -- same "the backend is the enforcement
+      point" shape as `console_run`. Built-in scripts are embedded at
+      compile time (`include_str!`) and rewritten fresh to
+      `data_root()/scripts/` on every run, so there's no risk of a
+      stale on-disk copy surviving an app update.
+- [x] 3 example scripts, all Python, all read-only (none need
+      `regtest_only: true` -- nothing they do is unsafe on mainnet):
+      export inscriptions to CSV (`/address/<addr>` +
+      `/inscription/<id>` via ord's HTTP API), alert when the node
+      falls behind (`getblockchaininfo` via a hand-rolled cookie-auth
+      JSON-RPC call, since a script has no access to `nk-rpc`), daily
+      disk-usage report (derives the data directory from
+      `NKP_COOKIE_PATH`'s parent rather than needing a 5th env var).
+      The RPC cookie-auth wire protocol (Basic Auth from the cookie
+      file's `user:password`, JSON-RPC 1.0 POST body) was verified live
+      against a real regtest bitcoind using a Node.js stand-in, since
+      real Python isn't installed on this dev machine (see the
+      script-runner-foundation DECISIONS.md entry) -- confirmed correct
+      before trusting the equivalent Python `urllib`/`base64` code.
+- [x] Script library UI: `ScriptsScreen` -- the mandatory "scripts are
+      trusted code" warning shown persistently at the top (not a one-
+      time dismissable gate), one card per script with its description,
+      a `regtest_only` badge when applicable, an argument input, and a
+      Run button disabled when the required interpreter isn't available
+      or the environment doesn't satisfy `regtest_only`. No live-output
+      UI of its own needed: `run_script` goes through the same executor
+      every other command does, so its output already streams to the
+      Live Command Monitor for free -- this screen only renders the
+      final result once the run completes. Live-verified in the browser
+      dev preview: typed an address into the CSV-export card's argument
+      field, ran it, got the mocked result back inline.
+- [ ] Import/create UI for the user's own scripts (today: only the 3
+      built-ins are listed: `list_scripts` has no notion of a user-
+      added script yet, and there's no file-picker/import flow or
+      per-script `regtest_only` toggle for one)
 
 Security self-review (docs/SPEC.md Phase 7's own "Done when" item) --
 do this once the console's safety layer is actually built, same as

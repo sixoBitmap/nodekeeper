@@ -13,12 +13,13 @@ import { FirstRunDisclaimer } from "@/components/FirstRunDisclaimer";
 import { IndexOptionsScreen } from "@/components/IndexOptionsScreen";
 import { InscribeStudioScreen } from "@/components/InscribeStudioScreen";
 import { LiveCommandMonitor } from "@/components/LiveCommandMonitor";
+import { ScriptsScreen } from "@/components/ScriptsScreen";
 import { SystemCheckScreen } from "@/components/SystemCheckScreen";
 import { WalletScreen } from "@/components/WalletScreen";
 import { selectedEnvironment, useEnvironmentStore } from "@/store/environment";
 import { useThemeStore } from "@/store/theme";
 
-type Screen = "dashboard" | "wallet" | "inscribe" | "explorer" | "console";
+type Screen = "dashboard" | "wallet" | "inscribe" | "explorer" | "console" | "scripts";
 type WizardStep = "systemCheck" | "binarySetup" | "indexOptions" | "done";
 
 const DISCLAIMER_SETTING_KEY = "disclaimer_acknowledged";
@@ -105,6 +106,13 @@ function App() {
               >
                 {t("nav.console")}
               </Button>
+              <Button
+                variant={screen === "scripts" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setScreen("scripts")}
+              >
+                {t("nav.scripts")}
+              </Button>
             </nav>
           )}
         </div>
@@ -135,8 +143,10 @@ function App() {
             <InscribeStudioScreen key={selected.chain} environment={selected} />
           ) : screen === "explorer" ? (
             <ExplorerScreen key={selected.chain} environment={selected} />
-          ) : (
+          ) : screen === "console" ? (
             <ConsoleScreen key={selected.chain} environment={selected} />
+          ) : (
+            <ScriptsScreen key={selected.chain} environment={selected} />
           )
         ) : wizardStep === "indexOptions" ? (
           <IndexOptionsScreen
