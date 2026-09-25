@@ -675,6 +675,11 @@ export function installDevTauriMockIfNeeded() {
         rememberedPassphrases.delete("regtest");
         return undefined;
       }
+      case "set_prevent_sleep":
+        // Nothing to actually simulate in the dev-browser preview --
+        // there's no real OS-level sleep guard to hold here, same
+        // reasoning as every other native-only affordance in this file.
+        return undefined;
       case "list_scripts":
         return MOCK_SCRIPTS;
       case "list_available_interpreters":

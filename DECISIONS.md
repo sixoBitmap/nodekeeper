@@ -3049,6 +3049,55 @@ applied for the rest of this session: don't edit `Cargo.toml`/`lib.rs`
 again while a background cargo invocation covering them is still
 running.
 
+### Prevent sleep during sync (Phase 8, 2026-09-25)
+
+**VERIFY: no official Tauri sleep-prevention plugin exists.** Searched
+specifically for one before reaching for a third-party crate --
+confirmed via `tauri-apps/tauri` issue #3697 (open feature request,
+unresolved) that this is a known gap in Tauri itself, not something
+this project missed. Chose `keepawake` (segevfiner/keepawake-rs,
+0.6.1): a cross-platform RAII guard mirroring `caffeinate`/
+`systemd-inhibit`/PowerToys Awake, backed by Windows `PowerRequest`,
+macOS IOKit, and Linux D-Bus under the hood depending on target OS.
+Confirmed compiling with the guard held inside a `Mutex` in managed
+Tauri app state (`PreventSleepGuard`) -- its `Send`-ness wasn't
+documented anywhere findable, so real compilation was the actual
+verification, not a doc read.
+
+**Scope: `sleep(true)` only, not `display(true)`.** The crate
+distinguishes preventing idle *system* sleep from keeping the
+*display* on. This is a background sync a user isn't necessarily
+watching, so only system sleep is inhibited -- keeping the screen lit
+the whole time would waste more power than the feature is meant to
+save, and nothing in docs/SPEC.md item 8 asks for that.
+
+**"During sync" covers both bitcoind's IBD and ord's indexing pass.**
+The spec's literal wording ("prevent sleep during sync") could be read
+as Bitcoin Core's initial sync only, but ord's own initial indexing
+pass can also run for hours depending on which index options are
+enabled -- treating only one of the two as "syncing" would let the
+machine sleep mid-index for no principled reason, so both feed the
+same aggregate signal.
+
+**No Settings screen exists yet to host the toggle.** docs/SPEC.md
+item 9 ("Settings and maintenance") -- where "prevent sleep" and
+similar toggles would naturally live long-term -- is a later phase,
+not built. Rather than build a whole new screen just to hold one
+checkbox (real scope creep for this task), the toggle was added to the
+Overview screen, which already functions as this app's closest thing
+to a cross-environment/global-concerns home (resource summary, stop
+all). Revisit once item 9's Settings screen exists.
+
+**Reused `NotificationWatcher`'s existing poll instead of a second
+loop.** That component already fetches `node_status`/`ord_status` for
+every environment every 15s (for the sync/ready/disk notifications
+above); it now also reports each environment's syncing/indexing state
+up to its parent via a callback, which aggregates across environments
+and calls the new `set_prevent_sleep` command only when the combined
+"should the OS stay awake" value actually changes -- not on every poll
+tick regardless of change, and not via a second, redundant background
+poll just for this.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

@@ -1550,12 +1550,15 @@ Backend — Script runner foundation
 
 ## Phase 8 — Multi-environment UI and Test Lab
 
-In progress. Tasks (one at a time: implement -> test -> quality gate ->
-commit -> tick). docs/SPEC.md's "Build:" line for this phase covers
-two of item 10/11's full scope plus three sub-parts of item 8
+**Done** (2026-09-25). docs/SPEC.md's "Build:" line for this phase
+covers two of item 10/11's full scope plus three sub-parts of item 8
 (notifications, tray, prevent-sleep) -- item 8's other sub-parts
 (plain-language errors, diagnostics export, accessibility) already
 shipped earlier or belong to a later phase per its own summary line.
+Walkthrough (d) is the one named piece of item 11 intentionally not
+built (needs multi-wallet support -- see DECISIONS.md and the Backlog
+section below); everything else in this phase's own task list is
+checked off.
 
 Frontend — Multi-environment UI (docs/SPEC.md item 10) — **done**
 - [x] `OverviewScreen`: one card per environment (reusing
@@ -1736,9 +1739,33 @@ item 8's Phase-8 sub-parts)
       flow still need a real manual check by the project owner
       (`just dev` or `just build-app`) the next time this runs outside
       this session.
-- [ ] Optional "prevent sleep during sync" setting -- VERIFY the
-      cross-platform mechanism (Tauri plugin vs. platform-specific
-      calls)
+- [x] Optional "prevent sleep during sync" setting. VERIFY: no official
+      Tauri plugin exists for this (confirmed via search -- open
+      feature request, tauri-apps/tauri#3697, still unresolved); used
+      the `keepawake` crate (0.6.1, cross-platform RAII guard --
+      Windows PowerRequest / macOS IOKit / Linux D-Bus under the hood,
+      confirmed compiling with the guard held in a `Mutex` inside
+      managed Tauri state). Backend: `set_prevent_sleep(enabled)`
+      creates/drops a `keepawake::KeepAwake` guard (`sleep(true)`,
+      display sleep left alone -- this is a background sync, not video
+      playback). Frontend: a small `usePreventSleepStore` (Zustand,
+      backed by `get_setting`/`set_setting`) holds the user's on/off
+      preference; a toggle lives on the Overview screen (the closest
+      thing to a cross-environment settings home today -- no dedicated
+      Settings screen exists yet, that's docs/SPEC.md item 9, a later
+      phase). `NotificationWatcher`'s existing per-environment poll
+      (already fetching `node_status`/`ord_status` every 15s for the
+      notification transitions above) also reports each environment's
+      syncing/indexing state up to a parent aggregator, which calls
+      `set_prevent_sleep(settingOn && anySyncing)` only when that
+      combined value actually changes -- no second poll loop. Live-
+      verified in the browser dev preview: the toggle persists across
+      navigation, the command fires correctly on every relevant state
+      change (confirmed via a temporary log statement, since the real
+      OS-level sleep-inhibition effect itself isn't observable through
+      any tool available this session), and `node_status`'s
+      `initial_block_download` correctly reports `true` right after a
+      node starts.
 
 Security self-review at the end of this phase isn't explicitly
 required by CLAUDE.md's "Phases 2, 5, and 7" list, but Test Lab's

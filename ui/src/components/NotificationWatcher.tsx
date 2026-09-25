@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
@@ -8,6 +8,7 @@ import type { NodeStatus } from "@/bindings/NodeStatus";
 import type { OrdStatus } from "@/bindings/OrdStatus";
 import { LOW_SPACE_WARNING_BYTES } from "@/components/DiskMonitor";
 import { isRealTauriRuntime } from "@/hooks/useDragDropFiles";
+import { usePreventSleepStore } from "@/store/preventSleep";
 
 // docs/SPEC.md item 8: "Your node is fully synced," "ord is ready,"
 // disk space warnings -- these are background events, not urgent
@@ -45,10 +46,34 @@ async function notify(title: string, body: string) {
  * should still notify them.
  */
 export function NotificationWatcher({ environments }: { environments: Environment[] }) {
+  const preventSleepEnabled = usePreventSleepStore((s) => s.enabled);
+  const initPreventSleep = usePreventSleepStore((s) => s.init);
+  // Which environments are currently syncing/indexing, keyed by chain
+  // -- fed by each child's poll (they already fetch this status for
+  // the notification transitions below) rather than a second poll
+  // loop just for this.
+  const [syncing, setSyncing] = useState<Partial<Record<Chain, boolean>>>({});
+
+  useEffect(() => {
+    void initPreventSleep();
+  }, [initPreventSleep]);
+
+  const anySyncing = Object.values(syncing).some(Boolean);
+  useEffect(() => {
+    void invoke("set_prevent_sleep", { enabled: preventSleepEnabled && anySyncing });
+  }, [preventSleepEnabled, anySyncing]);
+
   return (
     <>
       {environments.map((env) => (
-        <EnvironmentNotificationWatcher key={env.chain} chain={env.chain} environmentName={env.name} />
+        <EnvironmentNotificationWatcher
+          key={env.chain}
+          chain={env.chain}
+          environmentName={env.name}
+          onSyncingChange={(isSyncing) =>
+            setSyncing((prev) => (prev[env.chain] === isSyncing ? prev : { ...prev, [env.chain]: isSyncing }))
+          }
+        />
       ))}
     </>
   );
@@ -57,9 +82,11 @@ export function NotificationWatcher({ environments }: { environments: Environmen
 function EnvironmentNotificationWatcher({
   chain,
   environmentName,
+  onSyncingChange,
 }: {
   chain: Chain;
   environmentName: string;
+  onSyncingChange: (syncing: boolean) => void;
 }) {
   const { t } = useTranslation();
   // Only fires "ready"/"synced" on a genuine transition observed this
@@ -80,31 +107,36 @@ function EnvironmentNotificationWatcher({
       ]);
       if (cancelled) return;
 
+      let nodeSyncing = false;
+      let ordIndexing = false;
+
       if (nodeRunning) {
         const status = await invoke<NodeStatus>("node_status", { chain }).catch(() => null);
-        if (cancelled || !status) return;
+        if (cancelled) return;
+        if (status) {
+          nodeSyncing = status.initial_block_download;
+          if (nodeSyncing) {
+            wasSyncing.current = true;
+          } else if (wasSyncing.current) {
+            wasSyncing.current = false;
+            void notify(
+              t("notifications.nodeSynced.title"),
+              t("notifications.nodeSynced.body", { name: environmentName }),
+            );
+          }
 
-        if (status.initial_block_download) {
-          wasSyncing.current = true;
-        } else if (wasSyncing.current) {
-          wasSyncing.current = false;
-          void notify(
-            t("notifications.nodeSynced.title"),
-            t("notifications.nodeSynced.body", { name: environmentName }),
-          );
-        }
-
-        const diskLow =
-          status.disk.free_on_volume_bytes !== null &&
-          status.disk.free_on_volume_bytes < LOW_SPACE_WARNING_BYTES;
-        if (diskLow && !warnedDisk.current) {
-          warnedDisk.current = true;
-          void notify(
-            t("notifications.diskLow.title"),
-            t("notifications.diskLow.body", { name: environmentName }),
-          );
-        } else if (!diskLow) {
-          warnedDisk.current = false;
+          const diskLow =
+            status.disk.free_on_volume_bytes !== null &&
+            status.disk.free_on_volume_bytes < LOW_SPACE_WARNING_BYTES;
+          if (diskLow && !warnedDisk.current) {
+            warnedDisk.current = true;
+            void notify(
+              t("notifications.diskLow.title"),
+              t("notifications.diskLow.body", { name: environmentName }),
+            );
+          } else if (!diskLow) {
+            warnedDisk.current = false;
+          }
         }
       } else {
         wasSyncing.current = false;
@@ -112,20 +144,28 @@ function EnvironmentNotificationWatcher({
 
       if (ordRunning) {
         const status = await invoke<OrdStatus>("ord_status", { chain }).catch(() => null);
-        if (cancelled || !status) return;
-
-        if (!status.caught_up) {
-          wasIndexing.current = true;
-        } else if (wasIndexing.current) {
-          wasIndexing.current = false;
-          void notify(
-            t("notifications.ordReady.title"),
-            t("notifications.ordReady.body", { name: environmentName }),
-          );
+        if (cancelled) return;
+        if (status) {
+          ordIndexing = !status.caught_up;
+          if (ordIndexing) {
+            wasIndexing.current = true;
+          } else if (wasIndexing.current) {
+            wasIndexing.current = false;
+            void notify(
+              t("notifications.ordReady.title"),
+              t("notifications.ordReady.body", { name: environmentName }),
+            );
+          }
         }
       } else {
         wasIndexing.current = false;
       }
+
+      // docs/SPEC.md item 8: "prevent sleep during sync" -- reports
+      // both Core's initial sync and ord's initial indexing pass as
+      // "syncing," since either can run for hours and both are exactly
+      // the kind of background catch-up this setting exists for.
+      onSyncingChange(nodeSyncing || ordIndexing);
     };
 
     void poll();
@@ -134,6 +174,12 @@ function EnvironmentNotificationWatcher({
       cancelled = true;
       window.clearInterval(id);
     };
+    // `onSyncingChange` is a fresh closure every render of the parent
+    // (it updates that render's `syncing` map) but always does the
+    // same thing for this fixed `chain` -- omitted so a sibling
+    // environment's syncing change doesn't tear down and restart this
+    // one's poll interval.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chain, environmentName, t]);
 
   return null;

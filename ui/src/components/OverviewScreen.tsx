@@ -6,11 +6,13 @@ import type { NodeStatus } from "@/bindings/NodeStatus";
 import type { OrdStatus } from "@/bindings/OrdStatus";
 import type { SystemCheck } from "@/bindings/SystemCheck";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { StatusBadge, type StatusVariant } from "@/components/StatusBadge";
 import { useDashboardStatus } from "@/hooks/useDashboardStatus";
 import { useOrdStatus } from "@/hooks/useOrdStatus";
 import { chainBgClass, chainTextClass } from "@/lib/environment-colors";
 import { formatBytes } from "@/lib/format";
+import { usePreventSleepStore } from "@/store/preventSleep";
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -25,6 +27,9 @@ export function OverviewScreen({ environments }: { environments: Environment[] }
   const [systemCheck, setSystemCheck] = useState<SystemCheck | null>(null);
   const [runningCount, setRunningCount] = useState(0);
   const [stoppingAll, setStoppingAll] = useState(false);
+  const preventSleepEnabled = usePreventSleepStore((s) => s.enabled);
+  const preventSleepLoaded = usePreventSleepStore((s) => s.loaded);
+  const setPreventSleepEnabled = usePreventSleepStore((s) => s.setEnabled);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,6 +101,16 @@ export function OverviewScreen({ environments }: { environments: Environment[] }
           )}
         </div>
       )}
+
+      <label className="flex items-center gap-2 text-sm">
+        <Checkbox
+          checked={preventSleepEnabled}
+          disabled={!preventSleepLoaded}
+          onCheckedChange={(v) => setPreventSleepEnabled(v === true)}
+        />
+        {t("overview.preventSleep")}
+      </label>
+      <p className="-mt-2 text-xs text-muted-foreground">{t("overview.preventSleepHint")}</p>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {environments.map((env) => (

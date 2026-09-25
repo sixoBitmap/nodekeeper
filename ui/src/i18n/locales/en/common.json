@@ -99,7 +99,9 @@
     "stopAll": "Stop all",
     "resourceSummary": "{{running}} service(s) running -- {{available}} RAM available",
     "resourceWarning": "Several environments are running and available memory is low. Consider stopping some before starting more.",
-    "diskUsed": "{{size}} used"
+    "diskUsed": "{{size}} used",
+    "preventSleep": "Prevent sleep during sync",
+    "preventSleepHint": "Keeps this computer awake only while a node is syncing or ord is indexing -- released automatically once everything has caught up."
   },
   "testLab": {
     "title": "Test Lab",

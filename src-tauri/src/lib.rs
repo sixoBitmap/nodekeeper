@@ -2053,6 +2053,46 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+/// docs/SPEC.md item 8: "Optional 'prevent sleep during sync' setting."
+/// Holds at most one `keepawake::KeepAwake` RAII guard -- creating one
+/// while `enabled(true)` inhibits system sleep (not display sleep;
+/// this is a background sync, not video playback) until it's dropped,
+/// which happens automatically the moment `set_prevent_sleep(false)`
+/// replaces the slot with `None`. The frontend (`PreventSleepWatcher`)
+/// owns deciding *when* to call this -- the setting being on isn't
+/// enough by itself, only "on AND something is actually syncing right
+/// now" should hold the guard.
+struct PreventSleepGuard(Mutex<Option<keepawake::KeepAwake>>);
+
+impl PreventSleepGuard {
+    fn new() -> Self {
+        Self(Mutex::new(None))
+    }
+}
+
+#[tauri::command]
+fn set_prevent_sleep(
+    enabled: bool,
+    guard: tauri::State<'_, PreventSleepGuard>,
+) -> Result<(), TypedError> {
+    let mut slot = guard.0.lock().expect("mutex should not be poisoned");
+    if enabled {
+        if slot.is_none() {
+            let awake = keepawake::Builder::default()
+                .sleep(true)
+                .reason("Bitcoin Core is syncing")
+                .app_name("Nodekeeper")
+                .app_reverse_domain("com.nodekeeper.desktop")
+                .create()
+                .map_err(|e| TypedError::from(e.to_string()))?;
+            *slot = Some(awake);
+        }
+    } else {
+        *slot = None;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     std::fs::create_dir_all(data_root()).expect("failed to create data directory");
@@ -2072,6 +2112,7 @@ pub fn run() {
         .manage(executor.clone())
         .manage(node_manager)
         .manage(wallet_session)
+        .manage(PreventSleepGuard::new())
         .setup(move |app| {
             // Feeds every command the Live Command Monitor will show
             // (Phase 3) into the rolling history table (docs/SPEC.md
@@ -2201,6 +2242,7 @@ pub fn run() {
             page_debug_log_before,
             search_debug_log,
             list_command_history,
+            set_prevent_sleep,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
