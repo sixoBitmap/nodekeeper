@@ -5,6 +5,7 @@ import type { Chain } from "@/bindings/Chain";
 import type { TypedError } from "@/bindings/TypedError";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { ErrorPanel } from "@/components/ErrorPanel";
 import { friendlyError } from "@/lib/error-messages";
 
@@ -35,6 +36,17 @@ export function RestoreWalletForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<TypedError | null>(null);
 
+  // docs/SPEC.md SECURITY RULES: "All mainnet wallets are encrypted."
+  // Restoring creates a fresh, initially unencrypted local Core wallet
+  // just like create does, so it needs the same passphrase -- enforced
+  // backend-side too (Phase 5 security self-review, DECISIONS.md), this
+  // is the UI half.
+  const isMainnet = chain === "mainnet";
+  const [passphrase, setPassphrase] = useState("");
+  const [passphraseConfirm, setPassphraseConfirm] = useState("");
+  const passphraseMismatch =
+    isMainnet && passphrase.length > 0 && passphrase !== passphraseConfirm;
+
   const submit = () => {
     setBusy(true);
     setError(null);
@@ -42,9 +54,12 @@ export function RestoreWalletForm({
       chain,
       mnemonic: mnemonic.trim(),
       timestamp: hasHistory ? "0" : "now",
+      passphrase: isMainnet ? passphrase : null,
     })
       .then(() => {
         setMnemonic("");
+        setPassphrase("");
+        setPassphraseConfirm("");
         onRestored();
       })
       .catch((e: TypedError) => setError(e))
@@ -52,6 +67,8 @@ export function RestoreWalletForm({
   };
 
   const wordCount = mnemonic.trim().split(/\s+/).filter(Boolean).length;
+  const canSubmit =
+    wordCount >= 12 && (!isMainnet || (passphrase.length > 0 && !passphraseMismatch));
 
   return (
     <div className="space-y-3 rounded-md border border-border p-4">
@@ -88,15 +105,38 @@ export function RestoreWalletForm({
         {t("wallet.restoreHasHistory")}
       </label>
 
+      {isMainnet && (
+        <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+          <p className="text-xs text-muted-foreground">{t("wallet.encryption.mainnetNotice")}</p>
+          <label className="block space-y-1 text-sm">
+            <span>{t("wallet.encryption.passphraseLabel")}</span>
+            <Input
+              type="password"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+              autoComplete="new-password"
+            />
+          </label>
+          <label className="block space-y-1 text-sm">
+            <span>{t("wallet.encryption.passphraseConfirmLabel")}</span>
+            <Input
+              type="password"
+              value={passphraseConfirm}
+              onChange={(e) => setPassphraseConfirm(e.target.value)}
+              autoComplete="new-password"
+            />
+          </label>
+          {passphraseMismatch && (
+            <p className="text-xs text-destructive">{t("wallet.encryption.mismatch")}</p>
+          )}
+        </div>
+      )}
+
       <div className="flex gap-2">
         <Button variant="outline" className="flex-1" onClick={onCancel} disabled={busy}>
           {t("wallet.cancel")}
         </Button>
-        <Button
-          className="flex-1"
-          disabled={busy || wordCount < 12}
-          onClick={submit}
-        >
+        <Button className="flex-1" disabled={busy || !canSubmit} onClick={submit}>
           {t("wallet.restoreSubmit")}
         </Button>
       </div>

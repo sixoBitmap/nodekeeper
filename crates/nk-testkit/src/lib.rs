@@ -562,6 +562,127 @@ mod tests {
         fixture.stop().await.expect("bitcoind should stop cleanly");
     }
 
+    /// The exact sequence the real `create_wallet`/`restore_wallet`
+    /// Tauri commands now perform on mainnet (DECISIONS.md Phase 5
+    /// VERIFY, following the Phase 5 security self-review's finding
+    /// that mainnet wallets weren't actually being encrypted):
+    /// `ord wallet create` -> `encryptwallet` *immediately*, before
+    /// any other wallet use -- distinct from
+    /// `wallet_cli_create_fund_send_and_restore` above, which encrypts
+    /// only after a dry-run send has already happened. Proves the
+    /// mnemonic ord returns is still a correct, complete backup of the
+    /// wallet even when it's encrypted right away: a full mnemonic
+    /// restore into a separate wallet recovers the exact same funds.
+    #[tokio::test]
+    async fn encrypting_a_wallet_immediately_after_create_still_restores_correctly() {
+        let (Some(bitcoind_path), Some(ord_path)) = (
+            std::env::var_os("NK_TEST_BITCOIND"),
+            std::env::var_os("NK_TEST_ORD"),
+        ) else {
+            eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
+            return;
+        };
+        let bitcoind_path = std::path::PathBuf::from(bitcoind_path);
+        let ord_path = std::path::PathBuf::from(ord_path);
+
+        let mut fixture = RegtestFixture::start(&bitcoind_path)
+            .await
+            .expect("bitcoind should start");
+        fixture
+            .start_ord(&ord_path)
+            .await
+            .expect("ord should start and become ready");
+
+        let executor = Executor::new();
+        let cookie_path = fixture.environment.bitcoin_cookie_path();
+        let bitcoin_datadir = fixture.environment.bitcoin_datadir_arg();
+        let server_url = format!("http://127.0.0.1:{}", fixture.environment.ord_port);
+        let target = nk_ord::wallet::WalletTarget {
+            binary_path: &ord_path,
+            environment: &fixture.environment,
+            cookie_path: &cookie_path,
+            bitcoin_datadir: &bitcoin_datadir,
+            server_url: &server_url,
+            wallet_name: "immediate-encrypt",
+        };
+
+        let created = nk_ord::wallet::create_wallet(&executor, &target)
+            .await
+            .expect("wallet create should succeed");
+        let mnemonic = created
+            .get("mnemonic")
+            .and_then(|v| v.as_str())
+            .expect("create response should include a mnemonic")
+            .to_string();
+
+        let receive = nk_ord::wallet::wallet_receive(&executor, &target, None)
+            .await
+            .expect("wallet receive should succeed");
+        let address = receive["addresses"][0]
+            .as_str()
+            .expect("receive response should include an address")
+            .to_string();
+
+        // Encrypt immediately -- nothing else has touched this wallet
+        // yet, matching exactly what `create_wallet` now does.
+        fixture
+            .rpc
+            .encrypt_wallet("immediate-encrypt", "immediate-encrypt-passphrase")
+            .await
+            .expect("encrypt_wallet should succeed right after create");
+
+        fixture
+            .rpc
+            .generate_to_address(101, &address)
+            .await
+            .expect("mining to fund the wallet should succeed");
+        nk_proc::wait_until_caught_up(
+            fixture.ord.as_ref().unwrap(),
+            &fixture.rpc,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("ord should catch up after mining");
+
+        let funded_balance = nk_ord::wallet::wallet_balance(&executor, &target)
+            .await
+            .expect("wallet balance should succeed")["total"]
+            .as_u64()
+            .unwrap_or(0);
+        assert!(
+            funded_balance > 0,
+            "funded wallet should have a nonzero balance"
+        );
+
+        let restored_target = nk_ord::wallet::WalletTarget {
+            binary_path: &ord_path,
+            environment: &fixture.environment,
+            cookie_path: &cookie_path,
+            bitcoin_datadir: &bitcoin_datadir,
+            server_url: &server_url,
+            wallet_name: "immediate-encrypt-restored",
+        };
+        nk_ord::wallet::restore_wallet(&executor, &restored_target, &mnemonic, "0")
+            .await
+            .expect("restore from the pre-encryption mnemonic should succeed");
+        let restored_balance = nk_ord::wallet::wallet_balance(&executor, &restored_target)
+            .await
+            .expect("restored wallet balance should succeed")["total"]
+            .as_u64()
+            .unwrap_or(0);
+        assert_eq!(
+            restored_balance, funded_balance,
+            "the mnemonic shown before encryption should still fully recover the \
+             wallet's funds after encryption"
+        );
+
+        fixture
+            .stop_ord()
+            .await
+            .expect("ord should stop gracefully");
+        fixture.stop().await.expect("bitcoind should stop cleanly");
+    }
+
     /// Real coverage for the Wallet screen's "does this chain already
     /// have a wallet" check: `false` before `create_wallet`, `true`
     /// immediately after. The actual "survives a full bitcoind/ord

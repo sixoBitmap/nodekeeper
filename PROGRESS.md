@@ -952,23 +952,40 @@ Wallet screen (frontend + backend orchestration)
       for the restored chain. "Multiple named wallets" not done yet --
       every wallet command hardcodes `DEFAULT_WALLET_NAME = "ord"`
       for now, tracked as a separate follow-up.
-- [ ] **Enforce mainnet wallet encryption.** Found by the Phase 5
-      security self-review below, not yet fixed: `create_wallet`
-      creates a plain, unencrypted wallet for every chain including
-      mainnet -- `nk_rpc::RpcClient::encrypt_wallet` (built earlier
-      this phase) has no caller anywhere. This is a real violation of
-      docs/SPEC.md's mandatory "All mainnet wallets are encrypted" rule
-      and a named STOP-AND-ASK topic (CLAUDE.md), so it wasn't
-      improvised -- needs a UX decision (encrypt as part of
-      `create_wallet` before the mnemonic is shown? a mandatory
-      separate step right after? how `restore_wallet` should treat a
-      wallet that may or may not already be encrypted?) plus a live
-      VERIFY of `encryptwallet` against an ord-managed wallet
-      specifically (Phase 0 only VERIFIED unlock/lock against an
-      *already*-encrypted wallet, not this transition, and Core's
-      `encryptwallet` is known to reload the wallet internally -- untested
-      against ord's own wrapping). See DECISIONS.md's Phase 5 security
-      self-review, item 8, for the full writeup.
+- [x] **Enforce mainnet wallet encryption.** Found by the Phase 5
+      security self-review (item 8) and fixed following the user's
+      decision (raised as a STOP-AND-ASK, per CLAUDE.md): encrypt
+      during `create_wallet`/`restore_wallet` themselves, immediately
+      after the underlying `ord wallet create`/`restore` call and
+      before the mnemonic is shown or anything returns to the frontend.
+      VERIFIED live first (DECISIONS.md) that this exact sequence is
+      safe: encrypting a wallet right after `ord wallet create`
+      doesn't invalidate the mnemonic ord already returned -- Core's
+      `encryptwallet` response text ("a new HD seed was generated") is
+      misleading boilerplate for descriptor wallets; a real round trip
+      (create -> capture mnemonic + address -> encrypt -> fund -> full
+      mnemonic restore into a separate wallet) recovered the exact same
+      funds, and master-key fingerprints matched exactly before/after.
+      New `require_encryption_passphrase_on_mainnet` helper enforces
+      this backend-side (mainnet + no passphrase -> a clear typed
+      error), not just via the frontend hiding/showing a field --
+      `create_wallet`/`restore_wallet` both take an optional
+      `passphrase`, wrapped in `Zeroizing` immediately per the
+      self-review's own zeroization finding. Frontend: `WalletScreen`
+      reveals a passphrase + confirm step before calling `create_wallet`
+      only on mainnet (regtest/signet/testnet4 stay frictionless for
+      testing, matching the spec's literal "every MAINNET wallet"
+      scope); `RestoreWalletForm` gained the same fields, same gating.
+      New real integration test,
+      `encrypting_a_wallet_immediately_after_create_still_restores_
+      correctly` (`nk-testkit`): the exact create -> encrypt (before
+      any other use) -> fund -> restore -> compare-balances sequence,
+      **ran live on this Windows machine, passed**. Verified live in
+      the browser (dev IPC mock extended to mirror the mainnet-requires-
+      passphrase rejection): mainnet Create reveals the passphrase step,
+      mismatch is caught before submit, matching passphrases proceed to
+      the seed view; regtest Create still skips straight to the seed
+      view with no passphrase step at all.
 - [x] Inscriptions gallery + rune balances. VERIFY'd live first
       (DECISIONS.md) against a real scratch regtest+ord with an actual
       inscribed HTML file: `ord wallet inscriptions`'s real field names

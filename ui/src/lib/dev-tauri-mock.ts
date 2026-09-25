@@ -265,12 +265,24 @@ export function installDevTauriMockIfNeeded() {
       case "wallet_exists":
         return wallets.has((args as { chain: Chain }).chain);
       case "create_wallet": {
-        const { chain } = args as { chain: Chain };
+        const { chain, passphrase } = args as { chain: Chain; passphrase: string | null };
+        if (chain === "mainnet" && !passphrase) {
+          return Promise.reject({
+            code: null,
+            message: "Mainnet wallets must be encrypted -- enter a passphrase.",
+          });
+        }
         wallets.set(chain, mockWallet(chain));
         return { mnemonic: MOCK_MNEMONIC };
       }
       case "restore_wallet": {
-        const { chain } = args as { chain: Chain };
+        const { chain, passphrase } = args as { chain: Chain; passphrase: string | null };
+        if (chain === "mainnet" && !passphrase) {
+          return Promise.reject({
+            code: null,
+            message: "Mainnet wallets must be encrypted -- enter a passphrase.",
+          });
+        }
         wallets.set(chain, mockWallet(chain));
         return undefined;
       }

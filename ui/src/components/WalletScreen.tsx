@@ -5,6 +5,7 @@ import type { CreateWalletResult } from "@/bindings/CreateWalletResult";
 import type { Environment } from "@/bindings/Environment";
 import type { TypedError } from "@/bindings/TypedError";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ErrorPanel } from "@/components/ErrorPanel";
 import { InscriptionGallery } from "@/components/InscriptionGallery";
 import { RestoreWalletForm } from "@/components/RestoreWalletForm";
@@ -23,6 +24,7 @@ import { friendlyError } from "@/lib/error-messages";
 export function WalletScreen({ environment }: { environment: Environment }) {
   const { t } = useTranslation();
   const chain = environment.chain;
+  const isMainnet = chain === "mainnet";
   const { exists, error: existsError, refresh } = useWalletExists(chain);
   const [sending, setSending] = useState(false);
 
@@ -33,14 +35,27 @@ export function WalletScreen({ environment }: { environment: Environment }) {
   // SensitiveSeedView doc comment says must clear its own copy).
   const [mnemonicToConfirm, setMnemonicToConfirm] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
+  // docs/SPEC.md SECURITY RULES: "All mainnet wallets are encrypted" --
+  // on mainnet, clicking "Create wallet" reveals this passphrase step
+  // instead of creating immediately; enforced backend-side too (Phase 5
+  // security self-review, DECISIONS.md).
+  const [settingPassphrase, setSettingPassphrase] = useState(false);
+  const [passphrase, setPassphrase] = useState("");
+  const [passphraseConfirm, setPassphraseConfirm] = useState("");
+  const passphraseMismatch = passphrase.length > 0 && passphrase !== passphraseConfirm;
   const [busy, setBusy] = useState(false);
   const [createError, setCreateError] = useState<TypedError | null>(null);
 
-  const handleCreate = () => {
+  const handleCreate = (encryptionPassphrase: string | null) => {
     setBusy(true);
     setCreateError(null);
-    invoke<CreateWalletResult>("create_wallet", { chain })
-      .then((result) => setMnemonicToConfirm(result.mnemonic))
+    invoke<CreateWalletResult>("create_wallet", { chain, passphrase: encryptionPassphrase })
+      .then((result) => {
+        setSettingPassphrase(false);
+        setPassphrase("");
+        setPassphraseConfirm("");
+        setMnemonicToConfirm(result.mnemonic);
+      })
       .catch((e: TypedError) => setCreateError(e))
       .finally(() => setBusy(false));
   };
@@ -121,9 +136,54 @@ export function WalletScreen({ environment }: { environment: Environment }) {
               onRestored={handleRestored}
               onCancel={() => setRestoring(false)}
             />
+          ) : settingPassphrase ? (
+            <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+              <p className="text-xs text-muted-foreground">{t("wallet.encryption.mainnetNotice")}</p>
+              <label className="block space-y-1 text-sm">
+                <span>{t("wallet.encryption.passphraseLabel")}</span>
+                <Input
+                  type="password"
+                  value={passphrase}
+                  onChange={(e) => setPassphrase(e.target.value)}
+                  autoComplete="new-password"
+                />
+              </label>
+              <label className="block space-y-1 text-sm">
+                <span>{t("wallet.encryption.passphraseConfirmLabel")}</span>
+                <Input
+                  type="password"
+                  value={passphraseConfirm}
+                  onChange={(e) => setPassphraseConfirm(e.target.value)}
+                  autoComplete="new-password"
+                />
+              </label>
+              {passphraseMismatch && (
+                <p className="text-xs text-destructive">{t("wallet.encryption.mismatch")}</p>
+              )}
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  disabled={busy}
+                  onClick={() => setSettingPassphrase(false)}
+                >
+                  {t("wallet.cancel")}
+                </Button>
+                <Button
+                  className="flex-1"
+                  disabled={busy || passphrase.length === 0 || passphraseMismatch}
+                  onClick={() => handleCreate(passphrase)}
+                >
+                  {t("wallet.create")}
+                </Button>
+              </div>
+            </div>
           ) : (
             <div className="flex gap-2">
-              <Button disabled={busy} onClick={handleCreate}>
+              <Button
+                disabled={busy}
+                onClick={() => (isMainnet ? setSettingPassphrase(true) : handleCreate(null))}
+              >
                 {t("wallet.create")}
               </Button>
               <Button variant="outline" disabled={busy} onClick={() => setRestoring(true)}>

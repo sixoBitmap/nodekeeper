@@ -244,13 +244,45 @@ pub struct CreateWalletResult {
     pub mnemonic: String,
 }
 
+/// docs/SPEC.md SECURITY RULES: "All mainnet wallets are encrypted."
+/// Enforced here, not left to the frontend showing/hiding a field --
+/// the Phase 5 security self-review (DECISIONS.md) found this rule
+/// wasn't actually enforced anywhere and flagged it as a real gap.
+fn require_encryption_passphrase_on_mainnet(
+    chain: Chain,
+    passphrase: &Option<zeroize::Zeroizing<String>>,
+) -> Result<(), TypedError> {
+    let is_empty = match passphrase {
+        Some(p) => p.is_empty(),
+        None => true,
+    };
+    if chain == Chain::Mainnet && is_empty {
+        return Err(TypedError::from(
+            "Mainnet wallets must be encrypted -- enter a passphrase.".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// `passphrase`: required on mainnet (see
+/// `require_encryption_passphrase_on_mainnet`), optional elsewhere --
+/// when given, the freshly created wallet is encrypted with it
+/// immediately, before the mnemonic is returned to the frontend at
+/// all. VERIFIED live (DECISIONS.md Phase 5) that encrypting an
+/// `ord`-created wallet right after creation leaves the mnemonic ord
+/// already returned as a correct, complete backup -- Core's own
+/// "a new HD seed was generated" message on `encryptwallet` is
+/// misleading boilerplate for descriptor wallets, not a real reseed.
 #[tauri::command]
 async fn create_wallet(
     chain: Chain,
+    passphrase: Option<String>,
     node_manager: tauri::State<'_, NodeManager>,
     store: tauri::State<'_, Arc<Mutex<Store>>>,
     executor: tauri::State<'_, Executor>,
 ) -> Result<CreateWalletResult, TypedError> {
+    let passphrase = passphrase.map(zeroize::Zeroizing::new);
+    require_encryption_passphrase_on_mainnet(chain, &passphrase)?;
     let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
     let response = nk_ord::wallet::create_wallet(&executor, &ctx.target())
         .await
@@ -260,26 +292,45 @@ async fn create_wallet(
         .and_then(|v| v.as_str())
         .ok_or_else(|| TypedError::from("ord did not return a mnemonic".to_string()))?
         .to_string();
+    if let Some(passphrase) = passphrase.filter(|p| !p.is_empty()) {
+        ctx.rpc
+            .encrypt_wallet(DEFAULT_WALLET_NAME, &passphrase)
+            .await
+            .map_err(|e| TypedError::from(e.to_string()))?;
+    }
     Ok(CreateWalletResult { mnemonic })
 }
 
 /// `timestamp`: `"now"` to skip scanning (a brand-new restore with
 /// nothing to find yet), a unix timestamp, or `"0"` for a full rescan
 /// -- the frontend decides which, based on what it asks the user (see
-/// `nk_ord::wallet::restore_wallet`'s doc comment).
+/// `nk_ord::wallet::restore_wallet`'s doc comment). `passphrase`: same
+/// mainnet-required rule and immediately-after-creation encryption as
+/// `create_wallet` -- a restore also creates a fresh, initially
+/// unencrypted local Core wallet, so it needs the same treatment.
 #[tauri::command]
 async fn restore_wallet(
     chain: Chain,
     mnemonic: String,
     timestamp: String,
+    passphrase: Option<String>,
     node_manager: tauri::State<'_, NodeManager>,
     store: tauri::State<'_, Arc<Mutex<Store>>>,
     executor: tauri::State<'_, Executor>,
 ) -> Result<(), TypedError> {
+    let passphrase = passphrase.map(zeroize::Zeroizing::new);
+    require_encryption_passphrase_on_mainnet(chain, &passphrase)?;
     let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
     nk_ord::wallet::restore_wallet(&executor, &ctx.target(), &mnemonic, &timestamp)
         .await
-        .map_err(TypedError::from)
+        .map_err(TypedError::from)?;
+    if let Some(passphrase) = passphrase.filter(|p| !p.is_empty()) {
+        ctx.rpc
+            .encrypt_wallet(DEFAULT_WALLET_NAME, &passphrase)
+            .await
+            .map_err(|e| TypedError::from(e.to_string()))?;
+    }
+    Ok(())
 }
 
 /// Whether `chain` already has a wallet, so the Wallet screen knows

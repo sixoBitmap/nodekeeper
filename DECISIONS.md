@@ -1830,6 +1830,56 @@ the Phase 2 self-review above.
   remain correctly not-yet-applicable; no code path exists for either
   yet.
 
+## Phase 5 — VERIFY: encrypting a wallet immediately after `ord wallet create` (2026-09-25)
+
+Following the Phase 5 self-review's finding that mainnet wallets aren't
+actually encrypted (item 8), and the user's decision to encrypt during
+`create_wallet` itself before the mnemonic is shown, VERIFIED live on a
+fresh scratch regtest+ord whether Bitcoin Core's `encryptwallet` RPC,
+called immediately after `ord wallet create` returns a mnemonic, still
+leaves that mnemonic as a correct backup of the wallet ord just made --
+this exact transition (encrypt-right-after-creation, not encrypt-then-
+much-later-unlock) was never checked before (Phase 0's VERIFY only
+covered unlock/lock against an *already*-encrypted wallet).
+
+**Initial scare**: `encryptwallet` returns `"wallet encrypted; The
+keypool has been flushed and a new HD seed was generated. You need to
+make a new backup with the backupwallet RPC."` -- read literally, this
+sounds like the freshly-shown mnemonic becomes worthless. Two follow-up
+checks:
+- `listdescriptors`'s master-key fingerprint (`[xxxxxxxx/86h/...]`) was
+  identical before and after `encryptwallet` on the same wallet --
+  proves the actual signing seed did *not* change.
+- The real proof: created a wallet, captured its mnemonic and one
+  receive address (address A) *before* encrypting, encrypted it, mined
+  101 regtest blocks to address A (50 BTC), then restored the *same*
+  captured mnemonic into a completely separate, freshly-named wallet
+  (`ord wallet restore --from mnemonic --timestamp 0`). The restored
+  wallet's master-key fingerprint matched exactly, and its balance
+  showed the same 50 BTC -- full round-trip proof that the mnemonic
+  shown *before* encryption remains a correct, complete backup of the
+  wallet *after* encryption.
+
+**Conclusion**: Core's "a new HD seed was generated" message is
+misleading boilerplate for descriptor wallets (almost certainly stale
+text from Core's legacy-wallet code path, where encrypting genuinely
+did rotate the keypool) -- it does not mean what it sounds like here.
+Also confirmed real signing still works correctly afterward: a real
+`wallet send` fails with the expected `-13` "please enter the wallet
+passphrase" error while locked, and succeeds immediately after
+`walletpassphrase`. No `ord`-side quirk, no need for a workaround.
+
+**Decision**: `create_wallet` (and `restore_wallet`, same reasoning --
+restoring also creates a fresh local, unencrypted Core wallet that
+needs the same treatment) now takes an optional `passphrase` parameter;
+when the target chain is mainnet, it's required, and the command calls
+`nk_rpc::RpcClient::encrypt_wallet` immediately after the underlying
+`ord wallet create`/`restore` call succeeds, before returning anything
+to the frontend. Enforced backend-side (mainnet + no passphrase ->
+error), not just by the frontend hiding/showing a field, per Foundation
+E/"never trust the frontend alone for a security rule" precedent
+elsewhere in this codebase.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

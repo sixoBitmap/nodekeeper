@@ -149,6 +149,12 @@
     "restoreWordCount_other": "{{count}} words",
     "restoreHasHistory": "This wallet has existing funds or transaction history (does a full rescan)",
     "restoreSubmit": "Restore",
+    "encryption": {
+      "mainnetNotice": "Mainnet wallets must be encrypted. Choose a passphrase you'll enter before every send -- this is different from your recovery phrase and cannot recover your funds on its own.",
+      "passphraseLabel": "Wallet encryption passphrase",
+      "passphraseConfirmLabel": "Confirm passphrase",
+      "mismatch": "Passphrases don't match."
+    },
     "loadingBalance": "Loading balance…",
     "cardinalBalance": "Cardinal (spendable)",
     "inscribedBalance": "Inscribed",
