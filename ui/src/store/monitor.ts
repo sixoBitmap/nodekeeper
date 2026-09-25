@@ -51,6 +51,7 @@ interface MonitorState {
 
   init: () => Promise<void>;
   toggleVisible: () => void;
+  show: () => void;
   setHeightPx: (px: number) => void;
   toggleAutoScroll: () => void;
   clear: () => void;
@@ -119,6 +120,16 @@ export const useMonitorStore = create<MonitorState>()((set, get) => ({
     const next = !get().visible;
     set({ visible: next, ...(next ? { hasActivityWhileHidden: false } : {}) });
     void invoke("set_setting", { key: VISIBLE_SETTING_KEY, value: String(next) });
+  },
+
+  // Unlike `toggleVisible`, never closes an already-open panel -- used
+  // by the guided Test Lab walkthroughs (docs/SPEC.md item 11: "with
+  // the Live Command Monitor opened automatically") where the intent
+  // is always "make sure it's showing," not "flip it."
+  show: () => {
+    if (get().visible) return;
+    set({ visible: true, hasActivityWhileHidden: false });
+    void invoke("set_setting", { key: VISIBLE_SETTING_KEY, value: "true" });
   },
 
   setHeightPx: (px) => {

@@ -151,6 +151,46 @@ const MOCK_INSCRIPTIONS = [
   { id: "1111111111111111111111111111111111111111111111111111111111111111i0", postage: 546 },
 ];
 
+// Per-chain, seeded from MOCK_INSCRIPTIONS and grown by wallet_inscribe/
+// wallet_inscribe_batch below -- lets the Test Lab walkthroughs'
+// "inscriptionsIncreased" and "satHasTwoInscriptions" checkpoints
+// (docs/SPEC.md item 11, walkthroughs b/c) actually trigger for real
+// in the dev-browser preview instead of only via their "Skip" escape
+// hatch. `satpoint` is unique per mock id (unlike the single shared
+// fake satpoint this file used to return for every inscription) so a
+// mock reinscribe can correlate `reinscribeSatpoint` back to "which
+// existing inscription's sat is this."
+interface MockInscriptionRecord {
+  id: string;
+  postage: number;
+  sat: number | null;
+  number: number;
+  satpoint: string;
+}
+let mockInscriptionCounter = 0;
+function mockSatpointFor(id: string): string {
+  return `${id.slice(0, 16)}mocksatpoint:0:0`;
+}
+const inscriptionRecords = new Map<Chain, MockInscriptionRecord[]>();
+function recordsFor(chain: Chain): MockInscriptionRecord[] {
+  if (!inscriptionRecords.has(chain)) {
+    inscriptionRecords.set(
+      chain,
+      MOCK_INSCRIPTIONS.map((entry, i) => ({
+        id: entry.id,
+        postage: entry.postage,
+        // The second mock inscription demonstrates the Foundation F
+        // "sats index is off" path (`sat: null`); the first has a real
+        // sat number so the sat-history display can be exercised too.
+        sat: i === 1 ? null : 5_000_000_000,
+        number: i,
+        satpoint: mockSatpointFor(entry.id),
+      })),
+    );
+  }
+  return inscriptionRecords.get(chain)!;
+}
+
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 const MOCK_TRANSACTIONS = [
   {
@@ -432,7 +472,7 @@ export function installDevTauriMockIfNeeded() {
         // can't load real content in this browser-only preview -- there's
         // no real ord server behind it, same limitation as every other
         // IPC-only mock here.
-        return MOCK_INSCRIPTIONS;
+        return recordsFor(chain).map(({ id, postage }) => ({ id, postage }));
       }
       case "wallet_transaction_history": {
         const { chain } = args as { chain: Chain };
@@ -502,10 +542,12 @@ export function installDevTauriMockIfNeeded() {
         return { id: "mockinscriptionidmockinscriptionidmockinscriptionidmocki0", location: "mocktxidmocktxidmocktxidmocktxidmocktxidmocktxidmocktxidmocktx:0:0", fee: 500 };
       }
       case "wallet_inscribe": {
-        const { chain, passphrase, remember } = args as {
+        const { chain, passphrase, remember, postage, reinscribeSatpoint } = args as {
           chain: Chain;
           passphrase: string | null;
           remember: boolean;
+          postage?: number;
+          reinscribeSatpoint?: string | null;
         };
         const effectivePassphrase = passphrase ?? rememberedPassphrases.get(chain);
         if (!effectivePassphrase) {
@@ -521,27 +563,40 @@ export function installDevTauriMockIfNeeded() {
           });
         }
         if (remember) rememberedPassphrases.set(chain, effectivePassphrase);
+        const records = recordsFor(chain);
+        // A reinscribe lands on the *same* sat as the inscription being
+        // reinscribed (that's the whole point) -- everything else gets
+        // a fresh one, same reasoning as a brand-new UTXO.
+        const reinscribed = reinscribeSatpoint
+          ? records.find((r) => r.satpoint === reinscribeSatpoint)
+          : undefined;
+        mockInscriptionCounter += 1;
+        const id = `mockinscribed${mockInscriptionCounter}mockinscribedmockinscribedmocki0`;
+        const record: MockInscriptionRecord = {
+          id,
+          postage: postage ?? 546,
+          sat: reinscribed ? reinscribed.sat : 5_000_000_000 + mockInscriptionCounter,
+          number: records.length,
+          satpoint: mockSatpointFor(id),
+        };
+        records.push(record);
         return {
-          id: "mockinscriptionidmockinscriptionidmockinscriptionidmocki0",
-          location: "mocktxidmocktxidmocktxidmocktxidmocktxidmocktxidmocktxidmocktx:0:0",
+          id,
+          location: `mocktxidmocktxidmocktxidmocktxidmocktxidmocktxidmocktxidmocktx:0:${mockInscriptionCounter}`,
           fee: 500,
         };
       }
       case "inscription_detail": {
-        const { id } = args as { id: string };
-        // The second mock inscription demonstrates the Foundation F
-        // "sats index is off" path (`sat: null`); the first has a real
-        // sat number so the sat-history display can be exercised too.
-        const sat = id === MOCK_INSCRIPTIONS[1].id ? null : 5_000_000_000;
-        return {
-          id,
-          satpoint: `mocksatpointmocksatpointmocksatpointmocksatpointmocksatpointmo:0:0`,
-          sat,
-          number: id === MOCK_INSCRIPTIONS[0].id ? 0 : 1,
-        };
+        const { chain, id } = args as { chain: Chain; id: string };
+        const record = recordsFor(chain).find((r) => r.id === id);
+        if (!record) return Promise.reject({ code: null, message: `unknown inscription: ${id}` });
+        return { id: record.id, satpoint: record.satpoint, sat: record.sat, number: record.number };
       }
       case "sat_inscriptions": {
-        return [MOCK_INSCRIPTIONS[0].id];
+        const { chain, sat } = args as { chain: Chain; sat: number };
+        return recordsFor(chain)
+          .filter((r) => r.sat === sat)
+          .map((r) => r.id);
       }
       case "wallet_inscribe_batch_dry_run": {
         const { filePaths } = args as { filePaths: string[] };
@@ -572,11 +627,23 @@ export function installDevTauriMockIfNeeded() {
           });
         }
         if (remember) rememberedPassphrases.set(chain, effectivePassphrase);
-        return filePaths.map((_, i) => ({
-          id: `mockbatchinscriptionidmockbatchinscriptionidmockbatchi${i}`,
-          location: `mockbatchtxidmockbatchtxidmockbatchtxidmockbatchtxidmockbatchtx:${i}:0`,
-          fee: 500,
-        }));
+        const records = recordsFor(chain);
+        return filePaths.map((_, i) => {
+          mockInscriptionCounter += 1;
+          const id = `mockbatch${mockInscriptionCounter}mockbatchinscriptionidmockbatchi${i}`;
+          records.push({
+            id,
+            postage: 546,
+            sat: 5_000_000_000 + mockInscriptionCounter,
+            number: records.length,
+            satpoint: mockSatpointFor(id),
+          });
+          return {
+            id,
+            location: `mockbatchtxidmockbatchtxidmockbatchtxidmockbatchtxidmockbatchtx:${i}:0`,
+            fee: 500,
+          };
+        });
       }
       case "console_classify": {
         const { commandLine } = args as { commandLine: string };

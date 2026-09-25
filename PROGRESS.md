@@ -1630,12 +1630,42 @@ Frontend + backend — Regtest Test Lab (docs/SPEC.md item 11)
       automatically" (mined immediately), then did a fresh single-file
       inscribe and confirmed it auto-mined with zero clicks, the
       setting having persisted across the screen switch.
-- [ ] 5 guided walkthroughs with checkpoints, opening the Live Command
-      Monitor automatically: (a) create wallet -> receive -> mine ->
-      check balance, (b) inscribe -> mine -> see it in the gallery,
-      (c) reinscribe -> mine -> see both on the sat, (d) send an
-      inscription to a second test wallet -> mine -> confirm arrival,
-      (e) run a console command and an example script
+- [x] Guided walkthroughs with checkpoints, opening the Live Command
+      Monitor automatically -- 4 of the 5 (a, b, c, e); (d) is
+      intentionally not built (decided with the project owner
+      2026-09-25): "send an inscription to a second test wallet" needs
+      a second wallet in one environment, which every wallet-related
+      Tauri command deliberately doesn't support (`DEFAULT_WALLET_NAME`
+      in src-tauri/src/lib.rs) -- tracked in this file's Backlog
+      section instead of worked around here.
+      - (a) create wallet -> receive -> mine -> check balance
+      - (b) inscribe -> mine -> see it in the gallery
+      - (c) reinscribe -> mine -> see both on the sat
+      - (e) run a console command and an example script
+      Architecture: `useWalkthroughStore` (Zustand) tracks the active
+      walkthrough/step/context so progress survives navigating away --
+      `WalkthroughBanner` (mounted unconditionally in `App.tsx`, not
+      inside `TestLabScreen`) would otherwise unmount every time a
+      step sends the user to another screen. Each step's checkpoint is
+      a real poll against Regtest state -- `wallet_exists`,
+      `wallet_balance`, `node_status`'s block height,
+      `wallet_inscriptions`'s count, `sat_inscriptions`, and
+      `list_command_history` filtered by `triggering_action` (`"console"`
+      vs. `"run script ..."`) -- no new backend commands needed, every
+      checkpoint reuses existing IPC. A step with nothing machine-
+      checkable (e.g. "look at your receive address") just enables
+      Continue immediately; every step also has a "Skip" escape hatch.
+      Live-verified all 4 walkthroughs end-to-end in the browser dev
+      preview (mock enhanced to track a real growing inscriptions/sat
+      list so the "inscriptionsIncreased"/"satHasTwoInscriptions"
+      checkpoints could be genuinely exercised, not just skipped),
+      catching and fixing two real bugs in the process: the checkpoint
+      status text order (a "no checkpoint" step briefly showed "done"
+      because `checkpointMet` defaults `true` for that kind), and
+      "inscriptionsIncreased" comparing against a baseline taken when
+      the *verification* step mounted instead of when the walkthrough
+      started (the inscribe action happens on an earlier step, so the
+      count had already risen by the time the wrong baseline was taken).
 - [x] "Reset Test Lab": stop regtest services gracefully, delete only
       the regtest data directories after confirmation, start fresh --
       the docs/SPEC.md [CI] acceptance criterion ("Reset Test Lab

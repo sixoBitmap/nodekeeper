@@ -2879,6 +2879,81 @@ by checking the box after a send already showed its manual "Mine 1
 block to confirm" button and confirming it mined right away rather
 than requiring a second action first.
 
+### Guided Test Lab walkthroughs (Phase 8, 2026-09-25)
+
+**Walkthrough (d) not built -- decided with the project owner.** docs/
+SPEC.md item 11's walkthrough (d) is "send an inscription to a second
+test wallet -> mine -> confirm arrival." `WalletTarget`/`WalletContext`
+(crates/nk-ord/src/wallet.rs, src-tauri/src/lib.rs) already thread a
+`wallet_name` through every `ord wallet` call, but every Tauri command
+hardcodes it to one name (`DEFAULT_WALLET_NAME = "ord"`), with an
+existing comment noting "Multiple named wallets... is a later task."
+Presented three options (send to a second address and verify via
+Explorer / a walkthrough-only second ord wallet / skip (d) for now);
+the project owner chose to skip it. Walkthroughs a, b, c, and e are
+fully built; (d) is tracked in PROGRESS.md's Backlog section pending
+real multi-wallet support, not worked around here.
+
+**Architecture: a persistent cross-screen banner, not a TestLabScreen
+sub-view.** Every walkthrough's steps send the user to different
+screens (Wallet, Inscribe, Test Lab, Explorer, Console, Scripts) --
+`App.tsx` unmounts the current screen's component on every `screen`
+change, so walkthrough progress can't live in `TestLabScreen`'s own
+state. Progress lives in `useWalkthroughStore` (Zustand: active id,
+step index, per-walkthrough `context`), and `WalkthroughBanner` renders
+unconditionally in `App.tsx` between the header and the screen
+dispatch, so it survives navigating anywhere. `TestLabScreen`
+(via `TestLabWalkthroughs`) only starts a walkthrough and picks its
+initial context; the banner owns everything from there.
+
+**Checkpoints are real polls against Regtest, not simulated.** Every
+checkpoint kind reuses an existing IPC command -- `wallet_exists`,
+`wallet_balance`, `node_status`'s block height (for "mine a block"
+steps), `wallet_inscriptions`'s count, `sat_inscriptions`, and
+`list_command_history` filtered by `triggering_action` (exactly
+`"console"` for a console-run command vs. a `"run script "` prefix for
+a script run -- both set by the existing Tauri command handlers, not
+new). No new backend commands were needed. A step with nothing
+machine-checkable (e.g. "look at your receive address") shows
+"Continue whenever you're ready" instead of polling; every step also
+has a "Skip" button so a real detection gap never strands the user.
+
+**Two real bugs found and fixed via live browser verification, not
+design review:**
+1. The checkpoint status text checked `checkpointMet` before
+   `step.checkpoint === "none"` -- since `checkpointSatisfied("none",
+   ...)` always resolves `true`, a manual-confirm step briefly showed
+   "Done -- checked automatically" (implying real detection that never
+   happened) instead of "Continue whenever you're ready." Fixed by
+   checking the "none" case first.
+2. "inscriptionsIncreased" (walkthrough b's step 3, "see it in the
+   gallery") captured its baseline when *that* step mounted -- but the
+   inscribe action happens on step 1, so by step 3 the count had
+   already risen relative to nothing, and the checkpoint could never
+   detect it. Fixed by capturing the baseline once when the whole
+   walkthrough starts (`TestLabWalkthroughs`, into `context`), the same
+   pattern already used for walkthrough (c)'s target-sat capture,
+   instead of at step-mount like "blocksIncreased" (which is correct
+   to capture per-step, since its action *is* that step).
+
+**Dev-mock enhancement for real end-to-end verification.** The dev-
+browser preview's `wallet_inscriptions`/`inscription_detail`/
+`sat_inscriptions` mocks previously returned a static, unchanging pair
+of fake inscriptions regardless of any inscribe call. Made them track a
+real growing per-chain list (`recordsFor`/`MockInscriptionRecord` in
+dev-tauri-mock.ts), with `wallet_inscribe`'s mock correlating a
+reinscribe's `reinscribeSatpoint` back to the original record's `sat`
+-- this let walkthroughs (b) and (c)'s auto-checkpoints be verified for
+real in the browser (create wallet -> inscribe -> see gallery count
+rise; reinscribe -> see the sat's inscription count reach 2) rather
+than only via "Skip." Walkthrough (e)'s console/script checkpoints and
+"blocksIncreased" could not be end-to-end verified the same way (the
+mock's `console_run`/`run_script`/`mine_blocks` don't write to the
+mocked `list_command_history`/`node_status`) -- verified those by code
+review instead, since they reuse the exact same real IPC commands
+already proven correct elsewhere (`useDashboardStatus`, the Live
+Command Monitor's own history fetch).
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

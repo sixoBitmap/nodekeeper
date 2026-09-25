@@ -7,10 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorPanel } from "@/components/ErrorPanel";
+import { TestLabWalkthroughs } from "@/components/TestLabWalkthroughs";
 import { useDashboardStatus } from "@/hooks/useDashboardStatus";
 import { useOrdStatus } from "@/hooks/useOrdStatus";
 import { useWalletExists } from "@/hooks/useWalletExists";
 import { friendlyError } from "@/lib/error-messages";
+import type { Screen } from "@/types/screen";
 
 /**
  * Regtest Test Lab (docs/SPEC.md item 11): safe practice mode. Only
@@ -26,11 +28,18 @@ import { friendlyError } from "@/lib/error-messages";
  * setup" starts services and mines blocks; if no wallet exists yet, it
  * points at the Wallet screen instead of trying to create one itself.
  *
- * The 5 guided walkthroughs are a separate, larger, not-yet-built
- * piece (PROGRESS.md) -- this covers the setup/mining/reset controls
- * they'll eventually sit alongside.
+ * The guided walkthroughs (`TestLabWalkthroughs`) live below the
+ * setup/mining/reset controls here, but run through `WalkthroughBanner`
+ * (mounted in `App.tsx`) once started, since a walkthrough's steps
+ * send the user to other screens that would otherwise unmount this one.
  */
-export function TestLabScreen({ environment }: { environment: Environment }) {
+export function TestLabScreen({
+  environment,
+  onNavigate,
+}: {
+  environment: Environment;
+  onNavigate: (screen: Screen) => void;
+}) {
   const { t } = useTranslation();
   const isRegtest = environment.chain === "regtest";
   const node = useDashboardStatus(environment.chain);
@@ -185,6 +194,8 @@ export function TestLabScreen({ environment }: { environment: Environment }) {
         onConfirm={() => void resetTestLab()}
         confirmLabel={t("testLab.reset")}
       />
+
+      <TestLabWalkthroughs onNavigate={onNavigate} />
     </div>
   );
 }

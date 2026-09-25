@@ -18,18 +18,11 @@ import { ScriptsScreen } from "@/components/ScriptsScreen";
 import { SystemCheckScreen } from "@/components/SystemCheckScreen";
 import { TestLabScreen } from "@/components/TestLabScreen";
 import { WalletScreen } from "@/components/WalletScreen";
+import { WalkthroughBanner } from "@/components/WalkthroughBanner";
 import { selectedEnvironment, useEnvironmentStore } from "@/store/environment";
 import { useThemeStore } from "@/store/theme";
+import type { Screen } from "@/types/screen";
 
-type Screen =
-  | "overview"
-  | "dashboard"
-  | "wallet"
-  | "inscribe"
-  | "explorer"
-  | "console"
-  | "scripts"
-  | "testLab";
 type WizardStep = "systemCheck" | "binarySetup" | "indexOptions" | "done";
 
 const DISCLAIMER_SETTING_KEY = "disclaimer_acknowledged";
@@ -155,6 +148,7 @@ function App() {
           </Button>
         </div>
       </header>
+      {wizardStep === "done" && <WalkthroughBanner onNavigate={setScreen} />}
       <main className="flex-1 overflow-y-auto">
         {wizardStep === "done" && screen === "overview" ? (
           // Deliberately not scoped to `selected` -- this is the one
@@ -180,7 +174,7 @@ function App() {
           ) : screen === "scripts" ? (
             <ScriptsScreen key={selected.chain} environment={selected} />
           ) : (
-            <TestLabScreen key={selected.chain} environment={selected} />
+            <TestLabScreen key={selected.chain} environment={selected} onNavigate={setScreen} />
           )
         ) : wizardStep === "indexOptions" ? (
           <IndexOptionsScreen

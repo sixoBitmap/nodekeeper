@@ -120,6 +120,64 @@
     "resetConfirmTitle": "Reset the Test Lab?",
     "resetConfirmDescription": "This stops Regtest and permanently deletes its wallet and blockchain data. Test coins have no real value, but this can't be undone."
   },
+  "walkthroughs": {
+    "list": {
+      "title": "Guided walkthroughs",
+      "intro": "Step-by-step practice runs, with the Live Command Monitor opened automatically so you can see exactly what's happening underneath.",
+      "start": "Start",
+      "resume": "Resume",
+      "needsWallet": "Create a wallet first.",
+      "needsInscription": "Inscribe something first.",
+      "anotherActive": "Finish or exit the walkthrough in progress first."
+    },
+    "banner": {
+      "stepLabel": "Step {{current}} of {{total}}",
+      "goTo": "Go to {{screen}}",
+      "checkpointPending": "Waiting for you to do this…",
+      "checkpointDone": "Done -- checked automatically.",
+      "noCheckpoint": "Continue whenever you're ready.",
+      "continue": "Continue",
+      "skipStep": "Skip",
+      "exit": "Exit walkthrough",
+      "finish": "Finish"
+    },
+    "a": {
+      "title": "Your first wallet and balance",
+      "description": "Create a Regtest wallet, get a receive address, mine blocks to it, and watch your balance appear.",
+      "steps": {
+        "0": { "instructions": "Click \"Create wallet\" here on the Wallet screen. It's free, instant, and only ever holds worthless test coins." },
+        "1": { "instructions": "Find the \"Receive address\" shown on this screen -- that's where your test coins will go." },
+        "2": { "instructions": "Back on the Test Lab, mine some blocks to your new wallet -- try \"Get test coins\", or mine 101+ for a spendable balance right away." },
+        "3": { "instructions": "Back on the Wallet screen, your balance should now show a nonzero amount. That's it -- you just funded a Bitcoin wallet." }
+      }
+    },
+    "b": {
+      "title": "Inscribe your first file",
+      "description": "Inscribe a file, mine a block to confirm it, then see it appear in your wallet's gallery.",
+      "steps": {
+        "0": { "instructions": "Go to Inscribe, drop in a file, preview it, and inscribe it. (No node or ord running yet? Use the Test Lab's \"One-click setup\" first.)" },
+        "1": { "instructions": "Mine a block on the Test Lab to confirm it -- inscriptions don't show up anywhere until they're in a block." },
+        "2": { "instructions": "Head to the Wallet screen -- your new inscription should now appear in the gallery below your balance." }
+      }
+    },
+    "c": {
+      "title": "Reinscribe onto an existing sat",
+      "description": "Reinscribe an inscription you already own, mine a block, then see both inscriptions live together on the same sat.",
+      "steps": {
+        "0": { "instructions": "Go to Inscribe > Reinscribe, pick {{targetInscriptionId}}, and create a new inscription on top of it." },
+        "1": { "instructions": "Mine a block on the Test Lab to confirm the reinscription." },
+        "2": { "instructions": "Look up sat {{targetSat}} in the Explorer -- you should see both inscriptions listed on it, in order." }
+      }
+    },
+    "e": {
+      "title": "Run a command and a script",
+      "description": "Run a raw command in the Console and one of the example scripts, both visible live in the Command Monitor.",
+      "steps": {
+        "0": { "instructions": "Go to Console and run any command -- try \"getblockchaininfo\" or \"ord wallet balance\"." },
+        "1": { "instructions": "Go to Scripts and run one of the example scripts against Regtest." }
+      }
+    }
+  },
   "errors": {
     "generic": {
       "title": "Something went wrong",
