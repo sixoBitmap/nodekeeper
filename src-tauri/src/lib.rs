@@ -1227,7 +1227,7 @@ async fn run_script(
         .find(|(info, _)| info.id == script_id)
         .ok_or_else(|| TypedError::from(format!("unknown script: {script_id}")))?;
 
-    if info.regtest_only && chain != Chain::Regtest {
+    if !nk_scripts::script_allowed_on_chain(info.regtest_only, chain == Chain::Regtest) {
         return Err(TypedError::from(format!(
             "\"{}\" is restricted to Regtest -- not available on {chain:?}.",
             info.name

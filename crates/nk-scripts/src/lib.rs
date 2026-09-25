@@ -123,6 +123,20 @@ pub fn script_env_vars(
     ]
 }
 
+/// Whether a script is allowed to run against the chosen environment
+/// (docs/SPEC.md item 6: "The 'regtest only' restriction is enforced
+/// by the runner, not the script"). Pulled out as its own small, pure,
+/// tested function rather than left inline in the Tauri command
+/// handler that calls it -- this is a docs/SPEC.md Phase 7 [CI]
+/// acceptance criterion ("a 'regtest only' script refuses to run on
+/// mainnet"), so it needs real test coverage of its own, not just to
+/// be implied by a command handler this project's own convention
+/// doesn't unit-test directly. A script that isn't `regtest_only` is
+/// always allowed, regardless of `is_regtest`.
+pub fn script_allowed_on_chain(regtest_only: bool, is_regtest: bool) -> bool {
+    !regtest_only || is_regtest
+}
+
 #[derive(Debug, Error)]
 pub enum ScriptError {
     #[error("exec error: {0}")]
@@ -166,6 +180,22 @@ pub async fn run_script(
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn a_regtest_only_script_is_refused_on_any_other_chain() {
+        assert!(!script_allowed_on_chain(true, false));
+    }
+
+    #[test]
+    fn a_regtest_only_script_is_allowed_on_regtest() {
+        assert!(script_allowed_on_chain(true, true));
+    }
+
+    #[test]
+    fn a_script_that_isnt_regtest_only_is_allowed_anywhere() {
+        assert!(script_allowed_on_chain(false, false));
+        assert!(script_allowed_on_chain(false, true));
+    }
 
     #[test]
     fn file_extensions_are_distinct() {

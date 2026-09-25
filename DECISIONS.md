@@ -2564,6 +2564,155 @@ command layers: trust the underlying crate's real tests + browser
 dev-preview UI verification, same standard applied to every other
 command in this session, not a new exception).
 
+## Phase 7 — security self-review (2026-09-25)
+
+Per CLAUDE.md/docs/SPEC.md's "Security self-review at the end of
+Phases 2, 5, and 7": going through docs/SPEC.md's SECURITY RULES
+(mandatory) line by line against everything Phase 7 added (the
+console's safety layer and the script runner) -- what enforces each
+today, what's a considered judgment call, what's still a gap.
+Numbering matches the Phase 2/5 reviews above.
+
+1. **RPC/ord bind to 127.0.0.1; ord's address flag explicit.**
+   Unchanged -- Phase 7 adds no new listening surface.
+
+2. **Cookie auth; secrets stored per Foundation E.**
+   Unchanged. The script runner hands scripts the *cookie file path*,
+   not its contents -- a script reads the file itself, same access a
+   user's own terminal would have to that file already.
+
+3. **Never log/store/transmit seed phrases or private keys; sensitive
+   output channel only.**
+   **Two real gaps found and fixed while building this phase, not
+   after the fact** (see the two dedicated DECISIONS.md entries above):
+   `ord wallet create`/`restore` are refused outright by the console
+   (`OrdCommandClass::BlockedUseWalletScreen`) rather than reachable
+   through the console's generic raw-output path, since `create` prints
+   a mnemonic to stdout and the console has no sensitive-output
+   channel to route it through. Separately, `walletpassphrase`/
+   `encryptwallet`/`signmessagewithprivkey`/`signrawtransactionwithkey`/
+   `importdescriptors` take a secret as a plain positional argument in
+   real bitcoin-cli -- `secret_bitcoin_rpc_arg_indices` redacts those
+   positions from the console's command display unconditionally,
+   regardless of read-only/state-changing classification.
+   **Checked this review, not previously written down**: `RpcError`'s
+   variants (`nk-rpc`) never echo a request's params back in an error
+   message -- confirmed by reading every variant -- so a failed
+   `walletpassphrase` (e.g. wrong passphrase) can't leak the attempted
+   value through `console_run`'s error path either, which only surfaces
+   bitcoind's own response text.
+
+4. **Wallet-encryption passphrases never persisted; in-memory
+   mnemonics/passphrases zeroized after use.**
+   No new persistence surface in Phase 7. Not fully closed: the raw
+   `command_line`/`args` strings a user types into the console or
+   passes to a script (which could include a passphrase, per item 3)
+   aren't wrapped in `Zeroizing` the way `wallet_send`'s passphrase
+   parameter is (Phase 5's review) -- same residual-gap shape already
+   accepted there (return-value/IPC-boundary data that has to exist in
+   plain form to reach the redaction step at all), not a new decision.
+
+5. **Backups contain only public descriptors unless explicitly
+   encrypted.** No backup feature exists yet. Correctly out of scope.
+
+6. **All commands go through the central executor; secrets via
+   stdin/RPC, never command-line arguments.**
+   The bitcoin-cli console path never touches argv at all: `rpc.call`
+   sends parameters as an HTTP JSON-RPC body field, not a spawned
+   process's arguments. The ord console path and the script runner
+   *do* pass their arguments via `CommandSpec.args` (real argv) --
+   this is `ord`'s and a script's own calling convention, not
+   something Nodekeeper's own code chose to put there; ord's wallet
+   commands never take a passphrase as an argument in the first place
+   (unlocking happens via Core's `walletpassphrase` RPC, already
+   covered by item 3), so there's no live secret-in-argv path through
+   either. Every code path added this phase (`console_run`,
+   `run_script`, `detect_interpreters`) goes through `nk_exec::
+   Executor::execute`/`RpcClient::call` -- no direct `Command::new`,
+   still mechanically enforced by `clippy::disallowed-methods` (this
+   review's `cargo clippy --workspace -D warnings` ran clean).
+
+7. **Inscription content sandboxed per Foundation D; CSP lists only
+   exact ord server origins.**
+   The Explorer embeds ord's *own* HTML pages (not raw inscription
+   content) in a sandboxed iframe (`sandbox="allow-scripts"`, no
+   `allow-same-origin`) at the same already-allow-listed origins --
+   `tauri.conf.json`'s `frame-src` is unchanged by this phase, checked
+   by re-reading the file during this review. No new origin was added.
+
+8. **All mainnet wallets are encrypted.** Unchanged from Phase 5;
+   Phase 7 adds no wallet-creation path.
+
+9. **Verify all binaries; fail closed.**
+   Not applicable to what Phase 7 added: script interpreters (Python/
+   Node/bash) are the user's own general-purpose system tools, not
+   something Nodekeeper downloads or pins the way Bitcoin Core/ord are
+   -- there's no equivalent "official source" to verify a system
+   Python install against. `detect_interpreters` still fails closed in
+   its own narrower sense (an interpreter that doesn't actually work --
+   the Windows Python/WSL stub cases -- is never treated as available).
+
+10. **Fund-moving actions get a preview/confirmation; mainnet gets an
+    extra step; Core spend commands against ord wallets are blocked by
+    default.**
+    The console: `FundMoving`-classified bitcoin-cli commands
+    (`sendtoaddress` and the rest of the real, VERIFY'd list) are
+    blocked outright, unconditionally -- not merely confirmed --
+    matching "blocked by default" literally. Every other state-
+    changing command goes through the shared `ConfirmDialog`, which
+    applies its mainnet extra-acknowledgment step to *all* of them
+    automatically (broader than the rule strictly requires -- only
+    fund-moving actions need it -- but not a gap in the safe
+    direction). ord's dry-run-capable commands preview first.
+    **Considered judgment call, flagged rather than silently decided**:
+    the script runner has no per-run confirmation dialog at all, mainnet
+    included -- a script's Run button executes immediately once the
+    `regtest_only`/interpreter checks pass. This reads as consistent
+    with item 13 below (scripts get a *different*, coarser trust model:
+    the standing "full control, only run scripts you trust" warning
+    *is* the confirmation, the same way a real shell script you chose
+    to run doesn't ask "are you sure" before every line) rather than a
+    gap in item 10, and none of the 3 built-in scripts move funds today
+    regardless. But this stops being a free judgment call the moment a
+    fund-moving *imported* script is possible -- explicitly flagged
+    here for whoever builds the import flow (PROGRESS.md) to decide
+    deliberately, not inherit by default.
+
+11. **Environments are fully isolated.**
+    `console_run`/`run_script` both resolve `Environment::new_default
+    (chain, ...)`/`bitcoin_rpc_context(chain, ...)`/`wallet_context
+    (chain, ...)` from the `chain` parameter on every call -- no shared
+    or cached cross-chain state. A script's four `NKP_*` env vars are
+    built fresh per run from that same chain-scoped environment, so a
+    regtest-tab script run can't end up pointed at mainnet's cookie/RPC/
+    ord URL.
+
+12. **No telemetry; network calls only to the pinned few.**
+    All 3 example scripts only ever call `127.0.0.1` (the local ord
+    server / bitcoind RPC) -- checked by reading each script. Doesn't
+    yet apply to user-imported scripts since that feature isn't built.
+
+13. **Scripts are trusted code; the runner enforces environment
+    restrictions.**
+    `ScriptInfo.regtest_only` is set by Nodekeeper's own
+    `built_in_scripts()`, never read from a script file's content;
+    `run_script` re-checks it against `chain` itself rather than
+    trusting the frontend's own copy of the same data -- a script
+    file could be edited to claim anything about itself, so the
+    restriction has to live outside it, which it does.
+
+14. **STOP AND ASK on a rule conflict.** No conflict found this phase
+    that wasn't already resolvable within the existing rules -- item
+    10's script-confirmation question is flagged for a future decision
+    (above), not a live conflict blocking anything built today.
+
+**Overall**: no unresolved live gap found in Phase 7's own new code --
+the two real issues (items 3's mnemonic-leak and secret-argument
+cases) were caught and fixed during design, before landing, rather
+than surviving into this review. The one open item (10) is a forward-
+looking design question for a not-yet-built feature, written down so
+it gets decided on purpose.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

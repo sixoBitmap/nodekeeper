@@ -1538,9 +1538,15 @@ Backend — Script runner foundation
       added script yet, and there's no file-picker/import flow or
       per-script `regtest_only` toggle for one)
 
-Security self-review (docs/SPEC.md Phase 7's own "Done when" item) --
-do this once the console's safety layer is actually built, same as
-Phases 2/5.
+- [x] Security self-review completed (go through SECURITY RULES line
+      by line, point to the code/test enforcing each, list any gaps)
+      -- see DECISIONS.md "Phase 7 — security self-review". No
+      unresolved live gap in Phase 7's own new code; one forward-
+      looking design question flagged for the not-yet-built script
+      import flow (whether a fund-moving imported script needs its own
+      confirmation dialog, since the runner currently doesn't have
+      one -- deliberate for the 3 read-only built-ins, needs a real
+      decision once import exists).
 
 ## Phase 8 — Multi-environment UI and Test Lab
 
