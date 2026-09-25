@@ -1408,14 +1408,19 @@ Backend — Console command execution + safety layer (docs/SPEC.md item 6)
       instantly. 14 tests, including the exact fund-moving list, the
       `sendrawtransaction`-isn't-wallet-scoped distinction, and both
       ord's `mint`/`offer accept` no-dry-run gap.
-- [ ] `console_run(chain, command_line)`: parses a raw `bitcoin-cli`/
-      `ord` command line the same way a human would type it, runs it
-      through the existing executor (never a new ad hoc process path,
-      calling `nk_rpc::RpcClient::call` for bitcoin-cli-style commands
-      and the same `Executor::execute` path `nk_ord::wallet` already
-      uses for ord commands), returns pretty-printable JSON output --
-      wires `console_safety`'s classification into confirm/block/dry-
-      run behavior
+- [x] Command-line parsing: `nk_core::console_parse` --
+      `parse_command_line` (quote-aware tokenizing, so
+      `sendtoaddress "bcrt1..." 0.5 "a comment with spaces"` splits
+      correctly) and `coerce_json_args`, matching bitcoin-cli's own
+      real argument convention (VERIFIED live: a bare `true` sends the
+      JSON boolean, not the string -- DECISIONS.md). 12 tests.
+- [ ] `console_run(chain, command_line)`: runs a parsed command through
+      the existing executor (never a new ad hoc process path, calling
+      `nk_rpc::RpcClient::call` for bitcoin-cli-style commands and the
+      same `Executor::execute` path `nk_ord::wallet` already uses for
+      ord commands), returns pretty-printable JSON output -- wires
+      `console_safety`'s classification into confirm/block/dry-run
+      behavior
 - [ ] Mainnet fund-moving commands route through the same mainnet
       extra-confirmation `ConfirmDialog` every other fund-moving screen
       already uses -- no new confirmation flow

@@ -7,10 +7,11 @@ publish.workspace = true
 
 [dependencies]
 serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
 sysinfo = "0.39"
 ts-rs = "12"
 dunce = "1"
 
 [dev-dependencies]
 tempfile = "3"
-serde_json = { workspace = true }
