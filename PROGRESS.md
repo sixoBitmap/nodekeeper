@@ -1833,9 +1833,20 @@ Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
       Check screen (the data-directory picker step) shows the detected
       filesystem and, when it's exFAT, the spec's exact warning text.
       Live-verified in the browser dev preview.
-- [ ] Windows long-path support -- VERIFY the exact mechanism needed
-      (manifest `longPathAware` vs `\\?\` prefixing) beyond what's
-      already implicitly relied on
+- [x] Windows long-path support -- already fully built and verified
+      back in Phase 1 (see this file's Phase 1 section: `longPathAware`
+      manifest + `nk_core::paths::to_verbatim`, a real >260-char nested
+      tempdir test proving it). Wrongly re-listed here as a Phase 9 gap
+      without first re-checking Phase 1's own entry; caught and fixed
+      by re-reading rather than redoing the work. One real caveat found
+      while checking: `to_verbatim` is only actually wired into one
+      call site (`disk.rs`'s recursive directory-size scan) -- not
+      audited across every other file I/O path (cookie reads, log
+      tailing, the settings database, script files, binary extraction).
+      Left as-is deliberately: those paths are a small, fixed number of
+      segments under the environment data root, not the arbitrarily
+      deep recursive trees `directory_size` walks, so the practical
+      risk is low -- noted here rather than silently assumed fine.
 - [ ] USB speed detection, free space (free space already exists via
       `system_check`; USB speed is new)
 - [ ] Unclean-shutdown recovery guidance (ord index rebuild)
