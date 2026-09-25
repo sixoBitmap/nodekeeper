@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorPanel } from "@/components/ErrorPanel";
+import { RegtestMineOffer } from "@/components/RegtestMineOffer";
 import { friendlyError } from "@/lib/error-messages";
 import { formatSats } from "@/lib/format";
 
@@ -60,6 +61,7 @@ export function WalletSendForm({
   const [passphraseError, setPassphraseError] = useState<string | undefined>(undefined);
   const [sendError, setSendError] = useState<TypedError | null>(null);
   const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState<WalletSendResult | null>(null);
 
   const effectiveFeeRate =
     feeRate !== "" ? Number(feeRate) : (estimatedFeeRate ?? (chain === "mainnet" ? null : REGTEST_FALLBACK_FEE_RATE));
@@ -101,9 +103,9 @@ export function WalletSendForm({
       passphrase: passphraseToUse,
       remember: rememberPassphrase,
     })
-      .then(() => {
+      .then((result) => {
         setConfirmOpen(false);
-        onSent();
+        setSent(result);
       })
       .catch((e: TypedError) => {
         // Only the "wallet is locked" case (the first attempt, with no
@@ -122,6 +124,24 @@ export function WalletSendForm({
       })
       .finally(() => setSending(false));
   };
+
+  if (sent) {
+    return (
+      <div className="space-y-4 rounded-md border border-border p-4">
+        <div className="space-y-2 rounded-md border border-border bg-card p-4 text-sm">
+          <p className="font-medium text-success">{t("wallet.send.done")}</p>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+            <dt className="text-muted-foreground">{t("wallet.send.doneTxid")}</dt>
+            <dd className="break-all font-mono text-xs">{sent.txid}</dd>
+            <dt className="text-muted-foreground">{t("wallet.send.previewFee")}</dt>
+            <dd>{formatSats(sent.fee)}</dd>
+          </dl>
+        </div>
+        <RegtestMineOffer chain={chain} />
+        <Button onClick={onSent}>{t("wallet.send.backToWallet")}</Button>
+      </div>
+    );
+  }
 
   const fee = preview?.fee ?? 0;
   const amountSats = Math.round((Number(amountBtc) || 0) * 100_000_000);

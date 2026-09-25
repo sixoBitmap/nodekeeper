@@ -2850,6 +2850,35 @@ Regtest environment and lands on the Test Lab screen instead. No new
 backend command needed -- this is pure frontend routing on top of the
 existing `set_index_options`/environment-store/`screen` state.
 
+### Post-action mine offer (Phase 8, 2026-09-25)
+
+`WalletSendForm` had no persistent success state before this: on a
+successful send it called `onSent()` immediately, which just closed
+the form back to the balance view with no confirmation shown at all.
+To hang the "mine 1 block to confirm" offer on something, gave it a
+success view matching the inscribe forms' existing `inscribed`-state
+pattern (txid + fee, then a "Done" button) rather than restoring the
+old close-immediately behavior and bolting the offer on separately --
+one consistent shape across all 4 success views instead of a special
+case for sends.
+
+`RegtestMineOffer` is deliberately a single shared component mounted
+in all 4 places (`WalletSendForm`, `SingleInscribeForm`,
+`BatchInscribeForm`, `ReinscribeForm`) rather than four copies of the
+same button/checkbox/effect: it self-gates on `chain === "regtest"`
+(renders `null` otherwise) so callers mount it unconditionally instead
+of each repeating the chain check, which also means a 5th send/inscribe
+surface added later gets this for free by just rendering it.
+
+Auto-mine is one global setting, not per-chain or per-form: Regtest is
+the only chain that ever self-mines (mainnet/signet/testnet4 have real
+miners), so there's nothing to scope it against. Turning it on from
+inside any one offer instance immediately mines for the action that
+instance is attached to (not just future ones) -- live-verified this
+by checking the box after a send already showed its manual "Mine 1
+block to confirm" button and confirming it mined right away rather
+than requiring a second action first.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

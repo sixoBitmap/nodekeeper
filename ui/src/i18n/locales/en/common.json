@@ -261,8 +261,18 @@
       "feeWarningShare": "The fee is {{percent}}% of the amount sent -- unusually high.",
       "submit": "Send",
       "confirmTitle": "Send bitcoin",
-      "confirmDescription": "Send {{amount}} BTC to {{address}}"
+      "confirmDescription": "Send {{amount}} BTC to {{address}}",
+      "done": "Sent",
+      "doneTxid": "Transaction ID",
+      "backToWallet": "Done"
     }
+  },
+  "regtestMineOffer": {
+    "hint": "This won't confirm until a block is mined -- Regtest has no miners of its own.",
+    "mineNow": "Mine 1 block to confirm",
+    "mining": "Mining...",
+    "mined": "Mined 1 block -- confirmed.",
+    "autoMine": "Always mine automatically on Regtest"
   },
   "inscribe": {
     "title": "Inscribe",

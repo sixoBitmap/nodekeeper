@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorPanel } from "@/components/ErrorPanel";
+import { RegtestMineOffer } from "@/components/RegtestMineOffer";
 import { isRealTauriRuntime, useDragDropFiles } from "@/hooks/useDragDropFiles";
 import { friendlyError } from "@/lib/error-messages";
 import { formatSats } from "@/lib/format";
@@ -183,6 +184,7 @@ export function BatchInscribeForm({ environment }: { environment: Environment })
             ))}
           </ul>
         </div>
+        <RegtestMineOffer chain={chain} />
         <Button onClick={reset}>{t("inscribe.inscribeAnother")}</Button>
       </div>
     );

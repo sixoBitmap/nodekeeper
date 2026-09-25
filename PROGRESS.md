@@ -1610,8 +1610,26 @@ Frontend + backend — Regtest Test Lab (docs/SPEC.md item 11)
       `generate_to_address`.
 - [x] "Get test coins" button (mine blocks to the current wallet) --
       same `mine_blocks` command with count 1.
-- [ ] Post-action "Mine 1 block to confirm" offer after a send/inscribe
-      on regtest, plus an optional auto-mine toggle
+- [x] Post-action "Mine 1 block to confirm" offer after a send/inscribe
+      on regtest, plus an optional auto-mine toggle. Built as one
+      shared `RegtestMineOffer` component (renders nothing off Regtest,
+      so every caller can mount it unconditionally) mounted in each of
+      the 4 success views that end a fund-moving action:
+      `WalletSendForm` (which previously had no persistent success view
+      at all -- closed straight back to the balance screen on send;
+      gave it one, matching the inscribe forms' existing pattern),
+      `SingleInscribeForm`, `BatchInscribeForm`, `ReinscribeForm`. The
+      auto-mine choice is one global setting (`regtest_auto_mine`, via
+      `get_setting`/`set_setting` -- Regtest is the only chain that
+      ever self-mines, so there's no reason to scope it per-chain);
+      checking it mines immediately for the action just completed and
+      makes every later action's offer auto-mine too, with no new
+      backend command (reuses `mine_blocks` from above). Live-verified
+      in the browser dev preview: sent BTC on Regtest, manually mined
+      to confirm, then sent again and checked "Always mine
+      automatically" (mined immediately), then did a fresh single-file
+      inscribe and confirmed it auto-mined with zero clicks, the
+      setting having persisted across the screen switch.
 - [ ] 5 guided walkthroughs with checkpoints, opening the Live Command
       Monitor automatically: (a) create wallet -> receive -> mine ->
       check balance, (b) inscribe -> mine -> see it in the gallery,
@@ -1669,3 +1687,30 @@ Not started. See docs/SPEC.md Phase 9.
 ## Phase 10 — Extras and release
 
 Not started. See docs/SPEC.md Phase 10.
+
+## Backlog — ideas not in docs/SPEC.md (not scheduled)
+
+Not part of any phase above and not started. Listed here only so
+they're not forgotten; each needs explicit go-ahead before work starts
+(CLAUDE.md "Scope discipline"), since none of them are in docs/SPEC.md.
+
+- **Restore a different wallet into an environment that already has
+  one.** Today, `restore_wallet` only works before a wallet exists for
+  that chain (2026-09-25 conversation) -- there's no way to replace an
+  environment's existing wallet with a different seed without first
+  wiping its data (only possible on Regtest, via Reset Test Lab).
+  Requested scope is narrow: still exactly one wallet per environment
+  at a time, just the ability to swap which seed occupies that slot,
+  not concurrent multi-wallet support (a separate, much larger idea
+  that was also discussed and explicitly not requested -- see below).
+  Needs: an explicit destructive confirmation flow (through the shared
+  `ConfirmDialog`, extra-worded on mainnet per CLAUDE.md's mainnet
+  safety rule, since it discards the current wallet's local Core
+  wallet state), and deciding what happens to the old wallet's Bitcoin
+  Core data (delete vs. keep-but-unused).
+- **Multiple named wallets per environment, switchable in the UI**
+  (discussed 2026-09-25, not requested). Larger: `ord` supports named
+  wallets (`--name`), but every backend command, `wallet_session`'s
+  passphrase cache, and mainnet-encryption enforcement are all keyed
+  by chain only today -- this would touch most of the wallet-related
+  surface area, comparable in size to the original Wallet screen.

@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorPanel } from "@/components/ErrorPanel";
 import { InscriptionPreviewTile } from "@/components/InscriptionPreviewTile";
+import { RegtestMineOffer } from "@/components/RegtestMineOffer";
 import { isRealTauriRuntime, useDragDropFiles } from "@/hooks/useDragDropFiles";
 import { useWalletInscriptions } from "@/hooks/useWalletInscriptions";
 import { friendlyError } from "@/lib/error-messages";
@@ -215,6 +216,7 @@ export function ReinscribeForm({ environment }: { environment: Environment }) {
             <dd>{formatSats(inscribed.fee)}</dd>
           </dl>
         </div>
+        <RegtestMineOffer chain={chain} />
         <Button onClick={reset}>{t("inscribe.inscribeAnother")}</Button>
       </div>
     );

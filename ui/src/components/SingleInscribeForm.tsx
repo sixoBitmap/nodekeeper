@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ErrorPanel } from "@/components/ErrorPanel";
+import { RegtestMineOffer } from "@/components/RegtestMineOffer";
 import { isRealTauriRuntime, useDragDropFiles } from "@/hooks/useDragDropFiles";
 import { friendlyError } from "@/lib/error-messages";
 import { formatBytes, formatSats } from "@/lib/format";
@@ -168,6 +169,7 @@ export function SingleInscribeForm({ environment }: { environment: Environment }
             <dd>{formatSats(inscribed.fee)}</dd>
           </dl>
         </div>
+        <RegtestMineOffer chain={chain} />
         <Button onClick={reset}>{t("inscribe.inscribeAnother")}</Button>
       </div>
     );
