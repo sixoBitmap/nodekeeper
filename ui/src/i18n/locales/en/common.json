@@ -86,7 +86,9 @@
     "runesHint": "Rune balances in the wallet.",
     "addresses": "Address index",
     "addressesHint": "Address lookups in the explorer.",
-    "permanenceNote": "These choices are effectively permanent once ord has indexed -- changing them later means a full reindex from scratch."
+    "permanenceNote": "These choices are effectively permanent once ord has indexed -- changing them later means a full reindex from scratch.",
+    "tryItSafely": "Try it safely first (Regtest)",
+    "tryItSafelyHint": "Saves these choices, then opens the Regtest Test Lab -- practice with test coins before starting a multi-day mainnet sync."
   },
   "environmentSwitcher": {
     "label": "Environment",

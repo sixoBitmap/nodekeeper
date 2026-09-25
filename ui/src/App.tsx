@@ -38,6 +38,7 @@ function App() {
   const { t } = useTranslation();
   const { theme, toggleTheme } = useThemeStore();
   const loadEnvironments = useEnvironmentStore((s) => s.load);
+  const selectEnvironment = useEnvironmentStore((s) => s.select);
   const environmentsLoaded = useEnvironmentStore((s) => s.loaded);
   const environments = useEnvironmentStore((s) => s.environments);
   const selected = useEnvironmentStore(selectedEnvironment);
@@ -188,6 +189,15 @@ function App() {
               // options just saved, not the defaults fetched at mount.
               void loadEnvironments();
               setWizardStep("done");
+            }}
+            onTryItSafely={() => {
+              // docs/SPEC.md item 1: land in the Regtest Test Lab
+              // instead of the default screen, so a new user can play
+              // safely before committing to a multi-day mainnet sync.
+              void loadEnvironments();
+              selectEnvironment("regtest");
+              setWizardStep("done");
+              setScreen("testLab");
             }}
           />
         ) : wizardStep === "binarySetup" ? (

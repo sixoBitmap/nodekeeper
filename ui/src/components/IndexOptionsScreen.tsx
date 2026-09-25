@@ -22,8 +22,22 @@ const CHAIN_DIR_NAME: Record<Chain, string> = {
  * after Binary Setup -- skips itself once every chain already has a
  * saved choice (the settings themselves are the "already done" marker,
  * same pattern as `BinarySetupScreen`).
+ *
+ * docs/SPEC.md item 1: "Offer a 'try it safely' option that opens the
+ * Regtest Test Lab ... before committing to a multi-day mainnet sync."
+ * This is the wizard's last step, so it's the natural place for that
+ * offer -- `onTryItSafely` saves the same index-option choices as the
+ * normal "Continue" path (they're still real, permanent choices), then
+ * sends the caller to the Test Lab instead of the default landing
+ * screen.
  */
-export function IndexOptionsScreen({ onContinue }: { onContinue: () => void }) {
+export function IndexOptionsScreen({
+  onContinue,
+  onTryItSafely,
+}: {
+  onContinue: () => void;
+  onTryItSafely: () => void;
+}) {
   const { t } = useTranslation();
   const [environments, setEnvironments] = useState<Environment[] | null>(null);
   const [choices, setChoices] = useState<Record<Chain, IndexOptions> | null>(null);
@@ -64,7 +78,7 @@ export function IndexOptionsScreen({ onContinue }: { onContinue: () => void }) {
     });
   };
 
-  const save = async () => {
+  const save = async (after: () => void) => {
     if (!choices) return;
     setSaving(true);
     try {
@@ -77,7 +91,7 @@ export function IndexOptionsScreen({ onContinue }: { onContinue: () => void }) {
           indexAddresses: o.index_addresses,
         });
       }
-      onContinue();
+      after();
     } finally {
       setSaving(false);
     }
@@ -125,9 +139,18 @@ export function IndexOptionsScreen({ onContinue }: { onContinue: () => void }) {
 
         <p className="text-xs text-muted-foreground">{t("indexOptions.permanenceNote")}</p>
 
-        <Button className="w-full" disabled={saving} onClick={() => void save()}>
+        <Button className="w-full" disabled={saving} onClick={() => void save(onContinue)}>
           {t("systemCheck.continue")}
         </Button>
+        <Button
+          className="w-full"
+          variant="outline"
+          disabled={saving}
+          onClick={() => void save(onTryItSafely)}
+        >
+          {t("indexOptions.tryItSafely")}
+        </Button>
+        <p className="text-center text-xs text-muted-foreground">{t("indexOptions.tryItSafelyHint")}</p>
       </div>
     </div>
   );

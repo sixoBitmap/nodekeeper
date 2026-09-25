@@ -1632,8 +1632,17 @@ Frontend + backend — Regtest Test Lab (docs/SPEC.md item 11)
       deleted, and confirms it's a no-op when regtest has no data yet.
       Frontend: `TestLabScreen`'s "Reset" button goes through the shared
       `ConfirmDialog` before calling it.
-- [ ] Wire the setup wizard's "Try it safely" (currently doesn't exist
-      as a real link) to open the full Test Lab
+- [x] Wire the setup wizard's "Try it safely" (currently doesn't exist
+      as a real link) to open the full Test Lab. Added as a secondary
+      button on `IndexOptionsScreen` (the wizard's last step, right
+      before the mainnet-sync decision) -- saves the same index-option
+      choices as the normal "Continue" path, then finishes the wizard
+      into the Regtest environment's Test Lab screen instead of the
+      default landing screen. Live-verified the full path in the
+      browser dev preview: disclaimer -> system check -> binary
+      setup -> index options -> "Try it safely first (Regtest)" lands
+      directly on Test Lab with Regtest selected in both the env
+      banner and switcher.
 
 Frontend + backend — Notifications, tray, prevent-sleep (docs/SPEC.md
 item 8's Phase-8 sub-parts)

@@ -2829,6 +2829,27 @@ wiring the setup wizard's "Try it safely" link to this screen remain
 explicitly deferred (PROGRESS.md) -- this increment covers the
 setup/mining/reset controls they'll sit alongside.
 
+### "Try it safely" wizard link (Phase 8, 2026-09-25)
+
+docs/SPEC.md item 1 says the setup wizard should "offer a 'try it
+safely' option that opens the Regtest Test Lab... before committing to
+a multi-day mainnet sync." Placed it as a secondary button on
+`IndexOptionsScreen` -- the wizard's last step -- rather than earlier
+(e.g. `SystemCheckScreen`, where the data-directory picker lives):
+Test Lab's one-click setup needs the verified bitcoind/ord binaries
+already in place, which only exist once `BinarySetupScreen` has run.
+Putting the offer any earlier would either be a dead link or need to
+silently skip binary setup first, which isn't worth the complexity for
+what is otherwise a one-button nudge.
+
+The button reuses the exact same `save()` path as "Continue" (still
+real, permanent per-chain index-option choices, per Foundation F) and
+only differs in what happens after: `onContinue` finishes into the
+default landing screen, `onTryItSafely` additionally selects the
+Regtest environment and lands on the Test Lab screen instead. No new
+backend command needed -- this is pure frontend routing on top of the
+existing `set_index_options`/environment-store/`screen` state.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
