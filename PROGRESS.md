@@ -1884,9 +1884,20 @@ Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
       standing Windows-only verification limit (compiles + a real
       headless launch with no panic, same as Tray in Phase 8 -- not
       click-tested, since it's outside any webview).
-- [ ] Master password unlock at launch, for the encrypted secrets file
-      (Foundation E -- `nk-secrets`, built Phase 5, needs a launch-time
-      UI flow wired to it for portable mode specifically)
+- [ ] Master password unlock at launch, for the encrypted secrets file.
+      Checked before starting this: `nk-secrets::encrypted_file`'s
+      crypto (Argon2id + XChaCha20-Poly1305, real round-trip/tamper/
+      wrong-password tests, Phase 5) is fully built and ready to wire
+      up. Deliberately not building the launch-time UI flow yet,
+      though: per that module's own doc comment, the secrets file
+      "never stores wallet encryption passphrases or mnemonics... for
+      settings-adjacent secrets only (e.g. a remote-mode SSH key, once
+      that feature exists)" -- and remote mode doesn't exist yet
+      (docs/SPEC.md item 9, unstarted). There is currently nothing real
+      for a master password to protect, so a launch-time unlock prompt
+      today would gate access to an empty store -- speculative UI for a
+      need that doesn't exist yet, against CLAUDE.md's scope-discipline
+      rule. Revisit once something actually writes to this store.
 - [ ] "Prepare a new portable drive" wizard (formatting guidance, copy
       launchers/binaries/runtime, initialize the folder structure) --
       depends on the final folder layout existing first
