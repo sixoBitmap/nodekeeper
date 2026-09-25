@@ -7,6 +7,7 @@ import { BinarySetupScreen } from "@/components/BinarySetupScreen";
 import { DashboardScreen } from "@/components/DashboardScreen";
 import { EnvBanner } from "@/components/EnvBanner";
 import { EnvironmentSwitcher } from "@/components/EnvironmentSwitcher";
+import { ExplorerScreen } from "@/components/ExplorerScreen";
 import { FirstRunDisclaimer } from "@/components/FirstRunDisclaimer";
 import { IndexOptionsScreen } from "@/components/IndexOptionsScreen";
 import { InscribeStudioScreen } from "@/components/InscribeStudioScreen";
@@ -16,7 +17,7 @@ import { WalletScreen } from "@/components/WalletScreen";
 import { selectedEnvironment, useEnvironmentStore } from "@/store/environment";
 import { useThemeStore } from "@/store/theme";
 
-type Screen = "dashboard" | "wallet" | "inscribe";
+type Screen = "dashboard" | "wallet" | "inscribe" | "explorer";
 type WizardStep = "systemCheck" | "binarySetup" | "indexOptions" | "done";
 
 const DISCLAIMER_SETTING_KEY = "disclaimer_acknowledged";
@@ -89,6 +90,13 @@ function App() {
               >
                 {t("nav.inscribe")}
               </Button>
+              <Button
+                variant={screen === "explorer" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setScreen("explorer")}
+              >
+                {t("nav.explorer")}
+              </Button>
             </nav>
           )}
         </div>
@@ -115,8 +123,10 @@ function App() {
             <DashboardScreen key={selected.chain} environment={selected} />
           ) : screen === "wallet" ? (
             <WalletScreen key={selected.chain} environment={selected} />
-          ) : (
+          ) : screen === "inscribe" ? (
             <InscribeStudioScreen key={selected.chain} environment={selected} />
+          ) : (
+            <ExplorerScreen key={selected.chain} environment={selected} />
           )
         ) : wizardStep === "indexOptions" ? (
           <IndexOptionsScreen

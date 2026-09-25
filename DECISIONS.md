@@ -2325,6 +2325,19 @@ Explorer shows which index options are enabled for the current
 environment *before* the user searches, so a search that won't work
 is explained proactively instead of surfacing ord's raw error page.
 
+## Phase 7 — Explorer built (2026-09-25)
+
+Implemented per the VERIFY/design decision above: `ExplorerScreen`
+(search box + sandboxed iframe on `/search/<query>`, index-options
+note sourced from `Environment.index_options`, same as
+`IndexOptionsScreen`/`OrdSection` use), added to the main nav. No Rust
+changes at all -- the whole feature is frontend-only, since ord's own
+`/search` redirect does all the actual work. Live-verified in the
+browser dev preview (mocked IPC, no real ord server, so the iframe
+itself stays inert): the Foundation F note correctly reads per-
+environment values and updates on switch, the search box correctly
+transitions state, no console errors.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

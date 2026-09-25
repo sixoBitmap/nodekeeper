@@ -1382,14 +1382,19 @@ Explorer (docs/SPEC.md item 5) — no new backend needed
       rendering -- no `OrdClient` additions or `explorer_search`
       command needed, `frame-src`'s existing per-origin CSP entries
       already cover every path under each environment's ord origin
-- [ ] `ExplorerScreen`: search box navigating a sandboxed
+- [x] `ExplorerScreen`: search box navigating a sandboxed
       `<iframe src=".../search/<query>">` (same `sandbox="allow-
       scripts"`, no `allow-same-origin`, `referrerPolicy="no-referrer"`
       discipline as `InscriptionPreviewTile`), plus a proactive summary
       of which index options this environment has enabled (Foundation
       F) shown above the search box instead of letting a disabled-
-      index search hit ord's raw error page
-- [ ] Add to the main nav alongside Dashboard/Wallet/Inscribe
+      index search hit ord's raw error page. Live-verified in the
+      browser dev preview: the note reads "None enabled" for Mainnet's
+      defaults and "Sats, Runes, Addresses" for Regtest's, updates
+      immediately on environment switch, and the search box correctly
+      transitions from the empty state to the (in dev preview, inert --
+      no real ord server) iframe.
+- [x] Add to the main nav alongside Dashboard/Wallet/Inscribe
 
 Backend — Console command execution + safety layer (docs/SPEC.md item 6)
 - [ ] `console_run(chain, command_line)`: parses a raw `bitcoin-cli`/

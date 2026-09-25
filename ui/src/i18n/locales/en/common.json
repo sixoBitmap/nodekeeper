@@ -5,7 +5,8 @@
   "nav": {
     "dashboard": "Dashboard",
     "wallet": "Wallet",
-    "inscribe": "Inscribe"
+    "inscribe": "Inscribe",
+    "explorer": "Explorer"
   },
   "theme": {
     "toggleToLight": "Switch to light theme",
@@ -288,6 +289,13 @@
       "confirmTitle": "Create reinscription",
       "confirmDescription": "This will be reinscription #{{number}} on sat {{sat}}, for a fee of {{fee}}"
     }
+  },
+  "explorer": {
+    "title": "Explorer",
+    "indexNote": "This environment has indexed: {{options}}. A search for something that needs a disabled index won't find it here.",
+    "placeholder": "Inscription ID, sat number, block.offset, transaction, block hash, or address",
+    "search": "Search",
+    "empty": "Search above to look something up on this environment's own ord server."
   },
   "diskMonitor": {
     "title": "Disk usage",
