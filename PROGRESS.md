@@ -1367,28 +1367,28 @@ Acceptance criteria (from docs/SPEC.md Phase 6 "Done when"):
 In progress. Tasks (one at a time: implement -> test -> quality gate ->
 commit -> tick):
 
-Backend — Explorer (docs/SPEC.md item 5)
-- [ ] VERIFY live against ord 0.29.0: the `/search`-style endpoint (or
-      per-type lookups if no unified one exists) for inscriptions,
-      sats, transactions, addresses, blocks, and runes -- record exact
-      request/response shapes and index-option gating (Foundation F:
-      address/rune/sat searches need `--index-addresses`/`--index-
-      runes`/`--index-sats` respectively) in DECISIONS.md
-- [ ] `OrdClient` additions for whatever the VERIFY finds, following
-      the existing `sat`/`inscription` methods' shape (redacted
-      command recording, `get_json` helper)
-- [ ] `explorer_search(chain, query)` Tauri command, gated per
-      Foundation F the same way other index-dependent commands already
-      are (`AppErrorCode::IndexOptionDisabled`)
-
-Frontend — Explorer
-- [ ] `ExplorerScreen`: a search bar plus a result view per resource
-      type (inscription/sat/tx/address/block/rune), each showing what
-      that type's `/content`, `/preview`, or JSON detail already
-      renders elsewhere (reuse `InscriptionPreviewTile` where it
-      applies) -- "index-dependent searches gated per Foundation F"
-      shown the same way `IndexOptionsScreen`/`OrdSection` already
-      explain a missing index option, not a raw error
+Explorer (docs/SPEC.md item 5) — no new backend needed
+- [x] VERIFY live against ord 0.29.0: `/search/<query>` is ord's own
+      real type-auto-detecting endpoint (303 redirect to `/inscription`,
+      `/sat`, `/tx`, `/block`, or `/address`), including a real
+      block-hash-vs-txid disambiguation done server-side. See
+      DECISIONS.md "Phase 7 — VERIFY: ord's explorer/search HTTP
+      surface (2026-09-25)" for the full routing table and the bare-
+      integer-is-always-an-inscription-number gotcha.
+- [x] Design decision (same VERIFY entry): since Foundation D says "the
+      embedded explorer follows [the same rules as inscription
+      previews]," the Explorer embeds ord's own HTML pages in a
+      sandboxed iframe rather than re-implementing search/result
+      rendering -- no `OrdClient` additions or `explorer_search`
+      command needed, `frame-src`'s existing per-origin CSP entries
+      already cover every path under each environment's ord origin
+- [ ] `ExplorerScreen`: search box navigating a sandboxed
+      `<iframe src=".../search/<query>">` (same `sandbox="allow-
+      scripts"`, no `allow-same-origin`, `referrerPolicy="no-referrer"`
+      discipline as `InscriptionPreviewTile`), plus a proactive summary
+      of which index options this environment has enabled (Foundation
+      F) shown above the search box instead of letting a disabled-
+      index search hit ord's raw error page
 - [ ] Add to the main nav alongside Dashboard/Wallet/Inscribe
 
 Backend — Console command execution + safety layer (docs/SPEC.md item 6)

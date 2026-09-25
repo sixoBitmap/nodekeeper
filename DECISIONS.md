@@ -2267,6 +2267,64 @@ triggering a start), not a wizard screen, and is a distinct enough
 piece of work to stay its own tracked task rather than being folded in
 here. Still open in PROGRESS.md Phase 4.
 
+## Phase 7 — VERIFY: ord's explorer/search HTTP surface (2026-09-25)
+
+Real regtest bitcoind (31.1, `-txindex=1 -prune=0`, matching
+`nk_core::bitcoin_conf::generate_bitcoin_conf`'s real output -- a first
+manual pass without `-txindex` produced a misleading "Internal Server
+Error" from ord on `/inscription/<id>` and would have looked like an
+ord bug; it's actually just what happens without txindex, which the
+real app always sets) + real ord 0.29.0 server with `--index-sats
+--index-runes --index-addresses`, one inscription created, probed with
+curl against `Accept: application/json` and via HTTP redirect tracing.
+
+**`/search/<query>` (and `/search?query=<query>`) is ord's real
+auto-detect-the-type endpoint** -- HTTP 303 redirecting to the actual
+resource path. This is the key finding that reshapes the whole
+Explorer design (see below): ord already does exactly what
+docs/SPEC.md item 5 asks for ("search inscriptions, sats,
+transactions, addresses, blocks, and runes"), server-side, for free.
+
+Exact routing confirmed live, one query type at a time:
+| Query | Routes to | Notes |
+|---|---|---|
+| `<64-hex>i<n>` (inscription id) | `/inscription/<id>` | |
+| a bare positive integer, e.g. `113` | `/inscription/<n>` | **Always inscription number, never block height or a raw sat number** -- confirmed by searching a real sat number (`28999998350`) and getting `/inscription/28999998350`, which then 200s with `"Invalid URL: number too large to fit in target type"` (inscription numbers are a signed 32-bit type). A real block height search needs the block's hash, not its height, to hit `/search` correctly. |
+| `<block>.<offset>` (dotted decimal) | `/sat/<n>.<m>` | The *only* way to reach a sat via `/search` with a bare number -- no dot means "inscription number" per above |
+| 64-hex block hash | `/block/<hash>` | Disambiguated from a txid by ord doing a real lookup server-side (confirmed: two different real 64-hex values -- one an actual block hash, one an actual txid -- routed to `/block/` and `/tx/` respectively, not just by string shape) |
+| 64-hex txid | `/tx/<txid>` | |
+| `bcrt1...`/`bc1...`/etc. address | `/address/<addr>` | |
+
+**Decision this changes: the Explorer embeds ord's own HTML pages in a
+sandboxed iframe, it does not re-implement search/result rendering.**
+docs/SPEC.md item 5 says "search... via the environment's local ord
+server" and "the embedded explorer follows Foundation D" -- Foundation
+D's webview security rules explicitly say "Same rules for the embedded
+explorer," confirming "embedded" is literal: ord's own already-built,
+already-tested explorer pages, not a Nodekeeper reimplementation.
+Originally planned (PROGRESS.md, before this VERIFY) to add
+`OrdClient` methods + an `explorer_search` Tauri command + custom
+per-type result views -- unnecessary and worse: ord's own `/search`
+redirect already resolves the type server-side (including the block-
+hash-vs-txid disambiguation above, which a from-scratch client-side
+guesser would have had to reimplement, incorrectly, without a real
+lookup). The actual Explorer is a search box plus a sandboxed
+`<iframe src="http://127.0.0.1:<ord_port>/search/<query>">`, same
+`sandbox="allow-scripts"` / no `allow-same-origin` /
+`referrerPolicy="no-referrer"` discipline as
+`InscriptionPreviewTile` (Foundation D). No new CSP entries needed --
+`frame-src` already allow-lists each environment's ord origin for
+inscription previews, and CSP `frame-src` is origin-scoped, not
+path-scoped, so every path under that origin (`/search`, `/tx`,
+`/block`, `/address`, `/sat`, `/inscription`) is already covered.
+
+**Foundation F gating**: rather than trying to intercept/parse ord's
+own HTML error page for a disabled index (confirmed in Phase 5 VERIFY:
+address search without `--index-addresses` is a hard error), the
+Explorer shows which index options are enabled for the current
+environment *before* the user searches, so a search that won't work
+is explained proactively instead of surfacing ord's raw error page.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
