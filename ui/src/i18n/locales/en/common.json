@@ -3,6 +3,7 @@
     "title": "Nodekeeper"
   },
   "nav": {
+    "overview": "Overview",
     "dashboard": "Dashboard",
     "wallet": "Wallet",
     "inscribe": "Inscribe",
@@ -87,7 +88,15 @@
     "permanenceNote": "These choices are effectively permanent once ord has indexed -- changing them later means a full reindex from scratch."
   },
   "environmentSwitcher": {
-    "label": "Environment"
+    "label": "Environment",
+    "running": "(running)"
+  },
+  "overview": {
+    "title": "Overview",
+    "stopAll": "Stop all",
+    "resourceSummary": "{{running}} service(s) running -- {{available}} RAM available",
+    "resourceWarning": "Several environments are running and available memory is low. Consider stopping some before starting more.",
+    "diskUsed": "{{size}} used"
   },
   "errors": {
     "generic": {

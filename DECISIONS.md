@@ -2713,6 +2713,51 @@ than surviving into this review. The one open item (10) is a forward-
 looking design question for a not-yet-built feature, written down so
 it gets decided on purpose.
 
+## Phase 8 — Multi-environment UI: Overview screen and switcher status (2026-09-25)
+
+The full switcher, "all environments" overview, and resource warnings
+(docs/SPEC.md item 10) needed no new backend at all: `useDashboardStatus`/
+`useOrdStatus` already poll `is_node_running`/`node_status`/
+`is_ord_running`/`ord_status` and expose start/stop/restart per chain
+(built for the per-environment Dashboard in Phase 3) -- `OverviewScreen`
+just renders one `EnvironmentOverviewCard` per environment, each a
+normal component instance calling those same hooks for its own chain
+(valid per the rules of hooks; a loop calling hooks directly would not
+be). "Stop all" doesn't first check what's running -- it just calls
+`stop_node`/`stop_ord` for every chain via `Promise.allSettled` and
+lets already-stopped ones fail harmlessly, simpler and just as correct
+as tracking state to avoid calling stop on something already stopped.
+
+**Resource-warning scope decision**: docs/SPEC.md item 10 asks to "show
+combined RAM and disk use across running environments." Disk use is
+free -- `NodeStatus.disk.used_by_data_bytes` already exists per
+environment. RAM is not: nothing tracks *per-process* memory for a
+spawned bitcoind/ord (`NodeManager` holds PIDs to signal them, not to
+query `sysinfo` for their memory), and building that is real, separate
+work. Shipped a scoped-down version instead -- system-wide available
+RAM (`system_check`, already built) plus a live count of running
+services -- and wrote the precise version down as a tracked follow-up
+in PROGRESS.md rather than silently presenting the approximation as the
+full feature.
+
+**Switcher status is a text label, not a color change**, per docs/
+SPEC.md item 8's own accessibility rule ("environment colors always
+paired with text labels"): `EnvironmentSwitcher` now polls the same
+two booleans per chain and shows "(running)" next to any environment
+with something up, alongside its existing color dot -- never relying
+on the dot's color alone to convey state.
+
+Live-verified in the browser dev preview: starting Regtest's node from
+its Overview card flips that card to "Syncing" with a real disk-usage
+figure, updates the top-of-page running count on its next poll, and
+leaves the other three cards untouched; "Stop all" returns everything
+to Stopped in one click. Caught and fixed the same class of test gap
+as earlier in this session while running the frontend quality gate:
+`App.test.tsx` has its own separate `mockInvoke` (distinct from
+`dev-tauri-mock.ts`) that didn't have a case for `is_node_running`,
+which `EnvironmentSwitcher` now calls on mount regardless of wizard
+step -- added it.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

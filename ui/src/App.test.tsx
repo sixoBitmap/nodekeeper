@@ -53,6 +53,7 @@ function mockInvoke(disclaimerAcknowledged: boolean) {
         return Promise.resolve("./data");
       case "list_command_history":
         return Promise.resolve([]);
+      case "is_node_running":
       case "is_ord_running":
         return Promise.resolve(false);
       default:

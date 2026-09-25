@@ -1557,30 +1557,35 @@ two of item 10/11's full scope plus three sub-parts of item 8
 (plain-language errors, diagnostics export, accessibility) already
 shipped earlier or belong to a later phase per its own summary line.
 
-Frontend — Multi-environment UI (docs/SPEC.md item 10)
-- [ ] `OverviewScreen`: one card per environment (reusing
+Frontend — Multi-environment UI (docs/SPEC.md item 10) — **done**
+- [x] `OverviewScreen`: one card per environment (reusing
       `useDashboardStatus`/`useOrdStatus` per chain -- no new backend
       needed, both hooks already poll+start/stop/restart), each
       showing bitcoind + ord status side by side; a "stop all" button
       that stops everything and silently ignores "wasn't running"
       errors, since it isn't the caller's job to know in advance what
-      is or isn't up
-- [ ] Combined resource summary: aggregate `NodeStatus.disk.
-      used_by_data_bytes` across currently-running environments
-      (already available per-environment, no new command) +
-      `system_check`'s total/available RAM; warn when several heavy
-      environments are running at once and available RAM is low.
-      Scoped down from the spec's literal "combined RAM... across
-      running environments": precise per-process RAM attribution needs
-      new backend instrumentation (tracking each spawned bitcoind/ord
-      PID's actual memory via `sysinfo`) not built yet -- this pass
-      uses system-wide available RAM plus a running-environment count
-      as the signal instead, tracked as a follow-up for the precise
-      version
-- [ ] Full switcher: add a live running/stopped status badge per
-      environment to `EnvironmentSwitcher`'s dropdown (today it only
-      shows the color dot + name, no status)
-- [ ] Add Overview to the main nav
+      is or isn't up. Live-verified in the browser dev preview:
+      starting Regtest's node updates its card (Syncing badge, disk
+      usage) without touching the other three, and "Stop all" returns
+      every card to Stopped.
+- [x] Combined resource summary: aggregate a running-environment count
+      (independent `is_node_running`/`is_ord_running` poll across all
+      chains) + `system_check`'s available RAM; warns when 4+ services
+      are running and available RAM is under 2 GB. Scoped down from the
+      spec's literal "combined RAM... across running environments":
+      precise per-process RAM attribution needs new backend
+      instrumentation (tracking each spawned bitcoind/ord PID's actual
+      memory via `sysinfo`) not built yet -- this pass uses system-wide
+      available RAM plus a running-service count as the signal instead,
+      tracked as a follow-up for the precise version.
+- [x] Full switcher: `EnvironmentSwitcher` now polls
+      `is_node_running`/`is_ord_running` per environment and shows a
+      "(running)" text label next to any environment with something up
+      -- text label, not color alone, per docs/SPEC.md item 8's
+      accessibility rule. Live-verified the dropdown renders correctly
+      with all 4 environments.
+- [x] Add Overview to the main nav -- placed first, since it's the one
+      screen not scoped to the currently-selected environment
 
 Frontend + backend — Regtest Test Lab (docs/SPEC.md item 11)
 - [ ] VERIFY: does ord 0.29.0 have a built-in regtest environment

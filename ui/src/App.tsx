@@ -13,13 +13,14 @@ import { FirstRunDisclaimer } from "@/components/FirstRunDisclaimer";
 import { IndexOptionsScreen } from "@/components/IndexOptionsScreen";
 import { InscribeStudioScreen } from "@/components/InscribeStudioScreen";
 import { LiveCommandMonitor } from "@/components/LiveCommandMonitor";
+import { OverviewScreen } from "@/components/OverviewScreen";
 import { ScriptsScreen } from "@/components/ScriptsScreen";
 import { SystemCheckScreen } from "@/components/SystemCheckScreen";
 import { WalletScreen } from "@/components/WalletScreen";
 import { selectedEnvironment, useEnvironmentStore } from "@/store/environment";
 import { useThemeStore } from "@/store/theme";
 
-type Screen = "dashboard" | "wallet" | "inscribe" | "explorer" | "console" | "scripts";
+type Screen = "overview" | "dashboard" | "wallet" | "inscribe" | "explorer" | "console" | "scripts";
 type WizardStep = "systemCheck" | "binarySetup" | "indexOptions" | "done";
 
 const DISCLAIMER_SETTING_KEY = "disclaimer_acknowledged";
@@ -29,6 +30,7 @@ function App() {
   const { theme, toggleTheme } = useThemeStore();
   const loadEnvironments = useEnvironmentStore((s) => s.load);
   const environmentsLoaded = useEnvironmentStore((s) => s.loaded);
+  const environments = useEnvironmentStore((s) => s.environments);
   const selected = useEnvironmentStore(selectedEnvironment);
 
   // null = not checked yet, matches the "loading" state below.
@@ -71,6 +73,13 @@ function App() {
           <h1 className="text-sm font-semibold">{t("app.title")}</h1>
           {wizardStep === "done" && (
             <nav className="flex gap-1">
+              <Button
+                variant={screen === "overview" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setScreen("overview")}
+              >
+                {t("nav.overview")}
+              </Button>
               <Button
                 variant={screen === "dashboard" ? "secondary" : "ghost"}
                 size="sm"
@@ -130,7 +139,13 @@ function App() {
         </div>
       </header>
       <main className="flex-1 overflow-y-auto">
-        {wizardStep === "done" && selected ? (
+        {wizardStep === "done" && screen === "overview" ? (
+          // Deliberately not scoped to `selected` -- this is the one
+          // screen that shows every environment at once (docs/SPEC.md
+          // item 10), not just the one the switcher currently has
+          // selected.
+          <OverviewScreen environments={environments} />
+        ) : wizardStep === "done" && selected ? (
           // Keyed by chain (and now screen): switching environments or
           // screens should remount with fresh state, not carry over
           // the previous one's status/log-viewer state (see
