@@ -72,6 +72,17 @@
       "error": "Failed"
     }
   },
+  "indexOptions": {
+    "title": "Choose what ord indexes",
+    "intro": "Each option unlocks more of ord's features, but turning one on later means a full reindex from scratch -- so it's worth deciding now. Regtest defaults to everything since it costs almost nothing there; a mainnet node with every option needs well over 1 TB of SSD space.",
+    "sats": "Sat index",
+    "satsHint": "Sat-level views, including every inscription on a sat when reinscribing.",
+    "runes": "Rune index",
+    "runesHint": "Rune balances in the wallet.",
+    "addresses": "Address index",
+    "addressesHint": "Address lookups in the explorer.",
+    "permanenceNote": "These choices are effectively permanent once ord has indexed -- changing them later means a full reindex from scratch."
+  },
   "environmentSwitcher": {
     "label": "Environment"
   },

@@ -2,7 +2,7 @@ mod node_manager;
 mod wallet_session;
 
 use nk_core::system_check::{run_system_check, SystemCheck};
-use nk_core::{AppErrorCode, Chain, Environment};
+use nk_core::{AppErrorCode, Chain, Environment, IndexOptions};
 use nk_exec::Executor;
 use nk_store::Store;
 use node_manager::{NodeManager, NodeManagerError};
@@ -22,9 +22,9 @@ fn system_check(data_dir: String) -> SystemCheck {
     run_system_check(std::path::Path::new(&data_dir))
 }
 
-/// Every environment with its defaults. No per-environment
-/// customization exists yet (e.g. renaming, per-chain overrides) --
-/// this always returns one default `Environment` per `Chain`, rooted at
+/// Every environment with its defaults, index options included. No
+/// other per-environment customization exists yet (e.g. renaming) --
+/// this always returns one `Environment` per `Chain`, rooted at
 /// `environment_data_root` (the data-directory picker, docs/SPEC.md
 /// item 1) -- enough for the environment switcher to render against a
 /// real backend type instead of a frontend-only placeholder.
@@ -33,8 +33,71 @@ fn list_default_environments(store: tauri::State<'_, Arc<Mutex<Store>>>) -> Vec<
     let root = environment_data_root(&store);
     Chain::ALL
         .iter()
-        .map(|&chain| Environment::new_default(chain, &root))
+        .map(|&chain| {
+            let mut env = Environment::new_default(chain, &root);
+            env.index_options = effective_index_options(chain, &store);
+            env
+        })
         .collect()
+}
+
+/// Settings key an index-options override for `chain` is stored under
+/// (docs/SPEC.md Foundation F/item 1) -- one JSON-encoded `IndexOptions`
+/// per chain, since each environment records its own.
+fn index_options_setting_key(chain: Chain) -> String {
+    format!("index_options_{}", chain.dir_name())
+}
+
+/// `chain`'s effective index options: the wizard-chosen override if one
+/// was ever saved, else the chain's built-in default (`Chain::
+/// default_index_options` -- e.g. regtest enables everything, since it
+/// "costs almost nothing there," per Foundation F).
+fn effective_index_options(
+    chain: Chain,
+    store: &tauri::State<'_, Arc<Mutex<Store>>>,
+) -> IndexOptions {
+    store
+        .lock()
+        .unwrap()
+        .get_setting(&index_options_setting_key(chain))
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_else(|| chain.default_index_options())
+}
+
+/// Setup wizard step (docs/SPEC.md item 1 / Foundation F): saves the
+/// user's chosen index options for `chain`. These are "effectively
+/// permanent" once ord has indexed with an option disabled (enabling it
+/// later means a full reindex), so this refuses while that chain's ord
+/// is running rather than let a change silently apply to nothing until
+/// the next restart.
+#[tauri::command]
+fn set_index_options(
+    chain: Chain,
+    index_sats: bool,
+    index_runes: bool,
+    index_addresses: bool,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+) -> Result<(), TypedError> {
+    if node_manager.is_ord_running(chain) {
+        return Err(TypedError::from(
+            "Stop ord for this environment before changing its index options.".to_string(),
+        ));
+    }
+    let options = IndexOptions {
+        index_sats,
+        index_runes,
+        index_addresses,
+    };
+    let json = serde_json::to_string(&options).map_err(|e| TypedError::from(e.to_string()))?;
+    store
+        .lock()
+        .unwrap()
+        .set_setting(&index_options_setting_key(chain), &json)
+        .map_err(|e| TypedError::from(e.to_string()))?;
+    Ok(())
 }
 
 /// The data-directory picker's current effective value (docs/SPEC.md
@@ -1584,6 +1647,7 @@ pub fn run() {
             set_environment_data_root,
             download_and_verify_bitcoin_core,
             download_and_verify_ord,
+            set_index_options,
             get_setting,
             set_setting,
             start_node,

@@ -828,10 +828,18 @@ here, not built yet:
       orchestration (`nk_verify::ord::download_verify_and_install_ord`),
       live-verified end to end. See DECISIONS.md "Setup wizard UI:
       binary download + verify screens (2026-09-25)".
-- [ ] The index-options step -- explain disk/time cost per option, list
+- [x] The index-options step -- explain disk/time cost per option, list
       which app features each unlocks (Foundation F), and state clearly
       the choice is effectively permanent (changing it later means a
-      full reindex)
+      full reindex) — `IndexOptionsScreen`, one card per environment
+      (all four chains), backed by a new per-chain
+      `index_options_<chain>` setting and `set_index_options` command
+      (refuses while that chain's ord is running). Live-verified:
+      per-environment toggles are independent, Regtest defaults to
+      everything on per Foundation F, choices persist and the
+      environment store refreshes so the Dashboard reflects them
+      immediately. See DECISIONS.md "Setup wizard UI: index-options
+      step (2026-09-25)".
 - [ ] Wizard default: per spec, start ord indexing automatically once
       Bitcoin Core finishes its initial sync, with a "start now anyway"
       override and warning -- no such sequencing exists yet; today

@@ -229,6 +229,23 @@ export function installDevTauriMockIfNeeded() {
         settings.set("ord_path", path);
         return path;
       }
+      case "set_index_options": {
+        const { chain, indexSats, indexRunes, indexAddresses } = args as {
+          chain: Chain;
+          indexSats: boolean;
+          indexRunes: boolean;
+          indexAddresses: boolean;
+        };
+        settings.set(
+          `index_options_${chain}`,
+          JSON.stringify({
+            index_sats: indexSats,
+            index_runes: indexRunes,
+            index_addresses: indexAddresses,
+          }),
+        );
+        return undefined;
+      }
       case "plugin:dialog|open":
         // The real native folder picker only works in the installed
         // app -- the dev preview stands in with a fixed fake path, same

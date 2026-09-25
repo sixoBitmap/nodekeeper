@@ -8,6 +8,7 @@ import { DashboardScreen } from "@/components/DashboardScreen";
 import { EnvBanner } from "@/components/EnvBanner";
 import { EnvironmentSwitcher } from "@/components/EnvironmentSwitcher";
 import { FirstRunDisclaimer } from "@/components/FirstRunDisclaimer";
+import { IndexOptionsScreen } from "@/components/IndexOptionsScreen";
 import { InscribeStudioScreen } from "@/components/InscribeStudioScreen";
 import { LiveCommandMonitor } from "@/components/LiveCommandMonitor";
 import { SystemCheckScreen } from "@/components/SystemCheckScreen";
@@ -16,7 +17,7 @@ import { selectedEnvironment, useEnvironmentStore } from "@/store/environment";
 import { useThemeStore } from "@/store/theme";
 
 type Screen = "dashboard" | "wallet" | "inscribe";
-type WizardStep = "systemCheck" | "binarySetup" | "done";
+type WizardStep = "systemCheck" | "binarySetup" | "indexOptions" | "done";
 
 const DISCLAIMER_SETTING_KEY = "disclaimer_acknowledged";
 
@@ -30,10 +31,11 @@ function App() {
   // null = not checked yet, matches the "loading" state below.
   const [disclaimerAcknowledged, setDisclaimerAcknowledged] = useState<boolean | null>(null);
   // Not persisted as its own flag: the system check is informational, so
-  // it's fine to show it again on every launch. The binary setup step
-  // effectively *is* persisted, just via `bitcoind_path`/`ord_path`
-  // themselves (BinarySetupScreen skips straight past itself once both
-  // are already set) rather than a separate "wizard done" flag.
+  // it's fine to show it again on every launch. The binary setup and
+  // index options steps effectively *are* persisted, just via their own
+  // settings keys (`bitcoind_path`/`ord_path`, `index_options_<chain>`)
+  // -- each screen skips straight past itself once already configured,
+  // rather than a separate "wizard done" flag.
   const [wizardStep, setWizardStep] = useState<WizardStep>("systemCheck");
   const [screen, setScreen] = useState<Screen>("dashboard");
 
@@ -116,8 +118,17 @@ function App() {
           ) : (
             <InscribeStudioScreen key={selected.chain} environment={selected} />
           )
+        ) : wizardStep === "indexOptions" ? (
+          <IndexOptionsScreen
+            onContinue={() => {
+              // Refresh so the Dashboard/Wallet reflect the index
+              // options just saved, not the defaults fetched at mount.
+              void loadEnvironments();
+              setWizardStep("done");
+            }}
+          />
         ) : wizardStep === "binarySetup" ? (
-          <BinarySetupScreen onContinue={() => setWizardStep("done")} />
+          <BinarySetupScreen onContinue={() => setWizardStep("indexOptions")} />
         ) : (
           <SystemCheckScreen onContinue={() => setWizardStep("binarySetup")} />
         )}

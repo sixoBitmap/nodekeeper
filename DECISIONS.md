@@ -2214,6 +2214,59 @@ installed" -> click "Download & verify" -> "Verified" with their path,
 Continue enables only once both are done, and the flow lands on a
 working Dashboard with nav.
 
+## Setup wizard UI: index-options step (2026-09-25)
+
+Closes the last unbuilt piece of the setup-wizard gap tracked earlier
+today. docs/SPEC.md Foundation F requires each environment to record
+its own ord index options and for the choice to be made "up front, not
+toggled casually" since enabling one after ord has indexed means a full
+reindex — but until now there was no UI to choose them at all;
+`Environment::new_default` always returned `Chain::default_index_options()`
+with no override mechanism.
+
+**Storage**: one JSON-encoded `IndexOptions` per chain, settings key
+`index_options_<chain>` (`chain.dir_name()`), read through a new
+`effective_index_options()` helper that falls back to
+`chain.default_index_options()` when unset -- same override-with-
+fallback shape as `environment_data_root()`. `list_default_environments`
+now applies this per chain instead of trusting `Environment::new_default`'s
+built-in default outright.
+
+**`set_index_options` refuses while that chain's ord is running**
+(`NodeManager::is_ord_running(chain)`), not just any environment
+anywhere -- unlike the data-directory picker's `any_running()` (which
+guards a *global* path every environment reads), index options are
+per-chain, so the guard is scoped the same way.
+
+**Copy pulled from already-VERIFY'd mappings, not invented**: the
+sat/rune/address -> feature mapping in `IndexOptionsScreen` matches
+Phase 5's exact VERIFY table (rune balances -> index-runes, address
+lookups in the explorer -> index-addresses, sat-level views/reinscribe
+history -> index-sats), and "Regtest enables all index options by
+default, since they cost almost nothing there" is the spec's own
+Foundation F wording, not a paraphrase.
+
+**Frontend**: `IndexOptionsScreen` inserted between Binary Setup and
+"done" (`wizardStep`: "binarySetup" -> "indexOptions" -> "done"). One
+card per environment (all four chains, independently toggleable),
+skips itself once every chain already has a saved choice. On
+continue, `App.tsx` also re-calls `loadEnvironments()` before flipping
+to "done" so the Dashboard/Wallet reflect the just-saved choices
+immediately rather than the defaults fetched at app mount -- caught
+during design, not found as a bug afterward.
+
+Live-verified in the browser dev preview: Mainnet/Signet/Testnet4
+default to nothing enabled, Regtest to everything; toggling one
+environment's checkbox doesn't affect another's; Continue persists all
+four and lands on a working Dashboard.
+
+Deliberately not built in this pass: the "start ord automatically once
+Bitcoin Core finishes syncing" wizard default (docs/SPEC.md item 1) --
+that's dashboard/orchestration scope (watching sync status and
+triggering a start), not a wizard screen, and is a distinct enough
+piece of work to stay its own tracked task rather than being folded in
+here. Still open in PROGRESS.md Phase 4.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
