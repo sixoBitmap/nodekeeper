@@ -9,7 +9,8 @@
     "inscribe": "Inscribe",
     "explorer": "Explorer",
     "console": "Console",
-    "scripts": "Scripts"
+    "scripts": "Scripts",
+    "testLab": "Test Lab"
   },
   "theme": {
     "toggleToLight": "Switch to light theme",
@@ -97,6 +98,25 @@
     "resourceSummary": "{{running}} service(s) running -- {{available}} RAM available",
     "resourceWarning": "Several environments are running and available memory is low. Consider stopping some before starting more.",
     "diskUsed": "{{size}} used"
+  },
+  "testLab": {
+    "title": "Test Lab",
+    "intro": "Safe practice mode on Regtest -- test coins have no real value, and you mine blocks yourself instead of waiting for real miners.",
+    "wrongEnvironment": "The Test Lab only works on Regtest. Switch environment to use it.",
+    "oneClickSetup": "One-click setup",
+    "oneClickSetupHint": "Starts Bitcoin Core and ord, then mines 101 blocks to your wallet so its coins are spendable right away.",
+    "settingUp": "Setting up…",
+    "needsWalletFirst": "Create a wallet on the Wallet screen first.",
+    "mineBlocks": "Mine blocks",
+    "mine": "Mine",
+    "mining": "Mining…",
+    "getTestCoins": "Get test coins",
+    "minedBlocks": "Mined {{count}} block(s).",
+    "reset": "Reset Test Lab",
+    "resetHint": "Stops Regtest's services and deletes only its data -- other environments are never touched.",
+    "resetting": "Resetting…",
+    "resetConfirmTitle": "Reset the Test Lab?",
+    "resetConfirmDescription": "This stops Regtest and permanently deletes its wallet and blockchain data. Test coins have no real value, but this can't be undone."
   },
   "errors": {
     "generic": {

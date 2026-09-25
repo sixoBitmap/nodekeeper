@@ -2758,6 +2758,77 @@ as earlier in this session while running the frontend quality gate:
 which `EnvironmentSwitcher` now calls on mount regardless of wizard
 step -- added it.
 
+## Phase 8 — VERIFY: ord's built-in `env` command isn't a fit for the Test Lab (2026-09-25)
+
+docs/SPEC.md item 11 says: "If the installed ord version has a
+built-in regtest environment command (e.g. `ord env`) (VERIFY), it may
+be used internally, but the app's own controls must still work."
+
+Real `ord --help`/`ord env --help` against 0.29.0: `env` exists
+("Start a regtest ord and bitcoind instance"), taking only a target
+`[DIRECTORY]` (default `env`) plus `--decompress`/`--proxy` -- no
+`--bitcoin-rpc-url`/`--bitcoin-rpc-username`/etc. to point it at an
+*already-running*, externally-managed bitcoind the way every other
+`ord` subcommand in this app takes. It spawns and owns its own bitcoind
+internally.
+
+**Decision: don't use it.** Three concrete reasons, not just "it looks
+different": (1) it would bypass `nk-verify`'s pinned-binary check
+entirely -- there's no way to hand `env` the already-verified bitcoind
+path Nodekeeper downloaded; (2) it would bypass `NodeManager`/`nk-proc`,
+so the Live Command Monitor and graceful-stop tracking this whole app
+is built around would have no visibility into or control over the
+bitcoind it spawns; (3) it ignores the user's chosen data directory
+(`environment_data_root`) in favor of its own `[DIRECTORY]` argument.
+The Test Lab is built as an orchestration layer over Nodekeeper's
+already-working start/stop/wallet/mine-blocks controls instead --
+exactly the "the app's own controls must still work" half of the rule,
+just without the "may be used internally" half, since it genuinely
+doesn't fit this app's architecture.
+
+### Test Lab: mine_blocks / reset_test_lab implementation (Phase 8, 2026-09-25)
+
+Built on top of the `ord env` VERIFY above. Two new Tauri commands:
+
+- **`mine_blocks(chain, count)`**: refuses immediately on any chain other
+  than Regtest (returns a `TypedError`, not a silent no-op), then gets a
+  fresh receive address from the current wallet via
+  `nk_ord::wallet::wallet_receive` and calls the RPC `generate_to_address`.
+  Reuses the existing wallet/RPC plumbing rather than adding a new code
+  path -- "Get test coins" is just `mine_blocks(chain, 1)`, and
+  `TestLabScreen`'s one-click setup is `mine_blocks(chain, 101)` after
+  starting both services (101 blocks = 100-confirmation coinbase maturity
+  plus the spendable block itself).
+- **`reset_test_lab()`**: stops ord then bitcoind gracefully (skipping
+  either if already stopped), then deletes on-disk data via a new
+  extracted function, `delete_regtest_data_only(environment_data_root:
+  &Path)`. Following this session's established pattern (same reasoning
+  as `script_allowed_on_chain`): the docs/SPEC.md [CI] criterion "Reset
+  Test Lab deletes only regtest data" needs a real, direct test, and this
+  project's convention doesn't unit-test Tauri command handlers directly.
+  `delete_regtest_data_only` takes **no chain parameter at all** --  it
+  hard-codes `Environment::new_default(Chain::Regtest, ..)` internally --
+  so it's structurally impossible for it to ever delete another
+  environment's data, rather than relying on an `if chain == Regtest`
+  check that a future edit could get wrong. Two real tests (real tempdir,
+  both regtest and mainnet subdirs populated with files) confirm only
+  regtest is removed, and that calling it when regtest has no data yet is
+  a clean no-op.
+
+`TestLabScreen` deliberately does not reimplement wallet creation: that
+flow already exists on the Wallet screen with the real sensitive-output
+handling for the mnemonic (`SensitiveSeedView`), and duplicating it here
+would mean a second, less-reviewed code path touching a mnemonic. If no
+wallet exists yet, the screen points at the Wallet screen instead of
+trying to create one itself -- consistent with this project's mnemonic-
+handling rule (CLAUDE.md: "Mnemonics flow only through the sensitive-
+output channel... never the monitor, logs, history, or exports").
+
+The 5 guided walkthroughs with checkpoints (docs/SPEC.md item 11) and
+wiring the setup wizard's "Try it safely" link to this screen remain
+explicitly deferred (PROGRESS.md) -- this increment covers the
+setup/mining/reset controls they'll sit alongside.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

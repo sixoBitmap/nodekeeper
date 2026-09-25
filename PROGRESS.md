@@ -1588,16 +1588,28 @@ Frontend — Multi-environment UI (docs/SPEC.md item 10) — **done**
       screen not scoped to the currently-selected environment
 
 Frontend + backend — Regtest Test Lab (docs/SPEC.md item 11)
-- [ ] VERIFY: does ord 0.29.0 have a built-in regtest environment
+- [x] VERIFY: does ord 0.29.0 have a built-in regtest environment
       command (e.g. `ord env`)? If so, decide whether to use it
       internally or keep the app's own controls only (spec: "the app's
-      own controls must still work" either way)
-- [ ] One-click setup: start regtest bitcoind + ord, create a test
+      own controls must still work" either way). Found: `ord env`
+      exists but starts its own bitcoind and takes no flag to point at
+      an externally-managed one, so it would bypass nk-verify's pinned
+      binary, NodeManager/nk-proc's process tracking, and the user's
+      chosen data directory -- decided not to use it internally
+      (DECISIONS.md).
+- [x] One-click setup: start regtest bitcoind + ord, create a test
       wallet, mine 101 blocks to it (100-confirmation coinbase
-      maturity) so its coins are spendable immediately
-- [ ] "Mine blocks" control (number field, default 1, `generatetoaddress`
-      against the current wallet) usable standalone
-- [ ] "Get test coins" button (mine blocks to the current wallet)
+      maturity) so its coins are spendable immediately. Implemented as
+      `TestLabScreen`'s `oneClickSetup`, which starts both services
+      then mines 101 blocks -- deliberately doesn't reimplement wallet
+      creation inline (see below).
+- [x] "Mine blocks" control (number field, default 1, `generatetoaddress`
+      against the current wallet) usable standalone. Backend:
+      `mine_blocks` Tauri command (regtest-only, refuses on any other
+      chain), gets a receive address via `wallet_receive` then calls
+      `generate_to_address`.
+- [x] "Get test coins" button (mine blocks to the current wallet) --
+      same `mine_blocks` command with count 1.
 - [ ] Post-action "Mine 1 block to confirm" offer after a send/inscribe
       on regtest, plus an optional auto-mine toggle
 - [ ] 5 guided walkthroughs with checkpoints, opening the Live Command
@@ -1606,11 +1618,20 @@ Frontend + backend — Regtest Test Lab (docs/SPEC.md item 11)
       (c) reinscribe -> mine -> see both on the sat, (d) send an
       inscription to a second test wallet -> mine -> confirm arrival,
       (e) run a console command and an example script
-- [ ] "Reset Test Lab": stop regtest services gracefully, delete only
+- [x] "Reset Test Lab": stop regtest services gracefully, delete only
       the regtest data directories after confirmation, start fresh --
       the docs/SPEC.md [CI] acceptance criterion ("Reset Test Lab
       deletes only regtest data") needs a real test proving other
-      environments' directories are untouched
+      environments' directories are untouched. Backend: `reset_test_lab`
+      Tauri command stops ord then bitcoind gracefully, then calls the
+      extracted `delete_regtest_data_only(environment_data_root)`
+      (zero-chain-parameter by construction, so it can never target the
+      wrong chain), which removes only `Environment::new_default(Regtest,
+      ..)`'s `data_root`. Two real tests (real tempdir, both regtest +
+      mainnet subdirs with files present): confirms only regtest is
+      deleted, and confirms it's a no-op when regtest has no data yet.
+      Frontend: `TestLabScreen`'s "Reset" button goes through the shared
+      `ConfirmDialog` before calling it.
 - [ ] Wire the setup wizard's "Try it safely" (currently doesn't exist
       as a real link) to open the full Test Lab
 

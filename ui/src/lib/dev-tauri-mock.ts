@@ -586,6 +586,28 @@ export function installDevTauriMockIfNeeded() {
         const { commandLine } = args as { commandLine: string; chain: Chain; dryRun: boolean };
         return { mock: true, ranInDevPreview: commandLine };
       }
+      case "mine_blocks": {
+        const { chain, count } = args as { chain: Chain; count: number };
+        if (chain !== "regtest") {
+          return Promise.reject({
+            code: null,
+            message: "Mining blocks is only available on Regtest.",
+          });
+        }
+        if (!wallets.has(chain)) {
+          return Promise.reject({ code: null, message: `${chain} has no wallet yet` });
+        }
+        return Array.from({ length: count }, (_, i) =>
+          `mockblockhash${Date.now()}${i}`.padEnd(64, "0").slice(0, 64),
+        );
+      }
+      case "reset_test_lab": {
+        runningSince.delete("regtest");
+        ordRunningSince.delete("regtest");
+        wallets.delete("regtest");
+        rememberedPassphrases.delete("regtest");
+        return undefined;
+      }
       case "list_scripts":
         return MOCK_SCRIPTS;
       case "list_available_interpreters":

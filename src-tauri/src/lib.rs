@@ -1940,6 +1940,84 @@ fn environment_data_root(store: &tauri::State<'_, Arc<Mutex<Store>>>) -> std::pa
         .unwrap_or_else(|| data_root().to_path_buf())
 }
 
+/// The Regtest Test Lab's "Mine blocks"/"Get test coins" controls
+/// (docs/SPEC.md item 11): mines `count` blocks to the current
+/// environment's own wallet via `generatetoaddress`. Regtest-only, not
+/// just by policy -- `generatetoaddress` needs regtest's trivial
+/// difficulty to be useful at all; on any other chain it would just
+/// hang or fail against real proof-of-work.
+#[tauri::command]
+async fn mine_blocks(
+    chain: Chain,
+    count: u32,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<Vec<String>, TypedError> {
+    if chain != Chain::Regtest {
+        return Err(TypedError::from(
+            "Mining blocks is only available on Regtest.".to_string(),
+        ));
+    }
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
+    let receive = nk_ord::wallet::wallet_receive(&executor, &ctx.target(), None)
+        .await
+        .map_err(TypedError::from)?;
+    let address = receive
+        .get("addresses")
+        .and_then(|a| a.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| TypedError::from("ord did not return a receive address".to_string()))?;
+    ctx.rpc
+        .generate_to_address(count, address)
+        .await
+        .map_err(|e| TypedError::from(e.to_string()))
+}
+
+/// "Reset Test Lab" (docs/SPEC.md item 11): stops Regtest's bitcoind/ord
+/// gracefully if running, then deletes *only* Regtest's own data
+/// directory -- never any other environment's. Regtest-only for the
+/// same reason as `mine_blocks`: this exists to let the user blow away
+/// throwaway test-coin state and start clean, which only makes sense
+/// on the chain whose coins have no real value.
+#[tauri::command]
+async fn reset_test_lab(
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+) -> Result<(), TypedError> {
+    if node_manager.is_ord_running(Chain::Regtest) {
+        node_manager
+            .stop_ord(Chain::Regtest, std::time::Duration::from_secs(30))
+            .await
+            .map_err(TypedError::from)?;
+    }
+    if node_manager.is_running(Chain::Regtest) {
+        node_manager
+            .stop(Chain::Regtest, std::time::Duration::from_secs(120))
+            .await
+            .map_err(TypedError::from)?;
+    }
+    delete_regtest_data_only(&environment_data_root(&store))
+        .map_err(|e| TypedError::from(e.to_string()))
+}
+
+/// The actual deletion, pulled out of `reset_test_lab` so it has real
+/// test coverage of its own -- "Reset Test Lab deletes only regtest
+/// data" is a docs/SPEC.md Phase 8 [CI] acceptance criterion, not just
+/// an implied detail of a Tauri command handler this project's own
+/// convention doesn't unit-test directly. Takes no `chain` parameter at
+/// all (not even from the caller) -- `Chain::Regtest` is hardcoded, so
+/// there's no way for this to ever resolve to a different environment's
+/// directory, by construction rather than by a runtime check.
+fn delete_regtest_data_only(environment_data_root: &std::path::Path) -> std::io::Result<()> {
+    let environment = Environment::new_default(Chain::Regtest, environment_data_root);
+    if environment.data_root.is_dir() {
+        std::fs::remove_dir_all(&environment.data_root)?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     std::fs::create_dir_all(data_root()).expect("failed to create data directory");
@@ -2027,6 +2105,8 @@ pub fn run() {
             list_scripts,
             list_available_interpreters,
             run_script,
+            mine_blocks,
+            reset_test_lab,
             wallet_fee_estimate,
             wallet_inscribe_dry_run,
             wallet_inscribe,
@@ -2078,5 +2158,46 @@ mod tests {
         ConsoleCommandPreview::export_all(&config).unwrap();
         ScriptInfo::export_all(&config).unwrap();
         InterpreterAvailability::export_all(&config).unwrap();
+    }
+
+    /// The literal docs/SPEC.md Phase 8 [CI] acceptance criterion:
+    /// "Reset Test Lab deletes only regtest data." Real filesystem
+    /// operations against a real tempdir, not mocked -- creates both a
+    /// regtest environment's directory and a mainnet environment's
+    /// directory (with a file inside each, so an empty-directory
+    /// special case can't accidentally pass), runs the actual deletion
+    /// function `reset_test_lab` calls, and asserts regtest's directory
+    /// is gone while mainnet's directory and its file survive untouched.
+    #[test]
+    fn reset_test_lab_deletes_only_regtest_data() {
+        let root = tempfile::tempdir().unwrap();
+
+        let regtest_env = Environment::new_default(Chain::Regtest, root.path());
+        std::fs::create_dir_all(&regtest_env.data_root).unwrap();
+        std::fs::write(regtest_env.data_root.join("regtest.dat"), b"regtest").unwrap();
+
+        let mainnet_env = Environment::new_default(Chain::Mainnet, root.path());
+        std::fs::create_dir_all(&mainnet_env.data_root).unwrap();
+        std::fs::write(mainnet_env.data_root.join("mainnet.dat"), b"mainnet").unwrap();
+
+        delete_regtest_data_only(root.path()).unwrap();
+
+        assert!(
+            !regtest_env.data_root.exists(),
+            "regtest's data directory should have been deleted"
+        );
+        assert!(
+            mainnet_env.data_root.join("mainnet.dat").is_file(),
+            "mainnet's data must survive a regtest reset untouched"
+        );
+    }
+
+    /// A reset before the environment was ever used (no directory to
+    /// delete yet) must succeed, not error -- it's a no-op, not a
+    /// missing-file failure.
+    #[test]
+    fn reset_test_lab_is_a_no_op_when_regtest_has_no_data_yet() {
+        let root = tempfile::tempdir().unwrap();
+        delete_regtest_data_only(root.path()).unwrap();
     }
 }
