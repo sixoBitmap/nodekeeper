@@ -1397,21 +1397,31 @@ Explorer (docs/SPEC.md item 5) — no new backend needed
 - [x] Add to the main nav alongside Dashboard/Wallet/Inscribe
 
 Backend — Console command execution + safety layer (docs/SPEC.md item 6)
+- [x] Safety classification: `nk_core::console_safety` --
+      `classify_bitcoin_rpc`/`classify_ord_wallet_subcommand`, built
+      from a real `bitcoin-cli help` + per-subcommand `ord wallet <cmd>
+      --help` VERIFY (not guessed) recorded in DECISIONS.md "Phase 7 —
+      VERIFY: the real RPC/CLI surface for the console safety layer".
+      Read-only allowlist / fund-moving list / everything-else-defaults-
+      to-needs-confirmation, so an unrecognized future RPC method fails
+      closed (needs confirmation) rather than silently running
+      instantly. 14 tests, including the exact fund-moving list, the
+      `sendrawtransaction`-isn't-wallet-scoped distinction, and both
+      ord's `mint`/`offer accept` no-dry-run gap.
 - [ ] `console_run(chain, command_line)`: parses a raw `bitcoin-cli`/
       `ord` command line the same way a human would type it, runs it
-      through the existing executor (never a new ad hoc process path),
-      returns pretty-printable JSON output
-- [ ] Safety classification: read-only vs. state-changing (confirm
-      dialog with the exact command, "Learn mode"-style, matching
-      `ConfirmDialog`'s existing pattern) vs. blocked outright
-      (`sendtoaddress`/`sendmany`/`send`/`bumpfee`-and-similar against
-      an ord-used wallet -- VERIFY the exact command list against the
-      installed Core version's RPC surface, don't guess) vs. needs a
-      PSBT preview (`walletcreatefundedpsbt`/`testmempoolaccept`) vs.
-      needs `--dry-run` first (ord commands that support it)
+      through the existing executor (never a new ad hoc process path,
+      calling `nk_rpc::RpcClient::call` for bitcoin-cli-style commands
+      and the same `Executor::execute` path `nk_ord::wallet` already
+      uses for ord commands), returns pretty-printable JSON output --
+      wires `console_safety`'s classification into confirm/block/dry-
+      run behavior
 - [ ] Mainnet fund-moving commands route through the same mainnet
       extra-confirmation `ConfirmDialog` every other fund-moving screen
       already uses -- no new confirmation flow
+- [ ] PSBT preview flow for raw Core-wallet spend commands
+      (`walletcreatefundedpsbt`/`testmempoolaccept`), matching how
+      `wallet_send_dry_run` already previews ord-wallet sends
 
 Frontend — Console UI
 - [ ] `ConsoleScreen`: tabs, each locked to one environment and showing

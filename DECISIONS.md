@@ -2338,6 +2338,46 @@ itself stays inert): the Foundation F note correctly reads per-
 environment values and updates on switch, the search box correctly
 transitions state, no console errors.
 
+## Phase 7 — VERIFY: the real RPC/CLI surface for the console safety layer (2026-09-25)
+
+docs/SPEC.md item 6's safety layer names specific commands
+("sendtoaddress, sendmany, send, bumpfee, and similar") but says to
+VERIFY the exact list against the installed version, not guess. Real
+regtest bitcoind 31.1: `bitcoin-cli help` lists every RPC method by
+category (Blockchain/Control/Mining/Network/Rawtransactions/Signer/
+Util/Wallet/Zmq) with its exact name and signature -- the full,
+authoritative list this session's classification is built from,
+included in full in the `help` output captured live (not recalled).
+
+**Wallet-spend commands that move funds directly** (the "and similar"
+spec asks to identify): `sendtoaddress`, `sendmany`, `send`, `sendall`,
+`bumpfee`, `psbtbumpfee`. These are the ones "Inscription protection"
+blocks outright against a wallet ord uses. `sendrawtransaction` also
+broadcasts, but takes no wallet parameter (works on any raw hex from
+any source) -- it's a state-changing/fund-moving command in its own
+right, just not wallet-scoped, so it doesn't belong in the *per-wallet*
+block list the same way.
+
+**ord's `--dry-run` support**, checked per-subcommand
+(`ord wallet <cmd> --help`): `send`, `inscribe`, `batch`, `burn`,
+`split`, `sweep`, `resume`, and `offer create` all support it. `mint`
+and `offer accept` do **not** -- a real gap in ord itself, not
+something Nodekeeper can preview around; those two get the standard
+state-changing confirmation with no dry-run step first.
+
+**Classification approach**: given ~150 real RPC methods, hand-picking
+a complete "these are read-only" list and trusting anything missed to
+silently fall through as safe would be a fail-*open* mistake -- the
+opposite of this project's stance everywhere else. `nk_core::
+console_safety::classify_bitcoin_rpc` instead allowlists the read-only
+Blockchain/Wallet/Util/Network/Control/Mining query methods (confirmed
+against the real list above) and treats anything NOT on that allowlist
+as `StateChanging` by default (needs confirmation) -- so a future
+bitcoind version adding a new method this classifier doesn't know
+about degrades to "ask for confirmation," never to "run instantly."
+Same fail-closed shape as `ord_wallet_subcommand_class`'s handling of
+an unrecognized ord subcommand.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

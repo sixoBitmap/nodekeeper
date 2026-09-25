@@ -5,6 +5,7 @@
 
 pub mod bitcoin_conf;
 pub mod chain;
+pub mod console_safety;
 pub mod disk;
 pub mod environment;
 pub mod error_code;
