@@ -418,10 +418,16 @@ a screen into existence. Also still open from this same phase: the
 whose data directory matches and cookie authenticates) was deferred
 "before Phase 3" and never picked back up in any later phase either.
 Newly tracked here, not built yet:
+- [x] Let the user pick the data directory (including external drives)
+      before starting — data-directory picker on the System Check
+      screen (`get_environment_data_root`/`set_environment_data_root`,
+      native folder dialog via `@tauri-apps/plugin-dialog`, refuses
+      while any environment is running, validates the folder is
+      writable). See DECISIONS.md "Setup wizard UI: data-directory
+      picker, scoped deliberately (2026-09-25)".
 - [ ] Setup wizard screen: trigger `nk_verify::bitcoin_core`'s download
       + verify, show progress and the verification result (fail closed,
-      same as the backend already does), let the user pick the data
-      directory (including external drives) before starting
+      same as the backend already does)
 - [ ] "Offer to attach" UI: when an already-running bitcoind is
       detected on the target data directory and its cookie
       authenticates, let the user attach instead of refusing outright

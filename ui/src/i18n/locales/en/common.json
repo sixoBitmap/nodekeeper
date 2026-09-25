@@ -49,6 +49,9 @@
     "availableMemory": "Available memory",
     "diskFree": "Free disk space",
     "diskUnknown": "Could not determine free disk space",
+    "dataDirLabel": "Data directory (bitcoind, ord, wallets, and logs are stored here -- can be an external drive)",
+    "changeDataDir": "Change...",
+    "chooseDataDir": "Choose a data directory",
     "continue": "Continue"
   },
   "environmentSwitcher": {

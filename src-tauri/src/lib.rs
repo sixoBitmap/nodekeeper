@@ -22,18 +22,64 @@ fn system_check(data_dir: String) -> SystemCheck {
     run_system_check(std::path::Path::new(&data_dir))
 }
 
-/// Every environment with its defaults. Phase 1 has no setup wizard or
-/// persisted environment configuration yet (that's Phase 2+), so this
-/// always returns one default `Environment` per `Chain`, rooted at the
-/// relative `data/` folder (docs/SPEC.md Foundation A's portable-mode-
-/// friendly layout) — enough for the environment switcher to render
-/// against a real backend type instead of a frontend-only placeholder.
+/// Every environment with its defaults. No per-environment
+/// customization exists yet (e.g. renaming, per-chain overrides) --
+/// this always returns one default `Environment` per `Chain`, rooted at
+/// `environment_data_root` (the data-directory picker, docs/SPEC.md
+/// item 1) -- enough for the environment switcher to render against a
+/// real backend type instead of a frontend-only placeholder.
 #[tauri::command]
-fn list_default_environments() -> Vec<Environment> {
+fn list_default_environments(store: tauri::State<'_, Arc<Mutex<Store>>>) -> Vec<Environment> {
+    let root = environment_data_root(&store);
     Chain::ALL
         .iter()
-        .map(|&chain| Environment::new_default(chain, data_root()))
+        .map(|&chain| Environment::new_default(chain, &root))
         .collect()
+}
+
+/// The data-directory picker's current effective value (docs/SPEC.md
+/// item 1) -- always resolvable, since `environment_data_root` already
+/// falls back to a default.
+#[tauri::command]
+fn get_environment_data_root(store: tauri::State<'_, Arc<Mutex<Store>>>) -> String {
+    environment_data_root(&store).display().to_string()
+}
+
+/// Changes where every environment's data lives from now on (docs/
+/// SPEC.md item 1: "including external drives"). Refuses while
+/// anything is running (`NodeManager::any_running`) -- a bitcoind/ord
+/// process already using the *old* path shouldn't have a later command
+/// (start/stop/status/logs) suddenly resolve a *different* one out
+/// from under it. Fails closed if the chosen folder can't actually be
+/// created or written to, rather than saving a path that would only
+/// break the next time something tries to use it.
+#[tauri::command]
+fn set_environment_data_root(
+    path: String,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+) -> Result<(), TypedError> {
+    if node_manager.any_running() {
+        return Err(TypedError::from(
+            "Stop every running environment before changing the data directory.".to_string(),
+        ));
+    }
+    let candidate = std::path::PathBuf::from(&path);
+    std::fs::create_dir_all(&candidate)
+        .map_err(|e| TypedError::from(format!("Can't use this folder: {e}")))?;
+    // `create_dir_all` above only proves the folder (or its parent, if
+    // it already existed) was creatable -- an existing folder could
+    // still be read-only, so confirm actual write access directly.
+    let probe = candidate.join(".nodekeeper-write-test");
+    std::fs::write(&probe, b"")
+        .map_err(|e| TypedError::from(format!("This folder isn't writable: {e}")))?;
+    let _ = std::fs::remove_file(&probe);
+    store
+        .lock()
+        .unwrap()
+        .set_setting(ENVIRONMENT_DATA_ROOT_SETTING, &path)
+        .map_err(|e| TypedError::from(e.to_string()))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -116,6 +162,18 @@ const BITCOIND_PATH_SETTING: &str = "bitcoind_path";
 /// Same scoping note as `BITCOIND_PATH_SETTING` -- no setup-wizard flow
 /// downloads/verifies an ord binary yet either.
 const ORD_PATH_SETTING: &str = "ord_path";
+/// Where every environment's own data (bitcoind, ord, wallets, logs)
+/// lives -- docs/SPEC.md item 1: "Let the user choose the data
+/// directory (including external drives)." Deliberately a *different*
+/// setting from `data_root()`'s fixed location (where Nodekeeper's own
+/// tiny settings database lives): that location has to be resolved
+/// *before* the settings database can even be opened, so it can't
+/// itself be settings-driven without a chicken-and-egg problem --
+/// making it dynamic too is proper OS-specific app-data-dir resolution
+/// and portable-vs-installed mode, explicitly Phase 9 scope. This
+/// setting only changes where *environment* data (which can legitimately
+/// be huge and belongs on a chosen/external drive) is written.
+const ENVIRONMENT_DATA_ROOT_SETTING: &str = "environment_data_root";
 
 fn configured_bitcoind_path(store: &tauri::State<Arc<Mutex<Store>>>) -> Result<String, TypedError> {
     let path = store
@@ -189,6 +247,7 @@ impl WalletContext {
 fn bitcoin_rpc_context(
     chain: Chain,
     node_manager: &tauri::State<'_, NodeManager>,
+    store: &tauri::State<'_, Arc<Mutex<Store>>>,
     executor: &tauri::State<'_, Executor>,
 ) -> Result<(Environment, nk_rpc::RpcClient), TypedError> {
     if !node_manager.is_running(chain) {
@@ -196,7 +255,7 @@ fn bitcoin_rpc_context(
             "{chain:?}'s node must be running first"
         )));
     }
-    let environment = Environment::new_default(chain, data_root());
+    let environment = Environment::new_default(chain, &environment_data_root(store));
     let cookie_path = environment.bitcoin_cookie_path();
     let rpc = nk_rpc::RpcClient::from_cookie_file(
         format!("http://127.0.0.1:{}", environment.rpc_port),
@@ -215,7 +274,7 @@ fn wallet_context(
     store: &tauri::State<'_, Arc<Mutex<Store>>>,
     executor: &tauri::State<'_, Executor>,
 ) -> Result<WalletContext, TypedError> {
-    let (environment, rpc) = bitcoin_rpc_context(chain, node_manager, executor)?;
+    let (environment, rpc) = bitcoin_rpc_context(chain, node_manager, store, executor)?;
     if !node_manager.is_ord_running(chain) {
         return Err(TypedError::from(format!(
             "{chain:?}'s ord server must be running before using its wallet"
@@ -244,6 +303,7 @@ fn wallet_context(
 fn ord_client(
     chain: Chain,
     node_manager: &tauri::State<'_, NodeManager>,
+    store: &tauri::State<'_, Arc<Mutex<Store>>>,
     executor: &tauri::State<'_, Executor>,
 ) -> Result<nk_ord::OrdClient, TypedError> {
     if !node_manager.is_ord_running(chain) {
@@ -251,7 +311,7 @@ fn ord_client(
             "{chain:?}'s ord server must be running first"
         )));
     }
-    let environment = Environment::new_default(chain, data_root());
+    let environment = Environment::new_default(chain, &environment_data_root(store));
     Ok(nk_ord::OrdClient::new(
         format!("http://127.0.0.1:{}", environment.ord_port),
         executor.inner().clone(),
@@ -731,9 +791,10 @@ async fn wallet_fee_estimate(
     chain: Chain,
     conf_target: u32,
     node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
     executor: tauri::State<'_, Executor>,
 ) -> Result<Option<f64>, TypedError> {
-    let (_environment, rpc) = bitcoin_rpc_context(chain, &node_manager, &executor)?;
+    let (_environment, rpc) = bitcoin_rpc_context(chain, &node_manager, &store, &executor)?;
     let response = rpc
         .estimate_smart_fee(conf_target, false)
         .await
@@ -1064,9 +1125,10 @@ async fn inscription_detail(
     chain: Chain,
     id: String,
     node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
     executor: tauri::State<'_, Executor>,
 ) -> Result<InscriptionDetail, TypedError> {
-    let client = ord_client(chain, &node_manager, &executor)?;
+    let client = ord_client(chain, &node_manager, &store, &executor)?;
     let response = client
         .inscription(&id, false)
         .await
@@ -1101,9 +1163,10 @@ async fn sat_inscriptions(
     chain: Chain,
     sat: u64,
     node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
     executor: tauri::State<'_, Executor>,
 ) -> Result<Vec<String>, TypedError> {
-    let client = ord_client(chain, &node_manager, &executor)?;
+    let client = ord_client(chain, &node_manager, &store, &executor)?;
     let response = client
         .sat(sat, false)
         .await
@@ -1132,7 +1195,7 @@ async fn start_node(
     executor: tauri::State<'_, Executor>,
 ) -> Result<(), TypedError> {
     let binary_path = configured_bitcoind_path(&store)?;
-    let environment = Environment::new_default(chain, data_root());
+    let environment = Environment::new_default(chain, &environment_data_root(&store));
     node_manager
         .start(
             chain,
@@ -1167,7 +1230,7 @@ async fn restart_node(
         .await
         .map_err(TypedError::from)?;
     let binary_path = configured_bitcoind_path(&store)?;
-    let environment = Environment::new_default(chain, data_root());
+    let environment = Environment::new_default(chain, &environment_data_root(&store));
     node_manager
         .start(
             chain,
@@ -1204,7 +1267,7 @@ async fn start_ord(
     executor: tauri::State<'_, Executor>,
 ) -> Result<(), TypedError> {
     let binary_path = configured_ord_path(&store)?;
-    let environment = Environment::new_default(chain, data_root());
+    let environment = Environment::new_default(chain, &environment_data_root(&store));
     node_manager
         .start_ord(
             chain,
@@ -1239,7 +1302,7 @@ async fn restart_ord(
         .await
         .map_err(TypedError::from)?;
     let binary_path = configured_ord_path(&store)?;
-    let environment = Environment::new_default(chain, data_root());
+    let environment = Environment::new_default(chain, &environment_data_root(&store));
     node_manager
         .start_ord(
             chain,
@@ -1276,8 +1339,11 @@ fn is_ord_running(chain: Chain, node_manager: tauri::State<'_, NodeManager>) -> 
 const DEFAULT_LOG_WINDOW_BYTES: u64 = 256 * 1024;
 
 #[tauri::command]
-fn tail_debug_log(chain: Chain) -> Result<nk_core::log_tail::LogWindow, TypedError> {
-    let environment = Environment::new_default(chain, data_root());
+fn tail_debug_log(
+    chain: Chain,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+) -> Result<nk_core::log_tail::LogWindow, TypedError> {
+    let environment = Environment::new_default(chain, &environment_data_root(&store));
     nk_core::log_tail::tail(
         &environment.bitcoin_debug_log_path(),
         DEFAULT_LOG_WINDOW_BYTES,
@@ -1291,8 +1357,9 @@ fn tail_debug_log(chain: Chain) -> Result<nk_core::log_tail::LogWindow, TypedErr
 fn page_debug_log_before(
     chain: Chain,
     end_offset: u64,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
 ) -> Result<nk_core::log_tail::LogWindow, TypedError> {
-    let environment = Environment::new_default(chain, data_root());
+    let environment = Environment::new_default(chain, &environment_data_root(&store));
     nk_core::log_tail::page_before(
         &environment.bitcoin_debug_log_path(),
         end_offset,
@@ -1304,8 +1371,12 @@ fn page_debug_log_before(
 const MAX_LOG_SEARCH_MATCHES: usize = 500;
 
 #[tauri::command]
-fn search_debug_log(chain: Chain, query: String) -> Result<Vec<String>, TypedError> {
-    let environment = Environment::new_default(chain, data_root());
+fn search_debug_log(
+    chain: Chain,
+    query: String,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+) -> Result<Vec<String>, TypedError> {
+    let environment = Environment::new_default(chain, &environment_data_root(&store));
     nk_core::log_tail::search(
         &environment.bitcoin_debug_log_path(),
         &query,
@@ -1338,6 +1409,25 @@ fn data_root() -> &'static std::path::Path {
     std::path::Path::new("data")
 }
 
+/// Where every environment's data actually lives -- `ENVIRONMENT_
+/// DATA_ROOT_SETTING` if the user has ever chosen one (the
+/// data-directory picker, docs/SPEC.md item 1), else `data_root()`'s
+/// original default, so a fresh install behaves exactly as before this
+/// setting existed. Every `Environment::new_default(chain, ...)` call
+/// site in this file uses this, not `data_root()` directly, *except*
+/// `run()`'s own settings-database bootstrap (see `ENVIRONMENT_DATA_
+/// ROOT_SETTING`'s doc comment for why that one has to stay fixed).
+fn environment_data_root(store: &tauri::State<'_, Arc<Mutex<Store>>>) -> std::path::PathBuf {
+    store
+        .lock()
+        .unwrap()
+        .get_setting(ENVIRONMENT_DATA_ROOT_SETTING)
+        .ok()
+        .flatten()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| data_root().to_path_buf())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     std::fs::create_dir_all(data_root()).expect("failed to create data directory");
@@ -1351,6 +1441,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(store.clone())
         .manage(executor.clone())
         .manage(node_manager)
@@ -1393,6 +1484,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             system_check,
             list_default_environments,
+            get_environment_data_root,
+            set_environment_data_root,
             get_setting,
             set_setting,
             start_node,

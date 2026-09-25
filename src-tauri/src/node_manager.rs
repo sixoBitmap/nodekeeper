@@ -290,6 +290,26 @@ impl NodeManager {
             .contains_key(&chain)
     }
 
+    /// Whether *any* environment's bitcoind or ord is currently tracked
+    /// as running, across every chain -- used to refuse changing the
+    /// environment data root (docs/SPEC.md item 1's data-directory
+    /// picker) while something could still be reading/writing under the
+    /// old path; changing it under a running node's feet risks pointing
+    /// a later command (e.g. a stop or status check) at the wrong
+    /// on-disk location than the process actually running.
+    pub fn any_running(&self) -> bool {
+        !self
+            .running
+            .lock()
+            .expect("mutex should not be poisoned")
+            .is_empty()
+            || !self
+                .running_ord
+                .lock()
+                .expect("mutex should not be poisoned")
+                .is_empty()
+    }
+
     /// Starts `chain`'s ord server, pointed at this manager's own
     /// already-running bitcoind for that chain (its cookie file and
     /// data directory) -- refuses if bitcoind isn't running yet
@@ -471,6 +491,7 @@ mod tests {
 
         let manager = NodeManager::new();
         assert!(!manager.is_running(Chain::Regtest));
+        assert!(!manager.any_running());
 
         manager
             .start(
@@ -482,6 +503,7 @@ mod tests {
             .await
             .expect("node should start");
         assert!(manager.is_running(Chain::Regtest));
+        assert!(manager.any_running());
 
         // Starting the same chain again while already running must be
         // refused, not silently spawn a second process.
@@ -504,6 +526,7 @@ mod tests {
             .await
             .expect("node should stop cleanly");
         assert!(!manager.is_running(Chain::Regtest));
+        assert!(!manager.any_running());
 
         // Once stopped, status must report NotRunning, not stale data.
         assert!(matches!(
@@ -656,5 +679,11 @@ mod tests {
             .code(),
             None
         );
+    }
+
+    #[test]
+    fn any_running_is_false_on_a_fresh_manager() {
+        let manager = NodeManager::new();
+        assert!(!manager.any_running());
     }
 }

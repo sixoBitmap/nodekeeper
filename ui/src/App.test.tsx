@@ -49,6 +49,8 @@ function mockInvoke(disclaimerAcknowledged: boolean) {
         return Promise.resolve(ENVIRONMENTS);
       case "system_check":
         return Promise.resolve(SYSTEM_CHECK);
+      case "get_environment_data_root":
+        return Promise.resolve("./data");
       case "list_command_history":
         return Promise.resolve([]);
       case "is_ord_running":

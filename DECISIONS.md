@@ -2072,6 +2072,69 @@ assignment, rather than inventing a new phase for it) so it can't
 silently disappear again, and left it for the user to decide when to
 build it.
 
+## Setup wizard UI: data-directory picker, scoped deliberately (2026-09-25)
+
+Following on from the gap tracked above, the user asked explicitly to
+build the piece that lets the user choose the data directory. Built
+just that slice, not the whole wizard:
+
+**`environment_data_root` vs `data_root()` split.** `data_root()`
+(`./data`, or the portable-mode directory once Phase 9 lands) is where
+Nodekeeper's own settings DB lives — fixed, because reading a setting
+to find the settings DB's own location is circular. Environment data
+(bitcoind/ord/wallets/logs) needed to be independently relocatable per
+docs/SPEC.md item 1 ("let the user choose the data directory, including
+external drives"), so it's now a separate setting,
+`environment_data_root`, read through a new `environment_data_root()`
+helper that falls back to `data_root()` when unset. Every place that
+used to call `data_root()` for environment paths
+(`list_default_environments`, `bitcoin_rpc_context`, `ord_client`,
+`tail_debug_log`/`page_debug_log_before`/`search_debug_log`) now takes
+a `store` param and resolves through this helper instead.
+
+**Refuse to change the directory while anything is running.** Added
+`NodeManager::any_running()` (true if either the bitcoind or ord
+process map is non-empty, across every chain) and have
+`set_environment_data_root` refuse with a plain error if it's true.
+Changing the root out from under a live process risks a later command
+(stop, status, log tail) resolving to the wrong on-disk path than the
+process actually running against. Verified with real-bitcoind
+coverage: `any_running()` is asserted false before start, true after
+start, false after stop, in `node_manager.rs`'s existing
+`starts_reports_status_and_stops_a_real_node` test (no separate
+process spun up just for this flag).
+
+**Validate the folder before accepting it.** `set_environment_data_root`
+creates the directory if missing, then does a real write-probe (writes
+and removes a `.nodekeeper-write-test` file) before persisting the
+setting — surfaces "not writable" (e.g. a read-only external drive)
+immediately, at picker time, instead of failing later on first node
+start.
+
+**Picker uses `@tauri-apps/plugin-dialog`, not a raw text field.**
+Native OS folder picker, `directory: true` — matches the spec's
+"including external drives" requirement and avoids users hand-typing
+paths. Capability scoped to `dialog:allow-open` only (not
+`dialog:default`), since save/message/ask/confirm aren't needed.
+
+**Deliberately did NOT build a picker for `bitcoind_path`/`ord_path`
+in this increment.** Those are a genuine trust boundary — pointing
+Nodekeeper at an arbitrary local executable without verification
+directly violates CLAUDE.md's non-negotiable "binary verification
+fails closed" rule. Confirmed via grep that `nk-verify` currently only
+exposes combined `download_and_verify_*` entry points, with no
+standalone "verify this already-on-disk file" function — building a
+safe picker for these needs that function first, which is a separate,
+properly-scoped task, not a shortcut to bolt onto this one. Left as
+the still-open Phase 2/4 tasks tracked in the entry above (binary
+download/verify UI, and the "offer to attach" flow).
+
+**Also fixed in passing**: `SystemCheckScreen`'s disk-free check was
+hardcoded to `dataDir: "data"` regardless of the actual configured
+location — a pre-existing bug that would have kept showing free space
+on the wrong drive after this picker landed. Now resolves the real
+path via `get_environment_data_root` first.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

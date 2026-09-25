@@ -212,6 +212,19 @@ export function installDevTauriMockIfNeeded() {
         settings.set(key, value);
         return undefined;
       }
+      case "get_environment_data_root":
+        return settings.get("environment_data_root") ?? "./data";
+      case "set_environment_data_root": {
+        const { path } = args as { path: string };
+        settings.set("environment_data_root", path);
+        return undefined;
+      }
+      case "plugin:dialog|open":
+        // The real native folder picker only works in the installed
+        // app -- the dev preview stands in with a fixed fake path, same
+        // reasoning as every other native-only affordance here (drag-
+        // and-drop's click-to-load-a-placeholder-path).
+        return "/dev-preview/chosen-data-directory";
       case "is_node_running":
         return runningSince.has((args as { chain: Chain }).chain);
       case "start_node":
