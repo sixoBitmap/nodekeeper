@@ -1804,6 +1804,16 @@ Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
       `dirs::data_dir()` (matches what Tauri's own `app_data_dir()`
       resolves to) joined with a friendly folder name. New
       `is_portable_mode` Tauri command exposes this to the frontend.
+      **Real end-to-end integration check (2026-09-26), not just unit
+      tests**: built the actual `nodekeeper.exe`, launched it from a
+      fresh temp folder with a `config` subdirectory placed next to it,
+      and confirmed the real running app wrote its settings database to
+      `<that folder>/config/nodekeeper.sqlite3` -- not the OS app-data
+      directory. Then the control case: launched the same binary from
+      `target/debug/` (no `config` sibling) and confirmed it correctly
+      fell back to the real `%APPDATA%/Nodekeeper/nodekeeper.sqlite3`
+      instead, touching nothing at the binary's own location. Both
+      real launches, both cleaned up afterward.
 - [ ] Portable launchers and full folder layout (`/bin/<os>`,
       `/runtime/windows`, launcher naming) -- packaging/build-config
       work (`tauri.conf.json` bundle targets), not yet started
