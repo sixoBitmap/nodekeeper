@@ -3327,6 +3327,7 @@ name = "nodekeeper"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "dirs",
  "keepawake",
  "nk-core",
  "nk-exec",

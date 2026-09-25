@@ -1775,7 +1775,74 @@ on-disk deletion in this project.
 
 ## Phase 9 — Portable mode
 
-Not started. See docs/SPEC.md Phase 9.
+In progress. See docs/SPEC.md Phase 9 and item 12 for full scope.
+**Cross-platform testing limit, stated up front**: this phase's own
+[CI]/[MANUAL] criteria need real builds and manual runs on Windows,
+macOS, and Linux -- this session runs on a single Windows machine, with
+no macOS/Linux hosts, VMs, or cross-compilation toolchain available.
+Windows-specific pieces here are built *and* verified for real; macOS-
+and Linux-specific detection code is written from VERIFIED platform-API
+research but cannot be executed or confirmed correct on those OSes in
+this session -- flagged plainly per item, not silently claimed as
+tested. Actually producing installers/bundles for all 3 OSes is a CI/
+build-pipeline concern more than something built by hand here; tracked
+separately, likely alongside Phase 10's own release/CI work.
+
+Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
+- [x] Portable-mode detection + relative data layout. A `config`
+      directory next to the running executable is the portable-mode
+      signal (the "prepare a new portable drive" wizard's job to create
+      it once, up front) -- `is_portable_layout` extracted as a real
+      tested pure function (3 tests: no config dir, a real config dir,
+      a same-named file instead of a directory -- guards against a
+      stray file flipping installed mode into portable by accident).
+      `data_root()` (Nodekeeper's own settings DB/scripts/binary cache)
+      and `default_environment_data_root()` (before the user picks
+      their own via the existing data-directory picker) now branch:
+      portable is `<exe_dir>/config` and `<exe_dir>/data` respectively,
+      matching the spec's fixed relative layout; installed mode uses
+      `dirs::data_dir()` (matches what Tauri's own `app_data_dir()`
+      resolves to) joined with a friendly folder name. New
+      `is_portable_mode` Tauri command exposes this to the frontend.
+- [ ] Portable launchers and full folder layout (`/bin/<os>`,
+      `/runtime/windows`, launcher naming) -- packaging/build-config
+      work (`tauri.conf.json` bundle targets), not yet started
+- [ ] Bundled WebView2 fixed-version runtime (Windows) -- packaging work
+- [ ] Native prerequisite dialogs (a missing webview can't be reported
+      via the webview itself) -- needs VERIFY of how Tauri surfaces a
+      pre-webview-load failure natively per OS
+- [ ] macOS App Translocation detection + guidance (quarantine
+      attribute on the .app and on bitcoind/ord) -- code only,
+      unverifiable without a real macOS host
+- [ ] Linux noexec-mount detection + guidance -- code only, unverifiable
+      without a real Linux host
+- [ ] Filesystem checks: warn on exFAT, recommend NTFS
+- [ ] Windows long-path support -- VERIFY the exact mechanism needed
+      (manifest `longPathAware` vs `\\?\` prefixing) beyond what's
+      already implicitly relied on
+- [ ] USB speed detection, free space (free space already exists via
+      `system_check`; USB speed is new)
+- [ ] Unclean-shutdown recovery guidance (ord index rebuild)
+- [ ] "Safely shut down and eject" button: stop every running
+      environment (ord first, then bitcoind), wait for clean exits,
+      then confirm it's safe to unplug; warn if the window closes while
+      services are running. Interacts with Phase 8's Tray
+      "hide instead of quit while anything runs" behavior -- portable
+      mode likely shouldn't hide-to-tray and keep a drive's bitcoind
+      running in the background the way installed mode does, since the
+      drive itself could be unplugged; needs a decision before Tray's
+      existing behavior is left as-is for portable mode too.
+- [ ] Master password unlock at launch, for the encrypted secrets file
+      (Foundation E -- `nk-secrets`, built Phase 5, needs a launch-time
+      UI flow wired to it for portable mode specifically)
+- [ ] "Prepare a new portable drive" wizard (formatting guidance, copy
+      launchers/binaries/runtime, initialize the folder structure) --
+      depends on the final folder layout existing first
+
+Security self-review deserves particular attention at the end of this
+phase (CLAUDE.md calls out Phases 2/5/7 explicitly, but portable mode's
+master-password/secrets-file unlock is exactly the kind of seed/key-
+adjacent surface the same discipline should apply to).
 
 ## Phase 10 — Extras and release
 

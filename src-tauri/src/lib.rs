@@ -230,14 +230,15 @@ const ORD_PATH_SETTING: &str = "ord_path";
 /// Where every environment's own data (bitcoind, ord, wallets, logs)
 /// lives -- docs/SPEC.md item 1: "Let the user choose the data
 /// directory (including external drives)." Deliberately a *different*
-/// setting from `data_root()`'s fixed location (where Nodekeeper's own
-/// tiny settings database lives): that location has to be resolved
-/// *before* the settings database can even be opened, so it can't
-/// itself be settings-driven without a chicken-and-egg problem --
-/// making it dynamic too is proper OS-specific app-data-dir resolution
-/// and portable-vs-installed mode, explicitly Phase 9 scope. This
-/// setting only changes where *environment* data (which can legitimately
-/// be huge and belongs on a chosen/external drive) is written.
+/// setting from `data_root()`'s location (where Nodekeeper's own tiny
+/// settings database lives): that location has to be resolved *before*
+/// the settings database can even be opened, so it can't itself be
+/// settings-driven without a chicken-and-egg problem -- see
+/// `data_root()`/`default_environment_data_root()` (Phase 9) for how
+/// each is resolved instead. This setting only changes where
+/// *environment* data (which can legitimately be huge and belongs on a
+/// chosen/external drive) is written, once the user has explicitly
+/// picked somewhere via the data-directory picker.
 const ENVIRONMENT_DATA_ROOT_SETTING: &str = "environment_data_root";
 
 fn configured_bitcoind_path(store: &tauri::State<Arc<Mutex<Store>>>) -> Result<String, TypedError> {
@@ -1916,21 +1917,76 @@ fn list_command_history(
         .map_err(|e| TypedError::from(e.to_string()))
 }
 
-/// Placeholder (see `list_default_environments`'s doc comment for the
-/// same caveat): proper OS-specific app-data-dir resolution, and
-/// portable-vs-installed mode, are a later-phase concern.
-fn data_root() -> &'static std::path::Path {
-    std::path::Path::new("data")
+/// The directory the running executable lives in -- `current_exe()`
+/// itself points at the binary file, not its containing folder.
+/// Falls back to `.` (the process's cwd) only if the OS somehow can't
+/// report the executable's own path, which in practice never happens
+/// on any of this app's target platforms.
+fn exe_dir() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
+/// docs/SPEC.md item 12: portable mode is a `config` directory sitting
+/// next to the executable -- the "prepare a new portable drive" wizard
+/// creates it once, up front, as a deliberate signal, rather than this
+/// being inferred by some fragile heuristic (drive letter, path
+/// shape, ...). Split out from `data_root()` so the actual branching
+/// condition has real test coverage without needing to control where
+/// `cargo test`'s own binary happens to run from.
+fn is_portable_layout(exe_dir: &std::path::Path) -> bool {
+    exe_dir.join("config").is_dir()
+}
+
+fn is_portable_install() -> bool {
+    is_portable_layout(&exe_dir())
+}
+
+/// Where Nodekeeper's own settings database, scripts, and downloaded
+/// binaries live (docs/SPEC.md item 12's `/config`, item 1's binary
+/// cache) -- portable mode: `<exe_dir>/config`, all-relative-paths as
+/// the spec requires. Installed mode: the OS's own per-user
+/// application-data directory (`dirs::data_dir()`, matching what
+/// Tauri's own `app.path().app_data_dir()` resolves to, joined with a
+/// friendly folder name instead of the reverse-DNS bundle identifier --
+/// this predates any Tauri `App`/`AppHandle` existing, since it has to
+/// be resolved before the settings database can even be opened).
+fn data_root() -> std::path::PathBuf {
+    if is_portable_install() {
+        exe_dir().join("config")
+    } else {
+        dirs::data_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("Nodekeeper")
+    }
+}
+
+/// Where environment data (bitcoind/ord's own directories, which can
+/// legitimately be huge) lives before the user ever picks their own via
+/// the data-directory picker (docs/SPEC.md item 1). Portable mode:
+/// `<exe_dir>/data`, the spec's fixed layout. Installed mode: an
+/// `environments` subfolder of `data_root()` -- keeps the previous
+/// single-directory-by-default behavior (everything under one place
+/// unless the user chooses otherwise) while still not literally
+/// sharing a folder with the settings database.
+fn default_environment_data_root() -> std::path::PathBuf {
+    if is_portable_install() {
+        exe_dir().join("data")
+    } else {
+        data_root().join("environments")
+    }
 }
 
 /// Where every environment's data actually lives -- `ENVIRONMENT_
 /// DATA_ROOT_SETTING` if the user has ever chosen one (the
-/// data-directory picker, docs/SPEC.md item 1), else `data_root()`'s
-/// original default, so a fresh install behaves exactly as before this
-/// setting existed. Every `Environment::new_default(chain, ...)` call
-/// site in this file uses this, not `data_root()` directly, *except*
-/// `run()`'s own settings-database bootstrap (see `ENVIRONMENT_DATA_
-/// ROOT_SETTING`'s doc comment for why that one has to stay fixed).
+/// data-directory picker, docs/SPEC.md item 1), else
+/// `default_environment_data_root()`. Every `Environment::new_default
+/// (chain, ...)` call site in this file uses this, not `data_root()`
+/// directly, *except* `run()`'s own settings-database bootstrap (see
+/// `ENVIRONMENT_DATA_ROOT_SETTING`'s doc comment for why that one has
+/// to stay fixed).
 fn environment_data_root(store: &tauri::State<'_, Arc<Mutex<Store>>>) -> std::path::PathBuf {
     store
         .lock()
@@ -1939,7 +1995,15 @@ fn environment_data_root(store: &tauri::State<'_, Arc<Mutex<Store>>>) -> std::pa
         .ok()
         .flatten()
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| data_root().to_path_buf())
+        .unwrap_or_else(default_environment_data_root)
+}
+
+/// Whether this launch is running in portable mode (docs/SPEC.md item
+/// 12) -- exposed so the frontend can show portable-only affordances
+/// (safe eject, drive info) without duplicating the detection logic.
+#[tauri::command]
+fn is_portable_mode() -> bool {
+    is_portable_install()
 }
 
 /// The Regtest Test Lab's "Mine blocks"/"Get test coins" controls
@@ -2243,6 +2307,7 @@ pub fn run() {
             search_debug_log,
             list_command_history,
             set_prevent_sleep,
+            is_portable_mode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -2323,5 +2388,34 @@ mod tests {
     fn reset_test_lab_is_a_no_op_when_regtest_has_no_data_yet() {
         let root = tempfile::tempdir().unwrap();
         delete_regtest_data_only(root.path()).unwrap();
+    }
+
+    /// docs/SPEC.md item 12: portable mode is signaled by a `config`
+    /// directory next to the executable -- a fresh installed-mode
+    /// launch (no such directory) must not be mistaken for portable.
+    #[test]
+    fn a_directory_with_no_config_subfolder_is_not_portable() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_portable_layout(dir.path()));
+    }
+
+    /// The exact signal the "prepare a new portable drive" wizard is
+    /// responsible for creating once, up front.
+    #[test]
+    fn a_directory_with_a_config_subfolder_is_portable() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("config")).unwrap();
+        assert!(is_portable_layout(dir.path()));
+    }
+
+    /// A same-named `config` *file* (not a directory) must not be
+    /// mistaken for the real marker -- guards against a stray file
+    /// (e.g. a leftover `config.ini` typo) accidentally flipping a
+    /// normal installed launch into portable mode.
+    #[test]
+    fn a_config_file_instead_of_a_directory_is_not_portable() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config"), b"not a directory").unwrap();
+        assert!(!is_portable_layout(dir.path()));
     }
 }

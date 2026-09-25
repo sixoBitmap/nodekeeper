@@ -3098,6 +3098,46 @@ and calls the new `set_prevent_sleep` command only when the combined
 tick regardless of change, and not via a second, redundant background
 poll just for this.
 
+### Portable-mode detection + data layout (Phase 9, 2026-09-25)
+
+**Portable-mode signal: a `config` directory next to the executable.**
+Considered inferring it from drive-letter shape or path patterns, but
+that's fragile and platform-specific in exactly the ways this feature
+needs to avoid. A directory the "prepare a new portable drive" wizard
+creates once, deliberately, as an explicit signal is simple, cheap to
+check (`Path::is_dir()`), and can't be triggered by accident the way a
+heuristic could -- confirmed with a real regression test for the
+"a plain file named `config`, not a directory, must not count" edge
+case specifically.
+
+**`dirs` crate over Tauri's `app.path().app_data_dir()`.** The latter
+needs a live `App`/`AppHandle`, but `data_root()` has to resolve
+*before* the Tauri builder even exists (it's needed to open the
+settings database, which happens at the very top of `run()`).
+`dirs::data_dir()` resolves to the same base Tauri's own resolver uses
+(`%APPDATA%` / `~/Library/Application Support` / `$XDG_DATA_HOME`,
+confirmed via docs.rs) -- joined with a friendly "Nodekeeper" folder
+name instead of the reverse-DNS bundle identifier Tauri would use, for
+a nicer on-disk folder name.
+
+**Installed mode's default environment-data location changed from
+`data_root()` itself to `data_root()/environments`.** Previously
+`environment_data_root()` fell back to the exact same directory as the
+settings database when unset. Splitting them slightly (still both
+under the same OS app-data location, just an `environments` subfolder)
+means a fresh install's environment data and Nodekeeper's own tiny
+settings DB are never literally sharing one folder, matching portable
+mode's already-separate `/data` vs `/config` split instead of only
+achieving that separation once the user explicitly picks a directory.
+
+**Cross-platform testing limit for the rest of this phase.** Recorded
+plainly in PROGRESS.md's Phase 9 intro: this session is Windows-only
+(no macOS/Linux host, VM, or cross-compilation toolchain available).
+Windows-specific work in this phase gets real verification; macOS/
+Linux-specific detection code (App Translocation, noexec mounts) will
+be written from VERIFIED platform-API research but flagged as
+untested-on-the-real-OS rather than silently claimed as verified.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
