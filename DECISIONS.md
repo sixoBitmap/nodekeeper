@@ -2378,6 +2378,51 @@ about degrades to "ask for confirmation," never to "run instantly."
 Same fail-closed shape as `ord_wallet_subcommand_class`'s handling of
 an unrecognized ord subcommand.
 
+## Phase 7 — console execution wiring, two secrets-leak gaps found while designing it (2026-09-25)
+
+Wired `console_safety`/`console_parse` into real execution
+(`console_classify` + `console_run`), routing bitcoin-cli-style input
+through `nk_rpc::RpcClient::call` directly and ord-style input through
+a new `nk_ord::wallet::run_console_subcommand` (thin wrapper over the
+same private `run_json` every other wallet command already uses).
+`console_run` re-derives the classification and refuses a blocked
+command itself rather than trusting the frontend called
+`console_classify` first -- consistent with this project's rule that
+the backend, not the dialog, is the actual enforcement point.
+
+Two real secrets-leak gaps surfaced while working through what "runs
+through the console" actually means for every command, not designed in
+from the start:
+
+**1. `ord wallet create`/`restore` were only going to be
+`StateChangingNoDryRun`** (needs confirmation, like `mint`) until
+realizing `create` always prints a fresh mnemonic to stdout, and a
+raw-console execution path has no sensitive-output channel to route it
+through -- the JSON result was going to flow straight into whatever
+displays `console_run`'s return value, which is exactly the Live
+Command Monitor / `command_history` path CLAUDE.md says a mnemonic must
+never reach. Added `OrdCommandClass::BlockedUseWalletScreen`: `create`/
+`restore` are refused outright by `console_run` itself, not just shown
+a confirmation, pointing at the existing Wallet screen's create/restore
+flow (which already has a real sensitive-output channel) instead.
+
+**2. Several real bitcoin-cli RPCs take a passphrase or private key as
+a plain positional argument**: `walletpassphrase "passphrase" timeout`,
+`walletpassphrasechange`, `encryptwallet "passphrase"`,
+`signmessagewithprivkey "privkey" "message"`,
+`signrawtransactionwithkey "hex" ["privatekey",...]`, `importdescriptors
+requests` (a JSON blob that can embed private descriptors). CLAUDE.md's
+"secrets passed via stdin/RPC params, never argv" is a design constraint
+for typed application flows with a chosen input channel -- a *console*
+has no other channel; the user has to type the secret into the same
+line as the command. `nk_core::console_safety::
+secret_bitcoin_rpc_arg_indices` maps each method to which positional
+index(es) are secret, and `console_run`/`console_classify` both redact
+those values unconditionally (not gated on read-only/state-changing
+status: `signmessagewithprivkey` is genuinely read-only in the "doesn't
+mutate state" sense, but still carries a private key argument that must
+never appear in the Live Command Monitor, history, or an export).
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

@@ -1414,16 +1414,39 @@ Backend — Console command execution + safety layer (docs/SPEC.md item 6)
       correctly) and `coerce_json_args`, matching bitcoin-cli's own
       real argument convention (VERIFIED live: a bare `true` sends the
       JSON boolean, not the string -- DECISIONS.md). 12 tests.
-- [ ] `console_run(chain, command_line)`: runs a parsed command through
-      the existing executor (never a new ad hoc process path, calling
-      `nk_rpc::RpcClient::call` for bitcoin-cli-style commands and the
-      same `Executor::execute` path `nk_ord::wallet` already uses for
-      ord commands), returns pretty-printable JSON output -- wires
-      `console_safety`'s classification into confirm/block/dry-run
-      behavior
+- [x] `console_classify(command_line)` + `console_run(chain,
+      command_line, dry_run)`: classify-then-run split (mirrors the
+      dry-run/confirm pattern every other fund-moving screen already
+      uses), `console_run` re-checks `blocked_reason` itself rather than
+      trusting the frontend called classify first -- the backend is the
+      real enforcement point. bitcoin-cli side calls
+      `nk_rpc::RpcClient::call` directly (the same path
+      `getblockchaininfo` etc. already use); ord side calls a new
+      `nk_ord::wallet::run_console_subcommand`, the same
+      `Executor::execute` machinery every other wallet command uses.
+      `ord create`/`restore` are refused outright, not just confirmed
+      (`OrdCommandClass::BlockedUseWalletScreen`) -- both can print a
+      mnemonic to stdout, which running through the console's raw-
+      output path would leak into the Live Command Monitor and
+      `command_history`, violating the sensitive-output-channel rule.
+      Also found and fixed: several bitcoin-cli RPCs
+      (`walletpassphrase`, `encryptwallet`, `signmessagewithprivkey`,
+      `signrawtransactionwithkey`, `importdescriptors`) take a
+      passphrase/private key as a **plain positional argument** -- the
+      one case where CLAUDE.md's "secrets via stdin/RPC params, never
+      argv" can't be avoided, since a console has no other input
+      channel. `console_secret_values`/`secret_bitcoin_rpc_arg_indices`
+      redact those positions from the display and the
+      `RpcClient::call` redact list unconditionally, regardless of
+      read-only/state-changing classification (`signmessagewithprivkey`
+      is technically read-only but still carries a private key).
 - [ ] Mainnet fund-moving commands route through the same mainnet
       extra-confirmation `ConfirmDialog` every other fund-moving screen
-      already uses -- no new confirmation flow
+      already uses -- no new confirmation flow (the backend already
+      blocks fund-moving commands outright per the "Inscription
+      protection" rule above; this item is about the *remaining*
+      state-changing-but-not-blocked commands still needing the
+      mainnet-specific extra warning on top of the ordinary confirm)
 - [ ] PSBT preview flow for raw Core-wallet spend commands
       (`walletcreatefundedpsbt`/`testmempoolaccept`), matching how
       `wallet_send_dry_run` already previews ord-wallet sends

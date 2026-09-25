@@ -41,6 +41,33 @@ pub fn classify_bitcoin_rpc(method: &str) -> RpcCommandClass {
     RpcCommandClass::StateChanging
 }
 
+/// Zero-based positional-argument indices that carry a secret for
+/// bitcoin-cli methods whose real, VERIFIED signature takes a
+/// passphrase or private key as plain text (`walletpassphrase
+/// "passphrase" timeout`, `signmessagewithprivkey "privkey" "message"`,
+/// and similar -- see the full signature list in the module docs'
+/// VERIFY reference). The console must redact these positions from the
+/// command display before it can reach the Live Command Monitor,
+/// `command_history`, or an export (CLAUDE.md: "Secrets passed to
+/// commands via stdin/RPC params, never argv" -- a console is exactly
+/// the case where a secret *has* to go in as a plain argument, since
+/// there's no other channel for a user-typed command, so this is the
+/// redaction fallback for that one unavoidable exception). Returns an
+/// empty slice for any method with nothing to redact.
+pub fn secret_bitcoin_rpc_arg_indices(method: &str) -> &'static [usize] {
+    match method {
+        "walletpassphrase" | "encryptwallet" | "signmessagewithprivkey" => &[0],
+        "walletpassphrasechange" => &[0, 1],
+        // `signrawtransactionwithkey "hexstring" ["privatekey",...] (...)`
+        "signrawtransactionwithkey" => &[1],
+        // `importdescriptors requests` -- `requests` is a JSON array
+        // that can embed private descriptors; redact the whole blob
+        // rather than trying to parse out just the private ones.
+        "importdescriptors" => &[0],
+        _ => &[],
+    }
+}
+
 /// "sendtoaddress, sendmany, send, bumpfee, and similar" (docs/SPEC.md
 /// item 6) -- every real bitcoin-cli 31.1 wallet RPC that directly signs
 /// and broadcasts a spend. `sendrawtransaction` also broadcasts but
@@ -182,6 +209,17 @@ pub enum OrdCommandClass {
     /// `offer accept`) -- falls back to the standard confirmation
     /// dialog, no preview step available.
     StateChangingNoDryRun,
+    /// `create`/`restore`: refused in the raw console outright, not
+    /// just shown a confirmation. Both can print a mnemonic to stdout
+    /// (`create` always does; `restore` only if it derives a fresh one,
+    /// but the console can't tell in advance) -- running them through
+    /// the console's raw-output path would put a mnemonic through the
+    /// Live Command Monitor and command history, directly violating
+    /// CLAUDE.md's "mnemonics flow only through the sensitive-output
+    /// channel ... never the monitor, logs, history, or exports." The
+    /// existing Wallet screen's create/restore flow is the only place
+    /// these are allowed to run.
+    BlockedUseWalletScreen,
 }
 
 /// Classifies an `ord wallet` subcommand by its first argument (e.g.
@@ -195,6 +233,7 @@ pub fn classify_ord_wallet_subcommand(args: &[&str]) -> OrdCommandClass {
     match subcommand {
         "addresses" | "balance" | "cardinals" | "dump" | "inscriptions" | "label" | "outputs"
         | "pending" | "receive" | "runics" | "sats" | "transactions" => OrdCommandClass::ReadOnly,
+        "create" | "restore" => OrdCommandClass::BlockedUseWalletScreen,
         "send" | "inscribe" | "batch" | "burn" | "split" | "sweep" | "resume" => {
             OrdCommandClass::StateChangingWithDryRun
         }
@@ -295,6 +334,37 @@ mod tests {
     }
 
     #[test]
+    fn known_secret_bearing_methods_flag_the_right_argument_positions() {
+        assert_eq!(secret_bitcoin_rpc_arg_indices("walletpassphrase"), &[0]);
+        assert_eq!(secret_bitcoin_rpc_arg_indices("encryptwallet"), &[0]);
+        assert_eq!(
+            secret_bitcoin_rpc_arg_indices("signmessagewithprivkey"),
+            &[0]
+        );
+        assert_eq!(
+            secret_bitcoin_rpc_arg_indices("walletpassphrasechange"),
+            &[0, 1]
+        );
+        assert_eq!(
+            secret_bitcoin_rpc_arg_indices("signrawtransactionwithkey"),
+            &[1]
+        );
+        assert_eq!(secret_bitcoin_rpc_arg_indices("importdescriptors"), &[0]);
+    }
+
+    #[test]
+    fn a_method_with_no_secret_arguments_returns_an_empty_slice() {
+        assert_eq!(
+            secret_bitcoin_rpc_arg_indices("getblockchaininfo"),
+            &[] as &[usize]
+        );
+        assert_eq!(
+            secret_bitcoin_rpc_arg_indices("sendtoaddress"),
+            &[] as &[usize]
+        );
+    }
+
+    #[test]
     fn ord_read_only_subcommands_run_instantly() {
         for cmd in ["balance", "receive", "inscriptions", "transactions"] {
             assert_eq!(
@@ -314,6 +384,20 @@ mod tests {
                 classify_ord_wallet_subcommand(&[cmd]),
                 OrdCommandClass::StateChangingWithDryRun,
                 "{cmd} should be StateChangingWithDryRun"
+            );
+        }
+    }
+
+    #[test]
+    fn ord_create_and_restore_are_blocked_not_just_confirmed() {
+        // Both can print a mnemonic to stdout -- running them through
+        // the console's raw-output path would leak it into the Live
+        // Command Monitor, violating the sensitive-output-channel rule.
+        for cmd in ["create", "restore"] {
+            assert_eq!(
+                classify_ord_wallet_subcommand(&[cmd]),
+                OrdCommandClass::BlockedUseWalletScreen,
+                "{cmd} should be BlockedUseWalletScreen"
             );
         }
     }

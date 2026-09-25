@@ -446,6 +446,25 @@ pub async fn batch_inscribe(
     run_json(executor, target, args, triggering_action).await
 }
 
+/// The console's (docs/SPEC.md item 6) generic entry point: runs
+/// whatever `ord wallet` subcommand + arguments the user typed, once
+/// the caller has already checked `nk_core::console_safety::
+/// classify_ord_wallet_subcommand` and confirmed this isn't
+/// `OrdCommandClass::BlockedUseWalletScreen` (`create`/`restore` --
+/// both can print a mnemonic, which must never flow through this
+/// generic, Sensitivity::Normal path). Every other wrapper function in
+/// this file is a typed convenience over the same underlying call;
+/// this one exists specifically for input that isn't known ahead of
+/// time.
+pub async fn run_console_subcommand(
+    executor: &Executor,
+    target: &WalletTarget<'_>,
+    subcommand_args: Vec<String>,
+    triggering_action: &str,
+) -> Result<Value, WalletError> {
+    run_json(executor, target, subcommand_args, triggering_action).await
+}
+
 async fn run_json(
     executor: &Executor,
     target: &WalletTarget<'_>,

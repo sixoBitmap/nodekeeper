@@ -936,6 +936,172 @@ async fn wallet_send(
     parse_wallet_send_result(response.map_err(TypedError::from)?)
 }
 
+/// The confirm dialog / "Learn mode" (docs/SPEC.md item 6) view of what
+/// a raw console command line would do, before anything runs.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct ConsoleCommandPreview {
+    /// Which half of the console this is -- `BitcoinCli` or `OrdCli`
+    /// only; reuses `nk_exec::CommandSource` rather than a new type
+    /// since it already carries exactly this distinction.
+    pub source: nk_exec::CommandSource,
+    /// The exact command that will run, with any secret argument
+    /// (a passphrase, a private key) already redacted -- always safe
+    /// to show directly in the confirm dialog.
+    pub display: String,
+    pub read_only: bool,
+    /// True when a `--dry-run` preview should be fetched and shown
+    /// before the real confirmation (ord commands that support it).
+    pub supports_dry_run: bool,
+    /// `Some(reason)` when this must be refused outright and
+    /// `console_run` will error rather than execute -- a fund-moving
+    /// bitcoin-cli command against the wallet ord uses, or an ord
+    /// `create`/`restore` that could print a recovery phrase.
+    pub blocked_reason: Option<String>,
+}
+
+/// Positional-argument values (bitcoin-cli side only) that must be
+/// redacted before `method`'s command line is shown or logged anywhere
+/// -- see `nk_core::console_safety::secret_bitcoin_rpc_arg_indices`.
+fn console_secret_values(method: &str, args: &[String]) -> Vec<String> {
+    nk_core::console_safety::secret_bitcoin_rpc_arg_indices(method)
+        .iter()
+        .filter_map(|&i| args.get(i).cloned())
+        .collect()
+}
+
+/// Classifies a raw console command line (docs/SPEC.md item 6) without
+/// running anything -- the frontend calls this first, shows a confirm
+/// dialog (or refuses outright) based on the result, and only then
+/// calls `console_run`. Takes no `chain`/state: classification is the
+/// same regardless of which environment a tab is locked to.
+#[tauri::command]
+fn console_classify(command_line: String) -> Result<ConsoleCommandPreview, TypedError> {
+    let parsed = nk_core::console_parse::parse_command_line(&command_line)
+        .map_err(|e| TypedError::from(e.to_string()))?;
+
+    if parsed.command == "ord" {
+        let sub_args: Vec<&str> = parsed.args.iter().map(String::as_str).collect();
+        let class = nk_core::console_safety::classify_ord_wallet_subcommand(&sub_args);
+        let display = format!("ord wallet {}", parsed.args.join(" "));
+        use nk_core::console_safety::OrdCommandClass;
+        let (read_only, supports_dry_run, blocked_reason) = match class {
+            OrdCommandClass::ReadOnly => (true, false, None),
+            OrdCommandClass::StateChangingWithDryRun => (false, true, None),
+            OrdCommandClass::StateChangingNoDryRun => (false, false, None),
+            OrdCommandClass::BlockedUseWalletScreen => (
+                false,
+                false,
+                Some(
+                    "This can print a recovery phrase -- use the Wallet screen's create/restore \
+                     flow instead."
+                        .to_string(),
+                ),
+            ),
+        };
+        return Ok(ConsoleCommandPreview {
+            source: nk_exec::CommandSource::OrdCli,
+            display,
+            read_only,
+            supports_dry_run,
+            blocked_reason,
+        });
+    }
+
+    let class = nk_core::console_safety::classify_bitcoin_rpc(&parsed.command);
+    let raw_display = if parsed.args.is_empty() {
+        parsed.command.clone()
+    } else {
+        format!("{} {}", parsed.command, parsed.args.join(" "))
+    };
+    let secrets = console_secret_values(&parsed.command, &parsed.args);
+    let display = nk_exec::redact::redact(&raw_display, &secrets);
+    use nk_core::console_safety::RpcCommandClass;
+    let (read_only, blocked_reason) = match class {
+        RpcCommandClass::ReadOnly => (true, None),
+        RpcCommandClass::StateChanging => (false, None),
+        RpcCommandClass::FundMoving => (
+            false,
+            Some(
+                "This can move funds and is blocked for the wallet ord uses -- use the Send \
+                 screen instead."
+                    .to_string(),
+            ),
+        ),
+    };
+    Ok(ConsoleCommandPreview {
+        source: nk_exec::CommandSource::BitcoinCli,
+        display,
+        read_only,
+        supports_dry_run: false,
+        blocked_reason,
+    })
+}
+
+/// Actually runs a console command line (docs/SPEC.md item 6), after
+/// the frontend has already called `console_classify` and (for
+/// anything not `read_only`) shown the user a confirmation. Refuses a
+/// `blocked_reason` command outright regardless of what the frontend
+/// did -- the backend is the real enforcement point, not the dialog.
+/// `dry_run` only has an effect for an ord command that
+/// `console_classify` reported `supports_dry_run: true`; it's silently
+/// ignored otherwise (bitcoin-cli has no dry-run concept -- raw
+/// Core-wallet spend previews are still a separate tracked task).
+#[tauri::command]
+async fn console_run(
+    chain: Chain,
+    command_line: String,
+    dry_run: bool,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<serde_json::Value, TypedError> {
+    let parsed = nk_core::console_parse::parse_command_line(&command_line)
+        .map_err(|e| TypedError::from(e.to_string()))?;
+
+    if parsed.command == "ord" {
+        let sub_args: Vec<&str> = parsed.args.iter().map(String::as_str).collect();
+        let class = nk_core::console_safety::classify_ord_wallet_subcommand(&sub_args);
+        if matches!(
+            class,
+            nk_core::console_safety::OrdCommandClass::BlockedUseWalletScreen
+        ) {
+            return Err(TypedError::from(
+                "This can print a recovery phrase -- use the Wallet screen's create/restore \
+                 flow instead."
+                    .to_string(),
+            ));
+        }
+        let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
+        let mut args = parsed.args;
+        if dry_run
+            && matches!(
+                class,
+                nk_core::console_safety::OrdCommandClass::StateChangingWithDryRun
+            )
+        {
+            args.push("--dry-run".to_string());
+        }
+        return nk_ord::wallet::run_console_subcommand(&executor, &ctx.target(), args, "console")
+            .await
+            .map_err(TypedError::from);
+    }
+
+    let class = nk_core::console_safety::classify_bitcoin_rpc(&parsed.command);
+    if matches!(class, nk_core::console_safety::RpcCommandClass::FundMoving) {
+        return Err(TypedError::from(
+            "This can move funds and is blocked for the wallet ord uses -- use the Send screen \
+             instead."
+                .to_string(),
+        ));
+    }
+    let (_, rpc) = bitcoin_rpc_context(chain, &node_manager, &store, &executor)?;
+    let secrets = console_secret_values(&parsed.command, &parsed.args);
+    let json_args = nk_core::console_parse::coerce_json_args(&parsed.args);
+    rpc.call(&parsed.command, json_args, "console", secrets, false)
+        .await
+        .map_err(|e| TypedError::from(e.to_string()))
+}
+
 /// Fee-rate estimate in sat/vB for the Send screen (docs/SPEC.md item
 /// 3: "estimates only from the local node"). `conf_target` is in
 /// blocks (a smaller number asks for a faster, more expensive
@@ -1669,6 +1835,8 @@ pub fn run() {
             wallet_transaction_history,
             wallet_send_dry_run,
             wallet_send,
+            console_classify,
+            console_run,
             wallet_fee_estimate,
             wallet_inscribe_dry_run,
             wallet_inscribe,
@@ -1717,5 +1885,6 @@ mod tests {
         nk_store::CommandHistoryEntry::export_all(&config).unwrap();
         nk_exec::ExecEvent::export_all(&config).unwrap();
         DownloadProgress::export_all(&config).unwrap();
+        ConsoleCommandPreview::export_all(&config).unwrap();
     }
 }
