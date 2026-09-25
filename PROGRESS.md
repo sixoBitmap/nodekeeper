@@ -1813,9 +1813,20 @@ Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
       pre-webview-load failure natively per OS
 - [ ] macOS App Translocation detection + guidance (quarantine
       attribute on the .app and on bitcoind/ord) -- code only,
-      unverifiable without a real macOS host
+      unverifiable without a real macOS host. Drafted and real-tested
+      once (pure path-matching logic against the documented
+      `/private/var/folders/.../AppTranslocation/...` shape, fully
+      covered without needing a Mac), then deliberately not committed
+      on the project owner's explicit call: this session can't compile-
+      check the OS-gated half at all (a `#[cfg(target_os = "macos")]`
+      function is skipped entirely by a Windows build, so even a
+      syntax error would go unnoticed until a real macOS build), a
+      meaningfully higher risk than this phase's other work. Revisit
+      with real macOS access.
 - [ ] Linux noexec-mount detection + guidance -- code only, unverifiable
-      without a real Linux host
+      without a real Linux host. Same reasoning and same disposition as
+      the macOS item above (drafted, real-tested for the pure `/proc/
+      mounts`-parsing half, not committed) -- see that entry.
 - [x] Filesystem checks: warn on exFAT, recommend NTFS. Backend:
       `SystemCheck` gained `disk_filesystem` (via `sysinfo::Disks`,
       reusing the same mount-point-prefix-match logic
@@ -1848,7 +1859,17 @@ Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
       deep recursive trees `directory_size` walks, so the practical
       risk is low -- noted here rather than silently assumed fine.
 - [ ] USB speed detection, free space (free space already exists via
-      `system_check`; USB speed is new)
+      `system_check`; USB speed is new). Checked the real mechanism
+      before starting: unlike the exFAT check (one `sysinfo` call),
+      this needs a multi-hop WMI join on Windows (`Win32_DiskDrive`'s
+      `PNPDeviceID` matched against a USB controller device to read
+      `NegotiatedSpeed`) with no clean existing Rust crate for it, plus
+      a new dependency, and it's Windows-only with no obvious
+      equivalent researched yet for macOS/Linux. The spec itself
+      softens this to "if possible." Deliberately deferred rather than
+      sunk into right now, given its effort/value ratio is meaningfully
+      worse than everything else built this phase -- revisit as its
+      own focused task if it's wanted.
 - [x] Unclean-shutdown recovery guidance. VERIFY, live (not assumed):
       whether a clean shutdown actually removes bitcoind's own
       `bitcoind.pid` file -- confirmed yes, via a real regtest bitcoind
