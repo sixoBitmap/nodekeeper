@@ -5,12 +5,15 @@ import type { Environment } from "@/bindings/Environment";
 import type { NodeStatus } from "@/bindings/NodeStatus";
 import type { OrdStatus } from "@/bindings/OrdStatus";
 import type { SystemCheck } from "@/bindings/SystemCheck";
+import type { TypedError } from "@/bindings/TypedError";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ErrorPanel } from "@/components/ErrorPanel";
 import { StatusBadge, type StatusVariant } from "@/components/StatusBadge";
 import { useDashboardStatus } from "@/hooks/useDashboardStatus";
 import { useOrdStatus } from "@/hooks/useOrdStatus";
 import { chainBgClass, chainTextClass } from "@/lib/environment-colors";
+import { friendlyError } from "@/lib/error-messages";
 import { formatBytes } from "@/lib/format";
 import { usePreventSleepStore } from "@/store/preventSleep";
 
@@ -30,6 +33,33 @@ export function OverviewScreen({ environments }: { environments: Environment[] }
   const preventSleepEnabled = usePreventSleepStore((s) => s.enabled);
   const preventSleepLoaded = usePreventSleepStore((s) => s.loaded);
   const setPreventSleepEnabled = usePreventSleepStore((s) => s.setEnabled);
+  const [portable, setPortable] = useState(false);
+  const [ejecting, setEjecting] = useState(false);
+  const [ejected, setEjected] = useState(false);
+  const [ejectError, setEjectError] = useState<TypedError | null>(null);
+
+  useEffect(() => {
+    void invoke<boolean>("is_portable_mode").then(setPortable);
+  }, []);
+
+  const safeEject = async () => {
+    setEjecting(true);
+    setEjectError(null);
+    setEjected(false);
+    try {
+      await invoke("safe_eject");
+      setEjected(true);
+      // `safe_eject` succeeding already confirms nothing is running --
+      // set this immediately rather than waiting for the next 3s poll
+      // tick to agree, so "safe to unplug" isn't briefly hidden behind
+      // a stale `runningCount`.
+      setRunningCount(0);
+    } catch (e) {
+      setEjectError(e as TypedError);
+    } finally {
+      setEjecting(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -70,6 +100,13 @@ export function OverviewScreen({ environments }: { environments: Environment[] }
     }
   };
 
+  // "Safe to unplug" only shows while nothing has started running
+  // again since the eject -- derived at render time (not reset via a
+  // separate effect) so it can never lag a poll tick behind reality;
+  // showing it after something restarted would be actively misleading
+  // for a portable drive.
+  const showSafeToUnplug = ejected && runningCount === 0;
+
   // Resource-warning threshold: a precise per-process RAM figure needs
   // new backend instrumentation (tracking each spawned bitcoind/ord
   // PID's own memory via sysinfo) not built yet -- this uses
@@ -87,6 +124,31 @@ export function OverviewScreen({ environments }: { environments: Environment[] }
           {t("overview.stopAll")}
         </Button>
       </div>
+
+      {portable && (
+        <div className="space-y-2 rounded-md border-2 border-primary/40 bg-primary/5 p-3">
+          <h3 className="text-sm font-semibold">{t("overview.safeEject.title")}</h3>
+          <p className="text-xs text-muted-foreground">{t("overview.safeEject.hint")}</p>
+          {ejectError &&
+            (() => {
+              const friendly = friendlyError(ejectError);
+              return (
+                <ErrorPanel
+                  title={friendly.title}
+                  message={friendly.whatToDo ? `${friendly.message} ${friendly.whatToDo}` : friendly.message}
+                  technicalDetails={ejectError.message}
+                />
+              );
+            })()}
+          {showSafeToUnplug ? (
+            <p className="text-sm font-medium text-success">{t("overview.safeEject.safeToUnplug")}</p>
+          ) : (
+            <Button size="sm" disabled={ejecting} onClick={() => void safeEject()}>
+              {ejecting ? t("overview.safeEject.ejecting") : t("overview.safeEject.button")}
+            </Button>
+          )}
+        </div>
+      )}
 
       {systemCheck && (
         <div className="rounded-md border border-border p-3 text-sm">

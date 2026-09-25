@@ -101,7 +101,14 @@
     "resourceWarning": "Several environments are running and available memory is low. Consider stopping some before starting more.",
     "diskUsed": "{{size}} used",
     "preventSleep": "Prevent sleep during sync",
-    "preventSleepHint": "Keeps this computer awake only while a node is syncing or ord is indexing -- released automatically once everything has caught up."
+    "preventSleepHint": "Keeps this computer awake only while a node is syncing or ord is indexing -- released automatically once everything has caught up.",
+    "safeEject": {
+      "title": "Safely shut down and eject",
+      "hint": "Stops every running environment cleanly (ord first, then Bitcoin Core) before you unplug this drive.",
+      "button": "Safely shut down and eject",
+      "ejecting": "Shutting down…",
+      "safeToUnplug": "Everything has stopped -- it's safe to unplug this drive now."
+    }
   },
   "testLab": {
     "title": "Test Lab",

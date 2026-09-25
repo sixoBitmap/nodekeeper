@@ -680,6 +680,17 @@ export function installDevTauriMockIfNeeded() {
         // there's no real OS-level sleep guard to hold here, same
         // reasoning as every other native-only affordance in this file.
         return undefined;
+      case "is_portable_mode":
+        // Reports portable so the dev preview can actually exercise the
+        // Safe Eject UI -- there's no real executable path to inspect
+        // in a browser preview either way.
+        return true;
+      case "safe_eject":
+        for (const chain of ["mainnet", "regtest", "signet", "testnet4"] as Chain[]) {
+          runningSince.delete(chain);
+          ordRunningSince.delete(chain);
+        }
+        return undefined;
       case "list_scripts":
         return MOCK_SCRIPTS;
       case "list_available_interpreters":

@@ -2084,27 +2084,55 @@ fn delete_regtest_data_only(environment_data_root: &std::path::Path) -> std::io:
     Ok(())
 }
 
-/// The tray menu's "Quit" action: stops every running environment's
-/// ord and bitcoind gracefully (same timeouts `reset_test_lab` uses)
-/// before actually exiting, rather than leaving them as orphaned
-/// processes -- the window-hide-to-tray behavior above only works
-/// because something keeps them running intentionally; an explicit
-/// quit should still shut them down cleanly first.
-async fn stop_everything_and_exit(app: tauri::AppHandle) {
-    let node_manager = app.state::<NodeManager>();
+/// Stops every running environment's ord then bitcoind, gracefully, in
+/// that order -- ord first so it's never left trying to talk to a
+/// bitcoind that already vanished out from under it, matching
+/// docs/SPEC.md item 12's "stop ALL running environments... (ord
+/// first, then bitcoind)". Shared by the tray's "Quit" (best-effort:
+/// the app is exiting regardless of whether a stop fails) and
+/// `safe_eject` (docs/SPEC.md item 12's "Safely shut down and eject"
+/// button, which needs to know whether every stop actually succeeded
+/// before telling the user it's safe to unplug the drive -- silently
+/// swallowing a failure there would be actively wrong, not just
+/// unhelpful).
+async fn stop_every_running_environment(node_manager: &NodeManager) -> Result<(), TypedError> {
     for &chain in Chain::ALL.iter() {
         if node_manager.is_ord_running(chain) {
-            let _ = node_manager
+            node_manager
                 .stop_ord(chain, std::time::Duration::from_secs(30))
-                .await;
+                .await
+                .map_err(TypedError::from)?;
         }
         if node_manager.is_running(chain) {
-            let _ = node_manager
+            node_manager
                 .stop(chain, std::time::Duration::from_secs(120))
-                .await;
+                .await
+                .map_err(TypedError::from)?;
         }
     }
+    Ok(())
+}
+
+/// The tray menu's "Quit" action: stops every running environment
+/// gracefully before actually exiting, rather than leaving them as
+/// orphaned processes -- the window-hide-to-tray behavior above only
+/// works because something keeps them running intentionally; an
+/// explicit quit should still shut them down cleanly first. Best-
+/// effort: a stop failing here shouldn't block the app from exiting
+/// when the user explicitly asked it to.
+async fn stop_everything_and_exit(app: tauri::AppHandle) {
+    let node_manager = app.state::<NodeManager>();
+    let _ = stop_every_running_environment(&node_manager).await;
     app.exit(0);
+}
+
+/// docs/SPEC.md item 12: "Safely shut down and eject." Unlike the tray
+/// Quit path above, a failed stop here must be reported, not
+/// swallowed -- telling the user it's safe to unplug the drive when
+/// something didn't actually stop would risk real data corruption.
+#[tauri::command]
+async fn safe_eject(node_manager: tauri::State<'_, NodeManager>) -> Result<(), TypedError> {
+    stop_every_running_environment(&node_manager).await
 }
 
 /// Shows and focuses the main window -- shared by the tray icon's left
@@ -2308,6 +2336,7 @@ pub fn run() {
             list_command_history,
             set_prevent_sleep,
             is_portable_mode,
+            safe_eject,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

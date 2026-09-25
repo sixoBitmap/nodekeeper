@@ -1823,15 +1823,31 @@ Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
 - [ ] USB speed detection, free space (free space already exists via
       `system_check`; USB speed is new)
 - [ ] Unclean-shutdown recovery guidance (ord index rebuild)
-- [ ] "Safely shut down and eject" button: stop every running
+- [x] "Safely shut down and eject" button: stop every running
       environment (ord first, then bitcoind), wait for clean exits,
-      then confirm it's safe to unplug; warn if the window closes while
-      services are running. Interacts with Phase 8's Tray
-      "hide instead of quit while anything runs" behavior -- portable
-      mode likely shouldn't hide-to-tray and keep a drive's bitcoind
-      running in the background the way installed mode does, since the
-      drive itself could be unplugged; needs a decision before Tray's
-      existing behavior is left as-is for portable mode too.
+      then confirm it's safe to unplug. Backend: `safe_eject` command
+      built on a new shared `stop_every_running_environment` helper,
+      extracted from (and now also used by) the tray's "Quit" from
+      Phase 8 -- Quit swallows a stop failure (best-effort, the app is
+      exiting regardless) where `safe_eject` propagates one (telling
+      the user it's safe to unplug when something didn't actually stop
+      would risk real data corruption, so a failure has to surface).
+      Frontend: a prominent section on the Overview screen, shown only
+      when `is_portable_mode()` is true, with a live "Everything has
+      stopped -- it's safe to unplug this drive now" confirmation.
+      Live-verified in the browser dev preview: starting a node shows
+      the button, clicking it stops the node and shows the confirmation
+      immediately (not lagging a poll tick behind), and starting
+      something again correctly hides the confirmation and brings the
+      button back.
+      **Still open**: warning if the window is closed while services
+      are running, and its interaction with Phase 8's Tray "hide
+      instead of quit while anything runs" behavior -- portable mode
+      likely shouldn't hide-to-tray and keep a drive's bitcoind running
+      in the background the way installed mode does, since the drive
+      itself could be unplugged out from under it. Needs a decision
+      before Tray's existing behavior is left as-is for portable mode
+      too; tracked as a separate follow-up.
 - [ ] Master password unlock at launch, for the encrypted secrets file
       (Foundation E -- `nk-secrets`, built Phase 5, needs a launch-time
       UI flow wired to it for portable mode specifically)

@@ -3138,6 +3138,33 @@ Linux-specific detection code (App Translocation, noexec mounts) will
 be written from VERIFIED platform-API research but flagged as
 untested-on-the-real-OS rather than silently claimed as verified.
 
+### Safely shut down and eject (Phase 9, 2026-09-25)
+
+**Reused the tray Quit path's stop-everything logic instead of writing
+a second copy.** Phase 8's tray "Quit" already stops every running
+environment (ord then bitcoind) before exiting. Extracted that loop
+into `stop_every_running_environment`, now returning a real
+`Result<(), TypedError>` instead of swallowing errors -- Quit still
+discards the result (`let _ =`, best-effort: the app is exiting either
+way), but `safe_eject` propagates it, since silently telling the user
+it's safe to unplug a drive when a stop actually failed would risk
+real data corruption, not just be unhelpful.
+
+**Frontend "safe to unplug" state derived at render time, not reset
+via an effect.** First pass used a `useEffect` to clear the success
+flag once `runningCount` rose above zero again -- flagged by this
+project's own lint rule against synchronous `setState` in an effect
+body. Fixed by deriving `showSafeToUnplug = ejected && runningCount
+=== 0` directly during render instead of a separate reset effect. This
+surfaced a related real gap: `runningCount` only updates on the
+Overview screen's existing 3s poll, so right after a successful eject
+the success message would stay hidden for up to 3s behind a stale
+count. Fixed by also setting `runningCount` to 0 immediately in the
+eject handler itself -- `safe_eject` succeeding is already confirmation
+enough, no need to wait for the next poll to agree. Live-verified both
+the immediate success message and the message correctly disappearing
+again once a service was restarted.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
