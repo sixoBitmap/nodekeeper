@@ -235,6 +235,30 @@ fn wallet_context(
     })
 }
 
+/// Just enough for a read-only `ord server` HTTP API call (sat/
+/// inscription lookups for reinscribe mode, docs/SPEC.md item 4) --
+/// needs ord running, but no wallet at all. A fresh client each call,
+/// not reused from `NodeManager`'s own internally tracked one (which
+/// doesn't expose it publicly) -- same "construct fresh from public
+/// state" precedent as `bitcoin_rpc_context`'s `RpcClient`.
+fn ord_client(
+    chain: Chain,
+    node_manager: &tauri::State<'_, NodeManager>,
+    executor: &tauri::State<'_, Executor>,
+) -> Result<nk_ord::OrdClient, TypedError> {
+    if !node_manager.is_ord_running(chain) {
+        return Err(TypedError::from(format!(
+            "{chain:?}'s ord server must be running first"
+        )));
+    }
+    let environment = Environment::new_default(chain, data_root());
+    Ok(nk_ord::OrdClient::new(
+        format!("http://127.0.0.1:{}", environment.ord_port),
+        executor.inner().clone(),
+        environment.name,
+    ))
+}
+
 /// The mnemonic, returned directly in the IPC response and nowhere
 /// else (docs/SPEC.md Foundation B's sensitive channel) -- a dedicated
 /// type, not reused for anything that might tempt a caller into
@@ -1018,6 +1042,88 @@ fn inscribe_file_preview(path: String) -> Result<FilePreview, TypedError> {
     })
 }
 
+/// docs/SPEC.md item 4's REINSCRIBE MODE: picking an owned inscription
+/// fills in its satpoint, and `sat` is the entry point into that sat's
+/// full inscription history (`sat_inscriptions` below). `sat: None`
+/// means the running ord server's `--index-sats` is off (Foundation F)
+/// -- absent, not a made-up value -- confirmed live (DECISIONS.md
+/// Phase 6 VERIFY) that ord's own inscription-detail JSON sets `sat`
+/// to `null` in exactly that case.
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct InscriptionDetail {
+    pub id: String,
+    pub satpoint: String,
+    #[ts(type = "number | null")]
+    pub sat: Option<u64>,
+    #[ts(type = "number")]
+    pub number: i64,
+}
+
+#[tauri::command]
+async fn inscription_detail(
+    chain: Chain,
+    id: String,
+    node_manager: tauri::State<'_, NodeManager>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<InscriptionDetail, TypedError> {
+    let client = ord_client(chain, &node_manager, &executor)?;
+    let response = client
+        .inscription(&id, false)
+        .await
+        .map_err(|e| TypedError::from(e.to_string()))?;
+    let satpoint = response
+        .get("satpoint")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| TypedError::from("ord did not return a satpoint".to_string()))?
+        .to_string();
+    let sat = response.get("sat").and_then(|v| v.as_u64());
+    let number = response
+        .get("number")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| TypedError::from("ord did not return an inscription number".to_string()))?;
+    Ok(InscriptionDetail {
+        id,
+        satpoint,
+        sat,
+        number,
+    })
+}
+
+/// docs/SPEC.md item 4: "Show all existing inscriptions on that sat, in
+/// order." VERIFIED live (DECISIONS.md Phase 6) that `GET /sat/<n>`'s
+/// `inscriptions` array is already ordered oldest-first. Returns just
+/// the ids -- the frontend calls `inscription_detail` on each for its
+/// number/preview, same reasoning `WalletInscriptionEntry` already has
+/// for the regular gallery (small, review-screen-only list, not a hot
+/// loop, so the extra round trips are fine).
+#[tauri::command]
+async fn sat_inscriptions(
+    chain: Chain,
+    sat: u64,
+    node_manager: tauri::State<'_, NodeManager>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<Vec<String>, TypedError> {
+    let client = ord_client(chain, &node_manager, &executor)?;
+    let response = client
+        .sat(sat, false)
+        .await
+        .map_err(|e| TypedError::from(e.to_string()))?;
+    let ids = response
+        .get("inscriptions")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            TypedError::from("ord did not return a sat's inscriptions array".to_string())
+        })?
+        .iter()
+        .map(|v| {
+            v.as_str().map(|s| s.to_string()).ok_or_else(|| {
+                TypedError::from("a sat's inscriptions array entry was not a string".to_string())
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ids)
+}
+
 #[tauri::command]
 async fn start_node(
     chain: Chain,
@@ -1314,6 +1420,8 @@ pub fn run() {
             wallet_inscribe_batch_dry_run,
             wallet_inscribe_batch,
             inscribe_file_preview,
+            inscription_detail,
+            sat_inscriptions,
             tail_debug_log,
             page_debug_log_before,
             search_debug_log,
@@ -1349,6 +1457,7 @@ mod tests {
         WalletSendResult::export_all(&config).unwrap();
         InscribeResult::export_all(&config).unwrap();
         FilePreview::export_all(&config).unwrap();
+        InscriptionDetail::export_all(&config).unwrap();
         nk_core::log_tail::LogWindow::export_all(&config).unwrap();
         nk_store::CommandHistoryEntry::export_all(&config).unwrap();
         nk_exec::ExecEvent::export_all(&config).unwrap();

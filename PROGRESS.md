@@ -1168,16 +1168,23 @@ Backend — Tauri commands — **single inscribe and batch done, reinscribe gati
       content-type + a capped base64 `data_url` for the sandboxed
       preview (`None` above 2 MiB -- no point embedding megabytes of
       base64 through IPC for a small preview iframe)
-- [ ] A dedicated `sat_inscriptions(sat_number)` Tauri command for the
-      reinscribe gallery (the `OrdClient::sat`/`inscription` HTTP calls
-      it would wrap already exist) -- not built, reinscribe mode isn't
-      built yet either
-- [ ] Explicit "block the action if the ord index isn't fully synced"
-      gating for reinscribe specifically (spec item 4) -- today only
-      the general `wallet_context` bitcoind+ord-running check applies,
-      not an ord-*caught-up* check; needed once reinscribe mode exists
+- [x] `inscription_detail(chain, id)` and `sat_inscriptions(chain,
+      sat)` -- wrap `OrdClient::inscription`/`sat` via a new `ord_client`
+      helper (fresh client from public state, same "don't reuse
+      `NodeManager`'s internal one" precedent as `bitcoin_rpc_context`'s
+      `RpcClient`). `InscriptionDetail.sat: Option<u64>` is `None` when
+      `--index-sats` is off, read from the real response each time, not
+      a cached config value (DECISIONS.md).
+- [x] "Block the action if the ord index isn't fully synced" (spec item
+      4): decided *not* to add a separate proactive check -- ord's own
+      wallet commands already refuse to run while behind with a clear
+      "N blocks behind bitcoind" error, already mapped to
+      `AppErrorCode::OrdNotSynced` and surfaced through the existing
+      `ErrorPanel`/`friendlyError` path a reinscribe attempt would hit
+      naturally. Adding a second, separate gate ahead of that would be
+      duplicate logic for the same real signal.
 
-Frontend — Inscribe studio — **single inscribe done; batch UI and reinscribe mode are separate, later tasks**
+Frontend — Inscribe studio — **done: single, batch, and reinscribe mode**
 - [x] `InscribeStudioScreen`: drag-and-drop via Tauri's core
       `onDragDropEvent` webview API (no plugin needed), sandboxed
       preview (`<iframe sandbox="allow-scripts">`, same Foundation D
@@ -1227,13 +1234,30 @@ Frontend — Inscribe studio — **single inscribe done; batch UI and reinscribe
       mainnet confirmation + passphrase flow, success screen lists all
       3 created inscriptions. Single mode re-verified working
       unchanged after being extracted into its own component.
-- [ ] Reinscribe mode: pick an owned inscription from the gallery, show
-      the sat's full inscription history in order (or the Foundation F
-      explanation if `--index-sats` is off), permanence/visibility
-      explainer before the first reinscription, dry-run + review screen
-      with target sat/existing inscriptions/new content/fee/resulting
-      count, mandatory "I understand this sat already has inscriptions"
-      checkbox, "Reinscription #N on sat X" labeling.
+- [x] Reinscribe mode (`ReinscribeForm`), a 3-step flow: **pick** an
+      owned inscription (reuses `useWalletInscriptions`, the same data
+      `InscriptionGallery` uses) -> **compose** (permanence/visibility
+      explainer shown every time, not a one-time flag, DECISIONS.md;
+      the sat's full inscription history in order with previews +
+      numbers, or the Foundation F explanation when `sat` comes back
+      `None`; new content drop zone; fee rate; dry-run) -> **review**
+      (target sat, existing/resulting inscription counts, fee, the
+      existing history and new content previews again, the mandatory
+      "I understand this sat already has inscriptions" checkbox gating
+      a "Reinscribe" button) -> the shared `ConfirmDialog` (mainnet ack
+      + passphrase, `title`/`description` reading "Create reinscription
+      -- This will be reinscription #N on sat X, for a fee of Y",
+      exactly the spec's labeling). The review screen is deliberately
+      its own step, not folded into `ConfirmDialog` (DECISIONS.md: the
+      checkbox is reinscribe-specific review content, not the general
+      confirm-this-action gate every fund-moving flow already shares).
+      New `InscriptionPreviewTile` extracted from `InscriptionGallery`
+      so the picker grid and sat-history displays don't triplicate the
+      sandboxed-iframe markup. Verified live in the browser (dev IPC
+      mock: one entry with a real `sat`, one with `sat: null`): full
+      happy path through to a real success screen showing "reinscribe
+      #2 on sat X"; picking the `sat: null` entry shows the Foundation F
+      explanation instead of a history list, exactly as designed.
 
 **Observed, not yet addressed**: the passphrase-unlock flow (both
 `wallet_send`, Phase 5, and the new `wallet_inscribe`) always attempts
@@ -1249,10 +1273,19 @@ edge case has never actually been exercised end to end. Worth a look
 whenever wallet flows are revisited next, not fixed here.
 
 Acceptance criteria (from docs/SPEC.md Phase 6 "Done when"):
-- [ ] [CI] inscribe and reinscribe both work on regtest; the sat shows
-      both inscriptions in order
+- [x] [CI] inscribe and reinscribe both work on regtest; the sat shows
+      both inscriptions in order --
+      `inscribe_batch_and_reinscribe_all_work_and_the_sat_shows_both_
+      in_order` (`nk-testkit`), the literal criterion as a real
+      integration test against real bitcoind+ord. **Ran live on this
+      Windows machine, passed** (pending a fresh CI run once GitHub
+      Actions billing is resolved -- see the Phase 4 CI note).
 - [ ] [MANUAL] the reinscribe checkbox is enforced; gated features
-      explain missing index options
+      explain missing index options -- UI is built and live-verified in
+      the dev browser preview (mocked IPC: the mandatory checkbox
+      genuinely disables "Reinscribe" until checked, and the Foundation
+      F explanation shows correctly when a picked inscription's `sat`
+      is `None`), but needs your own check against the real app.
 
 ## Phase 7 — Console, scripts, explorer (MVP complete)
 

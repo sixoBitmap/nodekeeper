@@ -406,6 +406,22 @@ export function installDevTauriMockIfNeeded() {
           fee: 500,
         };
       }
+      case "inscription_detail": {
+        const { id } = args as { id: string };
+        // The second mock inscription demonstrates the Foundation F
+        // "sats index is off" path (`sat: null`); the first has a real
+        // sat number so the sat-history display can be exercised too.
+        const sat = id === MOCK_INSCRIPTIONS[1].id ? null : 5_000_000_000;
+        return {
+          id,
+          satpoint: `mocksatpointmocksatpointmocksatpointmocksatpointmocksatpointmo:0:0`,
+          sat,
+          number: id === MOCK_INSCRIPTIONS[0].id ? 0 : 1,
+        };
+      }
+      case "sat_inscriptions": {
+        return [MOCK_INSCRIPTIONS[0].id];
+      }
       case "wallet_inscribe_batch_dry_run": {
         const { filePaths } = args as { filePaths: string[] };
         return filePaths.map((_, i) => ({

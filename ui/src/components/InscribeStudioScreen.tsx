@@ -3,16 +3,16 @@ import { useTranslation } from "react-i18next";
 import type { Environment } from "@/bindings/Environment";
 import { Button } from "@/components/ui/button";
 import { BatchInscribeForm } from "@/components/BatchInscribeForm";
+import { ReinscribeForm } from "@/components/ReinscribeForm";
 import { SingleInscribeForm } from "@/components/SingleInscribeForm";
 
-type Mode = "single" | "batch";
+type Mode = "single" | "batch" | "reinscribe";
 
 /**
  * docs/SPEC.md item 4's Inscribe studio. A thin container: the mode
- * toggle plus whichever form is active -- `SingleInscribeForm` and
- * `BatchInscribeForm` own all the actual create/preview/confirm logic
- * for their mode. Reinscribe mode is a separate, later task
- * (PROGRESS.md).
+ * toggle plus whichever form is active -- `SingleInscribeForm`,
+ * `BatchInscribeForm`, and `ReinscribeForm` each own all the actual
+ * create/preview/confirm logic for their mode.
  */
 export function InscribeStudioScreen({ environment }: { environment: Environment }) {
   const { t } = useTranslation();
@@ -33,13 +33,22 @@ export function InscribeStudioScreen({ environment }: { environment: Environment
           <Button variant={mode === "batch" ? "secondary" : "ghost"} size="sm" onClick={() => setMode("batch")}>
             {t("inscribe.modeBatch")}
           </Button>
+          <Button
+            variant={mode === "reinscribe" ? "secondary" : "ghost"}
+            size="sm"
+            onClick={() => setMode("reinscribe")}
+          >
+            {t("inscribe.modeReinscribe")}
+          </Button>
         </div>
       </div>
 
       {mode === "single" ? (
         <SingleInscribeForm key={environment.chain} environment={environment} />
-      ) : (
+      ) : mode === "batch" ? (
         <BatchInscribeForm key={environment.chain} environment={environment} />
+      ) : (
+        <ReinscribeForm key={environment.chain} environment={environment} />
       )}
     </div>
   );

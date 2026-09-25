@@ -1997,6 +1997,42 @@ Worth remembering for any future feature that touches
 never add a static top-level import of that module to a component that
 also needs to render in the browser dev preview.
 
+## Phase 6 — reinscribe mode: design decisions (2026-09-25)
+
+Two things docs/SPEC.md item 4 leaves to interpretation, decided while
+building `ReinscribeForm`:
+
+- **"a review screen... with a mandatory checkbox before broadcasting"
+  is a screen of its own, not folded into `ConfirmDialog`.** The
+  mandatory "I understand this sat already has inscriptions" checkbox
+  is reinscribe-specific review content (target sat, existing
+  inscriptions with previews, new content, fee, resulting count) --
+  gating it inside the *shared* `ConfirmDialog` would either bloat that
+  component with reinscribe-only fields or require a generic "extra
+  checkbox" slot no other flow needs. Instead `ReinscribeForm` has its
+  own `"review"` step (a screen, not a modal) that leads *into* the
+  same shared `ConfirmDialog` every other fund-moving action uses for
+  the actual mainnet-ack/passphrase/broadcast step -- satisfies "no
+  screen implements its own confirmation flow" for the part that
+  matters (the final broadcast gate), while still giving the mandatory
+  checkbox its own dedicated space.
+- **The permanence/visibility explainer is shown every time**, not
+  tracked as a one-time "seen it" flag. The spec says "before the first
+  reinscription, explain..." -- ambiguous between "the first time ever,
+  app-wide" and "before each reinscribe action, since it's the first
+  step of that flow." Read as the latter: simpler (no new persisted
+  setting), and safer for an irreversible action to over-remind than
+  to risk a user who cleared app data or reinstalled never seeing it
+  again.
+
+Backend: `inscription_detail(chain, id)` and `sat_inscriptions(chain,
+sat)` wrap the `OrdClient::sat`/`inscription` HTTP calls added earlier
+this phase. `sat: Option<u64>` is `None` when `--index-sats` is off --
+the frontend checks this field on the real response, not a cached
+`Environment.index_options`, matching the same "trust the running
+server's actual state" reasoning used for rune balances and
+`OrdStatus`'s index-option booleans elsewhere in this project.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

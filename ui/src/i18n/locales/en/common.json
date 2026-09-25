@@ -236,7 +236,26 @@
     "viewYaml": "View batch YAML",
     "exportYaml": "Export YAML",
     "batchConfirmTitle": "Create batch inscriptions",
-    "batchConfirmDescription": "Inscribe {{count}} files for a total fee of {{fee}}"
+    "batchConfirmDescription": "Inscribe {{count}} files for a total fee of {{fee}}",
+    "modeReinscribe": "Reinscribe",
+    "reinscribe": {
+      "pickInstructions": "Pick one of your own inscriptions to reinscribe its sat.",
+      "pickDifferent": "Pick a different inscription",
+      "permanenceExplainer": "Reinscriptions are permanent and cannot be undone. The reinscription does not replace the original -- both remain on the sat, and different explorers and marketplaces may display reinscribed sats differently.",
+      "needsSatIndex": "Showing this sat's full inscription history requires the sats index, which isn't enabled for this environment.",
+      "existingOnSat": "{{count}} existing inscription(s) on sat {{sat}}, in order:",
+      "numberLabel": "Inscription #{{number}}",
+      "newContentDropZone": "Drag and drop the new content here",
+      "newContentLabel": "New content",
+      "reviewTitle": "Review reinscription",
+      "targetSat": "Target sat",
+      "existingCount": "Existing inscriptions on this sat",
+      "resultingCount": "Inscriptions on this sat after this action",
+      "mandatoryCheckbox": "I understand this sat already has inscriptions and this reinscription will not replace them.",
+      "submit": "Reinscribe",
+      "confirmTitle": "Create reinscription",
+      "confirmDescription": "This will be reinscription #{{number}} on sat {{sat}}, for a fee of {{fee}}"
+    }
   },
   "diskMonitor": {
     "title": "Disk usage",

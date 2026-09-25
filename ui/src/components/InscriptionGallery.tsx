@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import type { Environment } from "@/bindings/Environment";
 import { ErrorPanel } from "@/components/ErrorPanel";
+import { InscriptionPreviewTile } from "@/components/InscriptionPreviewTile";
 import { useWalletInscriptions } from "@/hooks/useWalletInscriptions";
 import { friendlyError } from "@/lib/error-messages";
 
@@ -52,13 +53,10 @@ export function InscriptionGallery({ environment }: { environment: Environment }
               key={inscription.id}
               className="overflow-hidden rounded-md border border-border bg-card"
             >
-              <iframe
-                src={`http://127.0.0.1:${environment.ord_port}/preview/${inscription.id}`}
-                sandbox="allow-scripts"
-                referrerPolicy="no-referrer"
-                loading="lazy"
-                title={t("wallet.gallery.itemLabel", { id: inscription.id })}
-                className="h-32 w-full border-0 bg-background"
+              <InscriptionPreviewTile
+                environment={environment}
+                id={inscription.id}
+                label={t("wallet.gallery.itemLabel", { id: inscription.id })}
               />
               <code className="block truncate px-2 py-1 text-xs text-muted-foreground">
                 {inscription.id}
