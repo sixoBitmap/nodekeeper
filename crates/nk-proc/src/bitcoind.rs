@@ -195,19 +195,42 @@ impl BitcoindProcess {
     }
 }
 
+fn bitcoind_pid_path(environment: &Environment) -> std::path::PathBuf {
+    environment.bitcoin_chain_dir().join("bitcoind.pid")
+}
+
 /// Detects an already-running bitcoind on this environment's data
 /// directory via its own `bitcoind.pid` file (confirmed live in the
 /// Phase 0 spike: plain numeric PID, written to `<chain-dir>/
 /// bitcoind.pid`) plus a liveness check — the same pattern the
 /// single-instance lock (`lock.rs`) uses for stale-lock detection.
 pub fn detect_running_bitcoind(environment: &Environment) -> Option<u32> {
-    let pid_path = environment.bitcoin_chain_dir().join("bitcoind.pid");
-    let pid: u32 = std::fs::read_to_string(pid_path)
+    let pid: u32 = std::fs::read_to_string(bitcoind_pid_path(environment))
         .ok()?
         .trim()
         .parse()
         .ok()?;
     process_is_alive(pid).then_some(pid)
+}
+
+/// docs/SPEC.md item 12: "unclean-shutdown recovery with clear
+/// guidance if an ord index needs rebuilding." A `bitcoind.pid` file
+/// present but pointing to a process that's no longer alive means
+/// bitcoind never got the chance to remove it on its way out --
+/// confirmed live (`bitcoind_removes_its_own_pid_file_on_a_clean_stop`,
+/// this file's tests) that a clean shutdown always deletes this file,
+/// so its stale presence specifically signals the *previous* run ended
+/// uncleanly (crash, kill, power loss, a portable drive unplugged
+/// mid-run) -- not just "never started here before," which leaves no
+/// file at all.
+pub fn bitcoind_had_unclean_shutdown(environment: &Environment) -> bool {
+    let Ok(contents) = std::fs::read_to_string(bitcoind_pid_path(environment)) else {
+        return false;
+    };
+    let Ok(pid) = contents.trim().parse::<u32>() else {
+        return false;
+    };
+    !process_is_alive(pid)
 }
 
 /// A pre-flight-only check: binding and immediately dropping a listener
@@ -248,6 +271,45 @@ mod tests {
     }
 
     #[test]
+    fn no_pid_file_is_not_an_unclean_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = Environment::new_default(Chain::Regtest, dir.path());
+        // Never having run here before is a normal, expected state --
+        // distinct from a stale file left by a real previous run.
+        assert!(!bitcoind_had_unclean_shutdown(&env));
+    }
+
+    #[test]
+    fn a_pid_file_for_a_live_process_is_not_an_unclean_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = Environment::new_default(Chain::Regtest, dir.path());
+        let chain_dir = env.bitcoin_chain_dir();
+        std::fs::create_dir_all(&chain_dir).unwrap();
+        // This test process's own pid is guaranteed alive for the
+        // duration of the test.
+        std::fs::write(
+            chain_dir.join("bitcoind.pid"),
+            std::process::id().to_string(),
+        )
+        .unwrap();
+        assert!(!bitcoind_had_unclean_shutdown(&env));
+    }
+
+    #[test]
+    fn a_pid_file_for_a_dead_process_is_an_unclean_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = Environment::new_default(Chain::Regtest, dir.path());
+        let chain_dir = env.bitcoin_chain_dir();
+        std::fs::create_dir_all(&chain_dir).unwrap();
+        std::fs::write(
+            chain_dir.join("bitcoind.pid"),
+            definitely_dead_pid().to_string(),
+        )
+        .unwrap();
+        assert!(bitcoind_had_unclean_shutdown(&env));
+    }
+
+    #[test]
     fn port_in_use_maps_to_the_shared_error_code() {
         let err = BitcoindError::PortInUse { port: 8332 };
         assert_eq!(err.code(), Some(AppErrorCode::PortInUse));
@@ -278,6 +340,87 @@ mod tests {
             Err(BitcoindError::PortInUse { port }) if port == env.rpc_port
         ));
         drop(listener);
+    }
+
+    fn random_free_port() -> u16 {
+        TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    /// docs/SPEC.md item 12's "unclean-shutdown recovery with clear
+    /// guidance if an ord index needs rebuilding" -- before building any
+    /// detection logic on top of a stale `bitcoind.pid`, confirm live
+    /// (not assumed) that bitcoind actually *removes* its own pid file
+    /// on a clean exit. If it didn't, a leftover file would mean
+    /// nothing, and "stale pid file present" couldn't be used as an
+    /// unclean-shutdown signal at all.
+    #[tokio::test]
+    #[serial_test::serial(real_bitcoind)]
+    async fn bitcoind_removes_its_own_pid_file_on_a_clean_stop() {
+        let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+            eprintln!("skipping: NK_TEST_BITCOIND not set");
+            return;
+        };
+        let binary_path = std::path::PathBuf::from(binary_path);
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut environment = Environment::new_default(Chain::Regtest, dir.path());
+        environment.rpc_port = random_free_port();
+        environment.p2p_port = random_free_port();
+
+        // Matches `NodeManager::start`'s real recipe exactly -- without
+        // a written `bitcoin.conf` (`server=1`, the RPC port, ...),
+        // bitcoind starts with defaults that never open the RPC port
+        // this test expects, which is exactly what a first pass of
+        // this test got wrong (timed out waiting for readiness that
+        // was never coming).
+        let datadir = environment.bitcoin_datadir_arg();
+        std::fs::create_dir_all(&datadir).unwrap();
+        let conf = nk_core::bitcoin_conf::generate_bitcoin_conf(
+            Chain::Regtest,
+            environment.rpc_port,
+            environment.p2p_port,
+            4 * 1024 * 1024 * 1024,
+            0,
+        );
+        std::fs::write(datadir.join("bitcoin.conf"), conf).unwrap();
+
+        let rpc_url = format!("http://127.0.0.1:{}", environment.rpc_port);
+        let (process, rpc) = BitcoindProcess::start_and_wait_ready(
+            &binary_path,
+            &environment,
+            rpc_url,
+            nk_exec::Executor::new(),
+            "test".to_string(),
+            // 60s, matching `NodeManager::start`'s own real-world
+            // margin (DECISIONS.md) -- not just this test's original
+            // 30s, which this dev machine's own load already showed
+            // could be tight.
+            Duration::from_secs(60),
+        )
+        .await
+        .expect("bitcoind should start");
+
+        let pid_path = environment.bitcoin_chain_dir().join("bitcoind.pid");
+        assert!(
+            pid_path.is_file(),
+            "bitcoind should have written its own pid file on startup"
+        );
+
+        process
+            .stop(&rpc, Duration::from_secs(30))
+            .await
+            .expect("bitcoind should stop cleanly");
+
+        assert!(
+            !pid_path.exists(),
+            "bitcoind should remove its own pid file on a clean shutdown -- if this \
+             assertion fails, a leftover bitcoind.pid can no longer be trusted as an \
+             unclean-shutdown signal and any detection built on that assumption is wrong"
+        );
     }
 
     /// A PID that's real enough to have existed a moment ago but is

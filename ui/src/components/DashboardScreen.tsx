@@ -1,4 +1,6 @@
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
 import type { Environment } from "@/bindings/Environment";
 import type { NodeStatus } from "@/bindings/NodeStatus";
 import { Button } from "@/components/ui/button";
@@ -22,6 +24,18 @@ export function DashboardScreen({ environment }: { environment: Environment }) {
   const { running, status, error, busy, start, stop, restart } = useDashboardStatus(
     environment.chain,
   );
+  // docs/SPEC.md item 12: "unclean-shutdown recovery with clear
+  // guidance if an ord index needs rebuilding." Checked once per
+  // mount -- relevant right up until the user starts this
+  // environment, at which point whatever recovery bitcoind/ord need
+  // to do is already underway regardless of whether this banner is
+  // still showing.
+  const [uncleanShutdown, setUncleanShutdown] = useState<boolean | null>(null);
+  useEffect(() => {
+    void invoke<boolean>("had_unclean_shutdown", { chain: environment.chain }).then(
+      setUncleanShutdown,
+    );
+  }, [environment.chain]);
 
   const statusBadge = statusFor(running, status, t);
 
@@ -43,6 +57,12 @@ export function DashboardScreen({ environment }: { environment: Environment }) {
             />
           );
         })()}
+
+      {uncleanShutdown && running === false && (
+        <p className="rounded-md border border-warning/40 bg-warning/5 p-3 text-sm text-warning">
+          {t("dashboard.uncleanShutdown")}
+        </p>
+      )}
 
       <div className="flex gap-2">
         <Button disabled={busy || running === true} onClick={() => void start()}>

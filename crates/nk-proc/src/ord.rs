@@ -249,6 +249,23 @@ pub fn detect_running_ord(environment: &Environment) -> Option<u32> {
     process_is_alive(pid).then_some(pid)
 }
 
+/// docs/SPEC.md item 12's unclean-shutdown signal, for ord -- same
+/// reasoning as `bitcoind_had_unclean_shutdown`, but the guarantee
+/// doesn't need a live VERIFY here: `ord.pid` is Nodekeeper's own file
+/// (ord writes none of its own), and `OrdProcess::stop` above removes
+/// it explicitly on a clean exit (`std::fs::remove_file`), right in
+/// this same file -- so its stale presence reliably means the
+/// *previous* run ended uncleanly, not just "never started here."
+pub fn ord_had_unclean_shutdown(environment: &Environment) -> bool {
+    let Ok(contents) = std::fs::read_to_string(environment.ord_pid_path()) else {
+        return false;
+    };
+    let Ok(pid) = contents.trim().parse::<u32>() else {
+        return false;
+    };
+    !process_is_alive(pid)
+}
+
 fn check_port_available(port: u16) -> Result<(), OrdProcessError> {
     TcpListener::bind(("127.0.0.1", port))
         .map(|_listener| ())
@@ -305,6 +322,31 @@ mod tests {
         std::fs::create_dir_all(env.ord_index_dir()).unwrap();
         std::fs::write(env.ord_pid_path(), definitely_dead_pid().to_string()).unwrap();
         assert_eq!(detect_running_ord(&env), None);
+    }
+
+    #[test]
+    fn no_pid_file_is_not_an_unclean_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = Environment::new_default(Chain::Regtest, dir.path());
+        assert!(!ord_had_unclean_shutdown(&env));
+    }
+
+    #[test]
+    fn a_pid_file_for_a_live_process_is_not_an_unclean_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = Environment::new_default(Chain::Regtest, dir.path());
+        std::fs::create_dir_all(env.ord_index_dir()).unwrap();
+        std::fs::write(env.ord_pid_path(), std::process::id().to_string()).unwrap();
+        assert!(!ord_had_unclean_shutdown(&env));
+    }
+
+    #[test]
+    fn a_pid_file_for_a_dead_process_is_an_unclean_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = Environment::new_default(Chain::Regtest, dir.path());
+        std::fs::create_dir_all(env.ord_index_dir()).unwrap();
+        std::fs::write(env.ord_pid_path(), definitely_dead_pid().to_string()).unwrap();
+        assert!(ord_had_unclean_shutdown(&env));
     }
 
     #[test]

@@ -11,6 +11,10 @@ pub mod lock;
 pub mod ord;
 mod process_check;
 
-pub use bitcoind::{detect_running_bitcoind, BitcoindError, BitcoindProcess};
+pub use bitcoind::{
+    bitcoind_had_unclean_shutdown, detect_running_bitcoind, BitcoindError, BitcoindProcess,
+};
 pub use lock::{LockError, SingleInstanceLock};
-pub use ord::{detect_running_ord, wait_until_caught_up, OrdProcess, OrdProcessError};
+pub use ord::{
+    detect_running_ord, ord_had_unclean_shutdown, wait_until_caught_up, OrdProcess, OrdProcessError,
+};

@@ -690,6 +690,10 @@ export function installDevTauriMockIfNeeded() {
         // Safe Eject UI -- there's no real executable path to inspect
         // in a browser preview either way.
         return true;
+      case "had_unclean_shutdown":
+        // Regtest only, so the dev preview can exercise the Dashboard's
+        // warning banner without every environment showing it.
+        return (args as { chain: Chain }).chain === "regtest";
       case "safe_eject":
         for (const chain of ["mainnet", "regtest", "signet", "testnet4"] as Chain[]) {
           runningSince.delete(chain);

@@ -247,6 +247,7 @@
     "mempoolValue": "{{count}} txs ({{size}})",
     "uptime": "Uptime",
     "notRunning": "This node isn't running.",
+    "uncleanShutdown": "This environment didn't shut down cleanly last time (a crash, power loss, or an unplugged drive). Starting it may take longer than usual while Bitcoin Core and ord verify or rebuild their data.",
     "status": {
       "stopped": "Stopped",
       "starting": "Starting",

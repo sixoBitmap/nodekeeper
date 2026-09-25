@@ -2007,6 +2007,21 @@ fn is_portable_mode() -> bool {
     is_portable_install()
 }
 
+/// docs/SPEC.md item 12: "unclean-shutdown recovery with clear
+/// guidance if an ord index needs rebuilding." Checks both bitcoind's
+/// and ord's own stale-pid-file signal (`nk_proc::bitcoind_had_unclean_
+/// shutdown`/`ord_had_unclean_shutdown`) for `chain`'s environment --
+/// either one being true means the *previous* run of this environment
+/// didn't exit cleanly, so this launch may take longer than usual
+/// while bitcoind/ord verify or rebuild. A read-only filesystem check,
+/// safe to call before anything is started.
+#[tauri::command]
+fn had_unclean_shutdown(chain: Chain, store: tauri::State<'_, Arc<Mutex<Store>>>) -> bool {
+    let environment = Environment::new_default(chain, &environment_data_root(&store));
+    nk_proc::bitcoind_had_unclean_shutdown(&environment)
+        || nk_proc::ord_had_unclean_shutdown(&environment)
+}
+
 /// The Regtest Test Lab's "Mine blocks"/"Get test coins" controls
 /// (docs/SPEC.md item 11): mines `count` blocks to the current
 /// environment's own wallet via `generatetoaddress`. Regtest-only, not
@@ -2361,6 +2376,7 @@ pub fn run() {
             set_prevent_sleep,
             is_portable_mode,
             safe_eject,
+            had_unclean_shutdown,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

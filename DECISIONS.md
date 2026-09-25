@@ -3208,6 +3208,45 @@ any real code path. Caught on review before committing: added
 one real predicate, so the frontend just reads a boolean instead of
 knowing what "risky" means.
 
+### Unclean-shutdown recovery guidance (Phase 9, 2026-09-25)
+
+**VERIFY, live: does bitcoind remove its own `bitcoind.pid` on a clean
+shutdown?** This is the entire premise the feature rests on -- if it
+didn't, a leftover pid file would mean nothing. Confirmed yes with a
+real regtest bitcoind: started via the exact recipe `NodeManager::
+start` uses (including writing `bitcoin.conf` first -- a first pass of
+this test skipped that and got a `StartupTimeout` instead of a real
+answer, since bitcoind without `server=1`/the configured RPC port
+never became ready), then stopped gracefully; `bitcoind.pid` was gone
+afterward. ord needed no live VERIFY for the equivalent question:
+`ord.pid` is Nodekeeper's own file (ord writes none itself), and
+`OrdProcess::stop` already deletes it explicitly on a clean exit,
+visible directly in the same module -- the guarantee is in the source,
+not an external binary's behavior to confirm.
+
+**A stale pid file (present, but the process it names isn't alive) is
+therefore a reliable "previous run didn't exit cleanly" signal**, kept
+deliberately separate from the existing `detect_running_bitcoind`/
+`detect_running_ord` (which answer "is it running *right now*",
+collapsing "never run" and "crashed last time" into the same `None`) --
+a new, narrowly-scoped `bitcoind_had_unclean_shutdown`/
+`ord_had_unclean_shutdown` pair instead of overloading or changing the
+existing functions' return shape and every call site that pattern-
+matches on it.
+
+**Process/tooling note, not a defect in the shipped feature**: writing
+this VERIFY test surfaced a real, pre-existing gap -- `BitcoindProcess`
+has no `Drop` impl that kills its spawned child, so a test that panics
+after starting a real bitcoind (as an early, broken version of this
+test did) leaves it running as an orphan. In this session specifically,
+the orphaned process appears to have kept the invoking background
+shell from reporting completion until the orphan was killed by hand --
+worth remembering for any future test that spawns a real child
+process and can panic before reaching its own cleanup code. Not fixed
+here (out of scope for this feature; the existing tests all clean up
+via their own explicit `.stop()`/`.kill_sync()` calls on the success
+path), but worth a future look if it recurs.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

@@ -1849,7 +1849,36 @@ Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
       risk is low -- noted here rather than silently assumed fine.
 - [ ] USB speed detection, free space (free space already exists via
       `system_check`; USB speed is new)
-- [ ] Unclean-shutdown recovery guidance (ord index rebuild)
+- [x] Unclean-shutdown recovery guidance. VERIFY, live (not assumed):
+      whether a clean shutdown actually removes bitcoind's own
+      `bitcoind.pid` file -- confirmed yes, via a real regtest bitcoind
+      started and gracefully stopped
+      (`bitcoind_removes_its_own_pid_file_on_a_clean_stop`, nk-proc).
+      ord's own pid file needed no live VERIFY: it's Nodekeeper's own
+      file (ord writes none itself), and `OrdProcess::stop` already
+      removes it explicitly on a clean exit, right there in the same
+      module. Added `bitcoind_had_unclean_shutdown`/
+      `ord_had_unclean_shutdown` (nk-proc, real tests: no file / a live
+      pid / a dead pid) alongside the existing `detect_running_*`
+      functions, wired through a new `had_unclean_shutdown(chain)`
+      command, checked once on the Dashboard screen's mount and shown
+      as a plain-language banner only while the environment isn't
+      running yet (the moment it's actually actionable). Live-verified
+      in the browser dev preview.
+      **Process note, not part of the feature itself**: building this
+      feature's real-bitcoind test surfaced a live hang -- a first
+      version of the test failed with `StartupTimeout` (missing
+      `bitcoin.conf`, fixed by matching `NodeManager::start`'s real
+      setup recipe exactly), and because `BitcoindProcess` has no
+      `Drop`-based cleanup of its spawned child (a known, pre-existing
+      gap -- nothing in this codebase kills child processes if the
+      Rust process holding them exits abnormally), the panicking test
+      left a real orphaned `bitcoind.exe` running, which appears to
+      have stalled this session's own background-command completion
+      signal until the orphan was killed by hand. Not a bug in the
+      shipped feature -- flagged here because it's a real, reproducible
+      gap worth remembering for any future test that can panic after
+      spawning a real child process.
 - [x] "Safely shut down and eject" button: stop every running
       environment (ord first, then bitcoind), wait for clean exits,
       then confirm it's safe to unplug. Backend: `safe_eject` command
