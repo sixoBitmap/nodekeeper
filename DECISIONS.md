@@ -1880,6 +1880,81 @@ error), not just by the frontend hiding/showing a field, per Foundation
 E/"never trust the frontend alone for a security rule" precedent
 elsewhere in this codebase.
 
+## Phase 6 — VERIFY: inscribe, batch, and reinscribe CLI/HTTP surface (2026-09-25)
+
+Before building the Inscribe studio, VERIFIED live on a fresh scratch
+regtest+ord (two ord instances -- one without `--index-sats`, one with,
+to check Foundation F gating precisely) rather than assuming from ord's
+`--help` text alone.
+
+**Single inscribe** (`ord wallet inscribe --file <path> --fee-rate
+<rate> [--dry-run] [--destination <addr>] [--postage <amt>] [--parent
+<id>] ...`): output shape confirmed identical in dry-run and real mode
+except `reveal_broadcast`:
+```json
+{
+  "commit": "<txid>", "commit_psbt": "<base64 or null>",
+  "inscriptions": [{"destination": "...", "id": "...", "location": "..."}],
+  "parents": [], "reveal": "<txid>", "reveal_broadcast": true|false,
+  "reveal_psbt": "<base64 or null>", "rune": null, "total_fees": <sats>
+}
+```
+
+**Batch inscribe** (`ord wallet batch --fee-rate <rate> --batch
+<yaml>`): YAML needs `mode: separate-outputs` and `inscriptions: [{file:
+<path>}, ...]` (Windows paths in the YAML must be Windows-style --
+`C:\...`, not the POSIX-style path Git Bash normally hands to a Windows
+exe on the command line; this only bit because the path was inside a
+*file's contents*, not an argv element MSYS auto-translates). Output is
+the same shape as single inscribe, with one entry per file in
+`inscriptions[]`, all sharing one `reveal` txid (different `vout`s) --
+confirmed with a real 2-file dry-run batch.
+
+**Reinscribe** (single inscribe only, targeting an existing
+inscription's satpoint):
+- Without `--reinscribe`: fails with the exact text `error: sat at
+  <satpoint> already inscribed`.
+- With `--reinscribe --satpoint <satpoint>`: succeeds, creates a new
+  inscription at a new satpoint (the sat moves to a new UTXO on
+  reinscribe).
+- **Batch mode does not support reinscribe in ord 0.29.0**: a batch
+  YAML entry with a `reinscribe: true` field is rejected outright --
+  `error: inscriptions[0]: unknown field 'reinscribe'`. Resolves
+  docs/SPEC.md item 4's explicit "VERIFY; hide otherwise": the visual
+  batch builder must not offer a reinscribe option per entry for this
+  ord version -- reinscribe is single-inscription only.
+- Reinscription detection, via the real inscription-detail JSON
+  (`GET /inscription/<id>`, `Accept: application/json`): the
+  reinscribing inscription's `charms` array gains `"reinscription"` and
+  `"cursed"`, and its `number` goes *negative* (cursed numbering) --
+  the original inscription's `number` stays positive/unchanged.
+  `previous`/`next` fields link consecutive inscriptions on the same
+  sat directly (a walkable list), though the simpler source is below.
+
+**"Show all existing inscriptions on that sat, in order"** (spec item
+4's reinscribe-mode requirement): `GET /sat/<sat_number>` (`Accept:
+application/json`) returns `"inscriptions": ["<id1>", "<id2>", ...]`
+already ordered oldest-first -- the direct source for this UI, no
+manual `previous`/`next` walking needed. Confirmed this needs
+`--index-sats`: with it off, `GET /inscription/<id>`'s `sat` field is
+`null` (no sat number to query with at all) -- exactly the Foundation F
+gate the spec anticipates ("If this requires an index option that is
+off, say so and show what can be shown"); the reinscribe flow must
+check `sat !== null` before offering the sat-history view, not trust
+its own `index_options` record (same "check the real running state"
+reasoning as `OrdStatus`/rune balances elsewhere in this project).
+
+**A real Windows/Core quirk hit along the way, unrelated to ord**:
+`bitcoin-cli -rpcwallet=<name> generatetoaddress N <addr>` needs a
+taproot (bech32m) mining address for an ord-created wallet -- `ord
+wallet create` only imports `tr()` descriptors, so plain
+`getnewaddress` (which defaults to bech32/segwit-v0) fails with "No
+bech32 addresses available." Must pass `getnewaddress "" "bech32m"`
+when a test/tool needs to mine to an ord-managed wallet's own address.
+Not a Nodekeeper code concern (only came up in ad hoc scratch-testing
+tooling), but worth recording since it'll bite again in a future
+VERIFY session otherwise.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

@@ -29,6 +29,8 @@ pub enum WalletError {
         exit_code: Option<i32>,
         stderr: String,
     },
+    #[error("could not build a batch YAML file: {0}")]
+    Yaml(#[from] serde_yaml::Error),
     #[error("could not parse ord's output as JSON: {0}")]
     InvalidJson(#[from] serde_json::Error),
 }
@@ -54,7 +56,7 @@ impl WalletError {
                     None
                 }
             }
-            Self::Exec(_) | Self::InvalidJson(_) => None,
+            Self::Exec(_) | Self::InvalidJson(_) | Self::Yaml(_) => None,
         }
     }
 
@@ -296,6 +298,154 @@ fn send_args(address: &str, asset: &str, fee_rate: f64, dry_run: bool) -> Vec<St
     args
 }
 
+/// docs/SPEC.md item 4's Inscribe studio, and the same item's
+/// REINSCRIBE MODE. `ord wallet inscribe [--dry-run] --fee-rate <rate>
+/// --file <path> [--postage <sats>] [--parent <id>] [--satpoint
+/// <satpoint> --reinscribe]` -- `reinscribe_satpoint: Some(sp)` is what
+/// turns a plain inscribe into a reinscribe: VERIFIED live (DECISIONS.md
+/// Phase 6) that targeting an already-inscribed satpoint without
+/// `--reinscribe` fails with the exact text "sat at <satpoint> already
+/// inscribed", and that `--reinscribe` alone (no `--satpoint`) isn't
+/// meaningful -- the two always go together here. Like `wallet_send`,
+/// `dry_run: false` is a real signing action and needs the caller to
+/// have already unlocked the wallet.
+#[allow(clippy::too_many_arguments)]
+pub async fn inscribe(
+    executor: &Executor,
+    target: &WalletTarget<'_>,
+    file_path: &Path,
+    fee_rate: f64,
+    postage_sats: Option<u64>,
+    parent: Option<&str>,
+    reinscribe_satpoint: Option<&str>,
+    dry_run: bool,
+) -> Result<Value, WalletError> {
+    let triggering_action = match (reinscribe_satpoint.is_some(), dry_run) {
+        (true, true) => "preview reinscribe",
+        (true, false) => "reinscribe",
+        (false, true) => "preview inscribe",
+        (false, false) => "inscribe",
+    };
+    run_json(
+        executor,
+        target,
+        inscribe_args(
+            file_path,
+            fee_rate,
+            postage_sats,
+            parent,
+            reinscribe_satpoint,
+            dry_run,
+        ),
+        triggering_action,
+    )
+    .await
+}
+
+fn inscribe_args(
+    file_path: &Path,
+    fee_rate: f64,
+    postage_sats: Option<u64>,
+    parent: Option<&str>,
+    reinscribe_satpoint: Option<&str>,
+    dry_run: bool,
+) -> Vec<String> {
+    let mut args = vec!["inscribe".to_string()];
+    if dry_run {
+        args.push("--dry-run".to_string());
+    }
+    args.push("--fee-rate".to_string());
+    args.push(fee_rate.to_string());
+    args.push("--file".to_string());
+    args.push(file_path.display().to_string());
+    if let Some(postage) = postage_sats {
+        args.push("--postage".to_string());
+        args.push(format!("{postage}sat"));
+    }
+    if let Some(parent) = parent {
+        args.push("--parent".to_string());
+        args.push(parent.to_string());
+    }
+    if let Some(satpoint) = reinscribe_satpoint {
+        args.push("--satpoint".to_string());
+        args.push(satpoint.to_string());
+        args.push("--reinscribe".to_string());
+    }
+    args
+}
+
+/// One file to inscribe as part of a batch (docs/SPEC.md item 4's
+/// "Visual batch-YAML builder"). Kept to just the path for now --
+/// per-entry advanced options aren't part of this task; a shared
+/// `--parent` for the whole batch could be added the same way single
+/// `inscribe` has one, if a later task needs it.
+pub struct BatchInscriptionEntry {
+    pub file_path: std::path::PathBuf,
+}
+
+#[derive(serde::Serialize)]
+struct BatchFile {
+    mode: &'static str,
+    inscriptions: Vec<BatchFileEntry>,
+}
+
+#[derive(serde::Serialize)]
+struct BatchFileEntry {
+    file: String,
+}
+
+/// `ord wallet batch [--dry-run] --fee-rate <rate> --batch <yaml-file>`.
+/// The YAML is built here from typed data and written to a real
+/// tempfile, never assembled from hand-edited/pasted text -- avoids a
+/// path-injection-shaped surface (a filename containing YAML special
+/// characters could otherwise corrupt or extend the document). VERIFIED
+/// live (DECISIONS.md Phase 6): `mode: separate-outputs` +
+/// `inscriptions: [{file: <path>}, ...]` is the schema ord 0.29.0
+/// accepts for a plain multi-file batch; there is deliberately no
+/// per-entry `reinscribe` field here -- ord 0.29.0 rejects one outright
+/// (`unknown field 'reinscribe'`), confirmed live, so batch reinscribe
+/// isn't offered at all for this ord version (single `inscribe` above
+/// is the only reinscribe path).
+pub async fn batch_inscribe(
+    executor: &Executor,
+    target: &WalletTarget<'_>,
+    entries: &[BatchInscriptionEntry],
+    fee_rate: f64,
+    dry_run: bool,
+) -> Result<Value, WalletError> {
+    let batch_file = BatchFile {
+        mode: "separate-outputs",
+        inscriptions: entries
+            .iter()
+            .map(|e| BatchFileEntry {
+                file: e.file_path.display().to_string(),
+            })
+            .collect(),
+    };
+    let yaml = serde_yaml::to_string(&batch_file)?;
+    let mut yaml_file = tempfile::Builder::new()
+        .suffix(".yaml")
+        .tempfile()
+        .map_err(nk_exec::ExecError::Io)?;
+    std::io::Write::write_all(&mut yaml_file, yaml.as_bytes()).map_err(nk_exec::ExecError::Io)?;
+
+    let mut args = vec!["batch".to_string()];
+    if dry_run {
+        args.push("--dry-run".to_string());
+    }
+    args.push("--fee-rate".to_string());
+    args.push(fee_rate.to_string());
+    args.push("--batch".to_string());
+    args.push(yaml_file.path().display().to_string());
+
+    let triggering_action = if dry_run {
+        "preview batch inscribe"
+    } else {
+        "batch inscribe"
+    };
+    run_json(executor, target, args, triggering_action).await
+}
+
 async fn run_json(
     executor: &Executor,
     target: &WalletTarget<'_>,
@@ -456,5 +606,94 @@ mod tests {
             send_args("bcrt1qexample", "1btc", 2.0, false),
             vec!["send", "--fee-rate", "2", "bcrt1qexample", "1btc"]
         );
+    }
+
+    #[test]
+    fn inscribe_args_include_dry_run_and_postage_only_when_given() {
+        let path = std::path::Path::new("/tmp/example.png");
+        assert_eq!(
+            inscribe_args(path, 2.0, None, None, None, true),
+            vec![
+                "inscribe",
+                "--dry-run",
+                "--fee-rate",
+                "2",
+                "--file",
+                "/tmp/example.png"
+            ]
+        );
+        assert_eq!(
+            inscribe_args(path, 2.0, Some(546), None, None, false),
+            vec![
+                "inscribe",
+                "--fee-rate",
+                "2",
+                "--file",
+                "/tmp/example.png",
+                "--postage",
+                "546sat",
+            ]
+        );
+    }
+
+    #[test]
+    fn inscribe_args_add_satpoint_and_reinscribe_together_only_for_a_reinscription() {
+        let path = std::path::Path::new("/tmp/example.png");
+        let satpoint = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234:0:0";
+        assert_eq!(
+            inscribe_args(path, 2.0, None, None, Some(satpoint), false),
+            vec![
+                "inscribe",
+                "--fee-rate",
+                "2",
+                "--file",
+                "/tmp/example.png",
+                "--satpoint",
+                satpoint,
+                "--reinscribe",
+            ]
+        );
+    }
+
+    #[test]
+    fn inscribe_args_include_parent_when_given() {
+        let path = std::path::Path::new("/tmp/example.png");
+        assert_eq!(
+            inscribe_args(path, 2.0, None, Some("parenti0"), None, false),
+            vec![
+                "inscribe",
+                "--fee-rate",
+                "2",
+                "--file",
+                "/tmp/example.png",
+                "--parent",
+                "parenti0",
+            ]
+        );
+    }
+
+    #[test]
+    fn batch_yaml_serializes_the_schema_ord_accepts_with_no_reinscribe_field() {
+        let batch_file = BatchFile {
+            mode: "separate-outputs",
+            inscriptions: vec![
+                BatchFileEntry {
+                    file: "/tmp/one.png".to_string(),
+                },
+                BatchFileEntry {
+                    file: "/tmp/two.png".to_string(),
+                },
+            ],
+        };
+        let yaml = serde_yaml::to_string(&batch_file).unwrap();
+        // Confirmed live against a real ord (DECISIONS.md Phase 6
+        // VERIFY): this exact shape -- `mode: separate-outputs` plus a
+        // plain `file:` per entry -- is what ord 0.29.0 accepts; a
+        // `reinscribe` field is rejected outright, so nothing here ever
+        // emits one.
+        assert!(yaml.contains("mode: separate-outputs"));
+        assert!(yaml.contains("file: /tmp/one.png"));
+        assert!(yaml.contains("file: /tmp/two.png"));
+        assert!(!yaml.contains("reinscribe"));
     }
 }

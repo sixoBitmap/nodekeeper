@@ -574,6 +574,7 @@ mod tests {
     /// wallet even when it's encrypted right away: a full mnemonic
     /// restore into a separate wallet recovers the exact same funds.
     #[tokio::test]
+    #[serial(real_bitcoind)]
     async fn encrypting_a_wallet_immediately_after_create_still_restores_correctly() {
         let (Some(bitcoind_path), Some(ord_path)) = (
             std::env::var_os("NK_TEST_BITCOIND"),
@@ -674,6 +675,232 @@ mod tests {
             restored_balance, funded_balance,
             "the mnemonic shown before encryption should still fully recover the \
              wallet's funds after encryption"
+        );
+
+        fixture
+            .stop_ord()
+            .await
+            .expect("ord should stop gracefully");
+        fixture.stop().await.expect("bitcoind should stop cleanly");
+    }
+
+    /// docs/SPEC.md Phase 6's literal acceptance criterion: "[CI]
+    /// inscribe and reinscribe both work on regtest; the sat shows both
+    /// inscriptions in order." Exercises single inscribe, batch
+    /// inscribe, and reinscribe (`--satpoint`/`--reinscribe`, syntax
+    /// VERIFIED live -- DECISIONS.md Phase 6) against a real
+    /// regtest+ord, then reads `GET /sat/<n>` back and confirms both
+    /// the original inscription and the reinscription appear, in the
+    /// right order. The negative case (targeting an already-inscribed
+    /// satpoint *without* `--reinscribe`, which fails with "sat at
+    /// ... already inscribed") isn't repeated here as an automated
+    /// assertion -- `nk_ord::wallet::inscribe`'s `reinscribe_satpoint`
+    /// parameter always sends `--satpoint` and `--reinscribe` together
+    /// by design (there's no legitimate reason for the real app to ever
+    /// send one without the other), so that path isn't reachable
+    /// through the real wrapper to test; it's already recorded as a
+    /// live VERIFY result in DECISIONS.md.
+    #[tokio::test]
+    #[serial(real_bitcoind)]
+    async fn inscribe_batch_and_reinscribe_all_work_and_the_sat_shows_both_in_order() {
+        let (Some(bitcoind_path), Some(ord_path)) = (
+            std::env::var_os("NK_TEST_BITCOIND"),
+            std::env::var_os("NK_TEST_ORD"),
+        ) else {
+            eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
+            return;
+        };
+        let bitcoind_path = std::path::PathBuf::from(bitcoind_path);
+        let ord_path = std::path::PathBuf::from(ord_path);
+
+        let mut fixture = RegtestFixture::start(&bitcoind_path)
+            .await
+            .expect("bitcoind should start");
+        fixture
+            .start_ord(&ord_path)
+            .await
+            .expect("ord should start and become ready");
+
+        let executor = Executor::new();
+        let cookie_path = fixture.environment.bitcoin_cookie_path();
+        let bitcoin_datadir = fixture.environment.bitcoin_datadir_arg();
+        let server_url = format!("http://127.0.0.1:{}", fixture.environment.ord_port);
+        let target = nk_ord::wallet::WalletTarget {
+            binary_path: &ord_path,
+            environment: &fixture.environment,
+            cookie_path: &cookie_path,
+            bitcoin_datadir: &bitcoin_datadir,
+            server_url: &server_url,
+            wallet_name: "inscribe-test",
+        };
+
+        nk_ord::wallet::create_wallet(&executor, &target)
+            .await
+            .expect("wallet create should succeed");
+        let receive = nk_ord::wallet::wallet_receive(&executor, &target, None)
+            .await
+            .expect("wallet receive should succeed");
+        let address = receive["addresses"][0]
+            .as_str()
+            .expect("receive response should include an address")
+            .to_string();
+        fixture
+            .rpc
+            .generate_to_address(101, &address)
+            .await
+            .expect("mining to fund the wallet should succeed");
+        nk_proc::wait_until_caught_up(
+            fixture.ord.as_ref().unwrap(),
+            &fixture.rpc,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("ord should catch up after mining");
+
+        // Single inscribe -- the inscription reinscribe mode targets.
+        let tempdir = tempfile::tempdir().expect("tempdir should create");
+        let original_path = tempdir.path().join("original.txt");
+        std::fs::write(&original_path, b"original inscription").expect("write should succeed");
+        let inscribed = nk_ord::wallet::inscribe(
+            &executor,
+            &target,
+            &original_path,
+            1.0,
+            None,
+            None,
+            None,
+            false,
+        )
+        .await
+        .expect("inscribe should succeed");
+        let original_id = inscribed["inscriptions"][0]["id"]
+            .as_str()
+            .expect("inscribe response should include an id")
+            .to_string();
+        let original_satpoint = inscribed["inscriptions"][0]["location"]
+            .as_str()
+            .expect("inscribe response should include a location")
+            .to_string();
+
+        fixture
+            .rpc
+            .generate_to_address(1, &address)
+            .await
+            .expect("mining a confirmation should succeed");
+        nk_proc::wait_until_caught_up(
+            fixture.ord.as_ref().unwrap(),
+            &fixture.rpc,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("ord should catch up before batch inscribing");
+
+        // Batch inscribe -- two more inscriptions in one commit/reveal
+        // pair, unrelated to the sat under test; just proves batch
+        // itself works end to end.
+        let batch1_path = tempdir.path().join("batch1.txt");
+        let batch2_path = tempdir.path().join("batch2.txt");
+        std::fs::write(&batch1_path, b"batch item one").expect("write should succeed");
+        std::fs::write(&batch2_path, b"batch item two").expect("write should succeed");
+        let batch_result = nk_ord::wallet::batch_inscribe(
+            &executor,
+            &target,
+            &[
+                nk_ord::wallet::BatchInscriptionEntry {
+                    file_path: batch1_path,
+                },
+                nk_ord::wallet::BatchInscriptionEntry {
+                    file_path: batch2_path,
+                },
+            ],
+            1.0,
+            false,
+        )
+        .await
+        .expect("batch inscribe should succeed");
+        assert_eq!(
+            batch_result["inscriptions"]
+                .as_array()
+                .expect("batch response should include an inscriptions array")
+                .len(),
+            2,
+            "batch inscribe should create exactly the 2 requested inscriptions"
+        );
+
+        fixture
+            .rpc
+            .generate_to_address(1, &address)
+            .await
+            .expect("mining a confirmation should succeed");
+        nk_proc::wait_until_caught_up(
+            fixture.ord.as_ref().unwrap(),
+            &fixture.rpc,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("ord should catch up before reinscribing");
+
+        // Reinscribe onto the original inscription's satpoint.
+        let reinscribe_path = tempdir.path().join("reinscribe.txt");
+        std::fs::write(&reinscribe_path, b"reinscribed content").expect("write should succeed");
+        let reinscribed = nk_ord::wallet::inscribe(
+            &executor,
+            &target,
+            &reinscribe_path,
+            1.0,
+            None,
+            None,
+            Some(&original_satpoint),
+            false,
+        )
+        .await
+        .expect("reinscribe should succeed with --reinscribe set");
+        let reinscription_id = reinscribed["inscriptions"][0]["id"]
+            .as_str()
+            .expect("reinscribe response should include an id")
+            .to_string();
+
+        fixture
+            .rpc
+            .generate_to_address(1, &address)
+            .await
+            .expect("mining a confirmation should succeed");
+        nk_proc::wait_until_caught_up(
+            fixture.ord.as_ref().unwrap(),
+            &fixture.rpc,
+            Duration::from_secs(30),
+        )
+        .await
+        .expect("ord should catch up after reinscribing");
+
+        // The sat's own inscription list -- the reinscribe mode's data
+        // source -- should show both, oldest first.
+        let sat_number = fixture
+            .ord
+            .as_ref()
+            .unwrap()
+            .inscription(&original_id, false)
+            .await
+            .expect("inscription lookup should succeed")["sat"]
+            .as_u64()
+            .expect("regtest's default index options include index-sats, so `sat` should be set");
+        let sat_detail = fixture
+            .ord
+            .as_ref()
+            .unwrap()
+            .sat(sat_number, false)
+            .await
+            .expect("sat lookup should succeed");
+        let inscriptions_on_sat: Vec<&str> = sat_detail["inscriptions"]
+            .as_array()
+            .expect("sat response should include an inscriptions array")
+            .iter()
+            .map(|v| v.as_str().expect("each entry should be a string id"))
+            .collect();
+        assert_eq!(
+            inscriptions_on_sat,
+            vec![original_id.as_str(), reinscription_id.as_str()],
+            "the sat should show the original inscription followed by the reinscription, in order"
         );
 
         fixture

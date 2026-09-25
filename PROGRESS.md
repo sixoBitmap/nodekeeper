@@ -1110,7 +1110,87 @@ Acceptance criteria (from docs/SPEC.md Phase 5 "Done when"):
 
 ## Phase 6 — Inscribe studio
 
-Not started. See docs/SPEC.md Phase 6.
+In progress. Tasks (one at a time: implement -> test -> quality gate ->
+commit -> tick). VERIFY'd live before starting (DECISIONS.md): single
+inscribe's and batch inscribe's real JSON output shape; reinscribe's
+exact syntax (`--satpoint`/`--reinscribe`) and the exact rejection text
+without it; that ord 0.29.0's batch YAML schema does **not** support a
+per-entry `reinscribe` field (hide it from the batch builder, per the
+spec's own "VERIFY; hide otherwise"); and that `GET /sat/<n>` is the
+direct source for "all inscriptions on this sat, in order" (needs
+`--index-sats`, gated per Foundation F).
+
+`nk-ord` (inscribe/batch/reinscribe CLI wrapper, sat lookup HTTP client) — **done**
+- [x] `nk_ord::wallet::inscribe` (single inscribe *and* reinscribe --
+      `reinscribe_satpoint: Some(sp)` adds `--satpoint`/`--reinscribe`
+      together, since VERIFYing found no legitimate reason to ever send
+      one without the other) and `batch_inscribe` (dry-run and real,
+      `Sensitivity::Normal` -- no secret involved, same as
+      `wallet_send`). Batch YAML is built from typed
+      `BatchInscriptionEntry` data and written to a real tempfile via
+      `serde_yaml`, never hand-assembled text -- avoids a
+      path-injection-shaped surface. Deliberately no per-entry
+      `reinscribe` field: ord 0.29.0 rejects one outright (VERIFIED
+      live, DECISIONS.md), so batch reinscribe isn't offered at all.
+- [x] `OrdClient::sat(sat_number)` (the `/sat/<n>` JSON lookup) and
+      `OrdClient::inscription(id)` (the `/inscription/<id>` JSON lookup,
+      needed for reinscribe mode's "existing inscriptions with
+      previews"). Refactored `status()` onto the same shared
+      `get_json` helper these two use, rather than duplicating the
+      record/redact/broadcast wiring a third time.
+- [x] Real test, `inscribe_batch_and_reinscribe_all_work_and_the_sat_
+      shows_both_in_order` (`nk-testkit`) -- the literal Phase 6 [CI]
+      acceptance criterion: single inscribe, batch inscribe (2 files,
+      1 reveal tx), and reinscribe all run against a real regtest+ord,
+      then `GET /sat/<n>` confirms the original and the reinscription
+      both appear, oldest first. **Ran live on this Windows machine,
+      passed.** Along the way, found and fixed a real gap in an
+      earlier Phase 5 test (`encrypting_a_wallet_immediately_after_
+      create_still_restores_correctly`): it was missing the
+      `#[serial(real_bitcoind)]` attribute every other real-bitcoind
+      test in this file carries (documented CI-stability reason --
+      several concurrent real bitcoind processes starved
+      windows-latest runners past their startup timeout).
+
+Backend — Tauri commands
+- [ ] `wallet_inscribe_dry_run`/`wallet_inscribe` (file content read from
+      a path the frontend got via drag-and-drop, `--destination`/
+      `--postage`/`--parent` as optional advanced params)
+- [ ] `wallet_inscribe_batch_dry_run`/`wallet_inscribe_batch` (build the
+      YAML server-side from a typed list of files, never hand-edited
+      YAML text sent as-is -- avoids a path-injection-shaped surface)
+- [ ] `wallet_reinscribe_dry_run`/`wallet_reinscribe` (single only, per
+      the VERIFY above), gated on ord being caught up (spec: "block the
+      action if the ord index isn't fully synced")
+- [ ] `sat_inscriptions(sat_number)` for the reinscribe gallery, `None`
+      (not an error) when `--index-sats` is off
+
+Frontend — Inscribe studio
+- [ ] Drag-and-drop file picker, sandboxed preview (Foundation D, reuse
+      the gallery's `<iframe sandbox>` pattern), content-type check,
+      size warning
+- [ ] Fee-rate picker + fee guard (reuse `WalletSendForm`'s thresholds/
+      component, don't reimplement), estimated total cost, dry-run
+      preview with cost breakdown
+- [ ] Mainnet extra confirmation (reuse the shared `ConfirmDialog`, no
+      screen implements its own flow per Foundation D/the wallet
+      precedent)
+- [ ] Visual batch-YAML builder: add/remove files, export the generated
+      YAML, no reinscribe option per entry (per the VERIFY above)
+- [ ] Advanced options (hidden by default): parent/child, postage
+- [ ] Reinscribe mode: pick an owned inscription from the gallery, show
+      the sat's full inscription history in order (or the Foundation F
+      explanation if `--index-sats` is off), permanence/visibility
+      explainer before the first reinscription, dry-run + review screen
+      with target sat/existing inscriptions/new content/fee/resulting
+      count, mandatory "I understand this sat already has inscriptions"
+      checkbox, "Reinscription #N on sat X" labeling
+
+Acceptance criteria (from docs/SPEC.md Phase 6 "Done when"):
+- [ ] [CI] inscribe and reinscribe both work on regtest; the sat shows
+      both inscriptions in order
+- [ ] [MANUAL] the reinscribe checkbox is enforced; gated features
+      explain missing index options
 
 ## Phase 7 — Console, scripts, explorer (MVP complete)
 
