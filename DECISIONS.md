@@ -3188,6 +3188,26 @@ left running in the background the way installed mode's tray
 deliberately keeps it running, since the drive itself could be
 unplugged at any moment.
 
+### exFAT/filesystem warning (Phase 9, 2026-09-25)
+
+**VERIFY, live, on this dev machine**: `sysinfo::Disk::file_system()`
+reports this machine's real NTFS system drive as the all-caps string
+`"NTFS"`, not title-case -- confirmed via a temporary `eprintln!` in
+the real test, run once, then removed, rather than assumed from the
+crate's docs alone. `is_risky_portable_filesystem`'s exFAT match is
+case-insensitive as a direct result.
+
+**Single source of truth, fixed before committing.** First pass
+computed `disk_filesystem` in nk-core but left the actual "is this
+risky" judgment to a TypeScript string comparison in
+`SystemCheckScreen.tsx` -- a second, driftable copy of the same logic
+`is_risky_portable_filesystem` already existed to express, and that
+Rust function ended up exercised only by its own unit tests, not by
+any real code path. Caught on review before committing: added
+`disk_filesystem_is_risky: bool` to `SystemCheck`, computed from the
+one real predicate, so the frontend just reads a boolean instead of
+knowing what "risky" means.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

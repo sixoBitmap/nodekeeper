@@ -63,6 +63,11 @@ const MOCK_SYSTEM_CHECK: SystemCheck = {
   total_memory_bytes: 17_179_869_184,
   available_memory_bytes: 8_589_934_592,
   disk_free_bytes: 256_060_514_304,
+  // exFAT (not NTFS) so the dev preview exercises docs/SPEC.md item
+  // 12's warning path directly -- this is portable-mode-flavored
+  // scaffolding anyway (`is_portable_mode` also mocks `true`).
+  disk_filesystem: "exFAT",
+  disk_filesystem_is_risky: true,
 };
 
 const settings = new Map<string, string>();

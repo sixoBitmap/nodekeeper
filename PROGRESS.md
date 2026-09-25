@@ -1816,7 +1816,23 @@ Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
       unverifiable without a real macOS host
 - [ ] Linux noexec-mount detection + guidance -- code only, unverifiable
       without a real Linux host
-- [ ] Filesystem checks: warn on exFAT, recommend NTFS
+- [x] Filesystem checks: warn on exFAT, recommend NTFS. Backend:
+      `SystemCheck` gained `disk_filesystem` (via `sysinfo::Disks`,
+      reusing the same mount-point-prefix-match logic
+      `disk_free_bytes` already used -- refactored into a shared
+      `matched_disk_for_path` helper) and `disk_filesystem_is_risky`,
+      computed once via `nk_core::system_check::
+      is_risky_portable_filesystem` so the frontend never carries its
+      own copy of what counts as "risky" (a first pass did exactly
+      that -- a TS string comparison duplicating the Rust predicate --
+      caught and fixed before committing). Real-machine VERIFY: this
+      dev machine's own NTFS system drive reports its filesystem name
+      as all-caps `"NTFS"`, confirmed via a temporary debug print
+      against the real `sysinfo` call (removed after confirming), which
+      is why the risk check is case-insensitive. Frontend: the System
+      Check screen (the data-directory picker step) shows the detected
+      filesystem and, when it's exFAT, the spec's exact warning text.
+      Live-verified in the browser dev preview.
 - [ ] Windows long-path support -- VERIFY the exact mechanism needed
       (manifest `longPathAware` vs `\\?\` prefixing) beyond what's
       already implicitly relied on

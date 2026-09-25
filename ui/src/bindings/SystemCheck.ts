@@ -5,4 +5,19 @@ export type SystemCheck = { os: string, arch: string, cpu_cores: number, total_m
  * Free space on the disk that contains `data_dir`, or `None` if no
  * mounted disk could be matched to that path.
  */
-disk_free_bytes: number | null, };
+disk_free_bytes: number | null, 
+/**
+ * The filesystem of the disk that contains `data_dir` (e.g.
+ * `"NTFS"`, `"exFAT"`, `"apfs"`, `"ext4"`), or `None` if no mounted
+ * disk could be matched -- docs/SPEC.md item 12: "warn if exFAT
+ * (corruption risk on unplug, no permission bits...); recommend
+ * NTFS if the user only uses Windows and Linux."
+ */
+disk_filesystem: string | null, 
+/**
+ * Whether `disk_filesystem` is the one this app warns about
+ * (`is_risky_portable_filesystem`) -- computed here, once, so the
+ * frontend renders a warning without needing its own copy of what
+ * counts as "risky" (a second, driftable copy of that judgment).
+ */
+disk_filesystem_is_risky: boolean, };

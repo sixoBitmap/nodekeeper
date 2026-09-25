@@ -27,6 +27,17 @@ pub struct SystemCheck {
     /// mounted disk could be matched to that path.
     #[ts(type = "number | null")]
     pub disk_free_bytes: Option<u64>,
+    /// The filesystem of the disk that contains `data_dir` (e.g.
+    /// `"NTFS"`, `"exFAT"`, `"apfs"`, `"ext4"`), or `None` if no mounted
+    /// disk could be matched -- docs/SPEC.md item 12: "warn if exFAT
+    /// (corruption risk on unplug, no permission bits...); recommend
+    /// NTFS if the user only uses Windows and Linux."
+    pub disk_filesystem: Option<String>,
+    /// Whether `disk_filesystem` is the one this app warns about
+    /// (`is_risky_portable_filesystem`) -- computed here, once, so the
+    /// frontend renders a warning without needing its own copy of what
+    /// counts as "risky" (a second, driftable copy of that judgment).
+    pub disk_filesystem_is_risky: bool,
 }
 
 /// Runs the system check. `data_dir` is the path the user picked (or the
@@ -37,7 +48,12 @@ pub fn run_system_check(data_dir: &std::path::Path) -> SystemCheck {
     sys.refresh_all();
 
     let disks = Disks::new_with_refreshed_list();
-    let disk_free_bytes = disk_free_space_for_path(&disks, data_dir);
+    let matched = matched_disk_for_path(&disks, data_dir);
+    let disk_free_bytes = matched.map(|d| d.available_space());
+    let disk_filesystem = matched.map(|d| d.file_system().to_string_lossy().into_owned());
+    let disk_filesystem_is_risky = disk_filesystem
+        .as_deref()
+        .is_some_and(is_risky_portable_filesystem);
 
     SystemCheck {
         os: std::env::consts::OS.to_string(),
@@ -46,14 +62,18 @@ pub fn run_system_check(data_dir: &std::path::Path) -> SystemCheck {
         total_memory_bytes: sys.total_memory(),
         available_memory_bytes: sys.available_memory(),
         disk_free_bytes,
+        disk_filesystem,
+        disk_filesystem_is_risky,
     }
 }
 
 /// Finds the disk with the longest mount-point prefix match for `path`
-/// (the standard way to resolve "which filesystem is this path on" from a
-/// flat disk list), and returns its free space. Shared with `disk.rs`'s
-/// dashboard disk monitor.
-pub(crate) fn disk_free_space_for_path(disks: &Disks, path: &std::path::Path) -> Option<u64> {
+/// (the standard way to resolve "which filesystem is this path on" from
+/// a flat disk list).
+fn matched_disk_for_path<'a>(
+    disks: &'a Disks,
+    path: &std::path::Path,
+) -> Option<&'a sysinfo::Disk> {
     // The path itself may not exist yet (e.g. a not-yet-created data
     // dir); walk up to the nearest existing ancestor so canonicalize()
     // succeeds. Use `dunce::canonicalize` rather than
@@ -71,7 +91,24 @@ pub(crate) fn disk_free_space_for_path(disks: &Disks, path: &std::path::Path) ->
         .iter()
         .filter(|d| canonical.starts_with(d.mount_point()))
         .max_by_key(|d| d.mount_point().as_os_str().len())
-        .map(|d| d.available_space())
+}
+
+/// Finds the disk with the longest mount-point prefix match for `path`
+/// and returns its free space. Shared with `disk.rs`'s dashboard disk
+/// monitor.
+pub(crate) fn disk_free_space_for_path(disks: &Disks, path: &std::path::Path) -> Option<u64> {
+    matched_disk_for_path(disks, path).map(|d| d.available_space())
+}
+
+/// docs/SPEC.md item 12: whether a filesystem name (as reported by the
+/// OS, e.g. `"exFAT"`, `"NTFS"`) is the one this app specifically warns
+/// about -- corruption risk on an unplug, no permission bits, and (on
+/// macOS) leaves `._` metadata files behind everywhere. Case-
+/// insensitive since casing isn't consistent across platforms/tools
+/// (confirmed live below: this dev machine's own NTFS system drive
+/// reports as all-caps `"NTFS"`, not title-case).
+pub fn is_risky_portable_filesystem(fs_name: &str) -> bool {
+    fs_name.eq_ignore_ascii_case("exfat")
 }
 
 #[cfg(test)]
@@ -87,5 +124,36 @@ mod tests {
         assert!(check.total_memory_bytes > 0);
         // The current directory always resolves to some disk in CI/dev.
         assert!(check.disk_free_bytes.is_some());
+    }
+
+    /// Real, not synthetic: whichever disk the test binary actually
+    /// runs from must report some real, non-empty filesystem name --
+    /// proves the mount-point matching wires all the way through to a
+    /// real OS value, not just that the code compiles.
+    #[test]
+    fn run_system_check_reports_a_real_filesystem_for_the_current_directory() {
+        let check = run_system_check(std::path::Path::new("."));
+        let fs = check
+            .disk_filesystem
+            .expect("current directory should resolve to some disk");
+        assert!(!fs.is_empty());
+        assert_eq!(
+            check.disk_filesystem_is_risky,
+            is_risky_portable_filesystem(&fs)
+        );
+    }
+
+    #[test]
+    fn exfat_is_flagged_regardless_of_case() {
+        assert!(is_risky_portable_filesystem("exFAT"));
+        assert!(is_risky_portable_filesystem("EXFAT"));
+        assert!(is_risky_portable_filesystem("exfat"));
+    }
+
+    #[test]
+    fn ntfs_and_other_filesystems_are_not_flagged() {
+        assert!(!is_risky_portable_filesystem("NTFS"));
+        assert!(!is_risky_portable_filesystem("ext4"));
+        assert!(!is_risky_portable_filesystem("apfs"));
     }
 }

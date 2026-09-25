@@ -54,6 +54,8 @@
     "availableMemory": "Available memory",
     "diskFree": "Free disk space",
     "diskUnknown": "Could not determine free disk space",
+    "filesystem": "Filesystem",
+    "exfatWarning": "This drive is formatted exFAT, which risks corruption if unplugged unexpectedly, has no permission bits, and (on macOS) leaves extra \"._\" files everywhere. If you only use this drive on Windows and Linux, NTFS is more robust.",
     "dataDirLabel": "Data directory (bitcoind, ord, wallets, and logs are stored here -- can be an external drive)",
     "changeDataDir": "Change...",
     "chooseDataDir": "Choose a data directory",

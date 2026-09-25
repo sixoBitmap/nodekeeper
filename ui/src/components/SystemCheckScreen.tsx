@@ -87,7 +87,24 @@ export function SystemCheckScreen({ onContinue }: { onContinue: () => void }) {
                 ? formatBytes(check.disk_free_bytes)
                 : t("systemCheck.diskUnknown")}
             </dd>
+
+            {check.disk_filesystem !== null && (
+              <>
+                <dt className="text-muted-foreground">{t("systemCheck.filesystem")}</dt>
+                <dd>{check.disk_filesystem}</dd>
+              </>
+            )}
           </dl>
+        )}
+
+        {/* docs/SPEC.md item 12: "warn if exFAT (corruption risk on
+            unplug, no permission bits, macOS writes ._ metadata
+            files); recommend NTFS if the user only uses Windows and
+            Linux." `disk_filesystem_is_risky` is computed backend-side
+            (nk-core's `is_risky_portable_filesystem`) so this screen
+            doesn't carry its own copy of what counts as "risky". */}
+        {check?.disk_filesystem_is_risky && (
+          <p className="text-xs text-warning">{t("systemCheck.exfatWarning")}</p>
         )}
 
         <div className="space-y-2 rounded-md border border-border p-3">
