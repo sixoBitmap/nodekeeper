@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DashboardScreen } from "@/components/DashboardScreen";
 import { EnvBanner } from "@/components/EnvBanner";
@@ -87,8 +88,14 @@ function App() {
         </div>
         <div className="flex items-center gap-2">
           <EnvironmentSwitcher />
-          <Button variant="outline" size="sm" onClick={toggleTheme}>
-            {theme === "dark" ? t("theme.toggleToLight") : t("theme.toggleToDark")}
+          <Button
+            variant="outline"
+            size="icon-sm"
+            onClick={toggleTheme}
+            aria-label={theme === "dark" ? t("theme.toggleToLight") : t("theme.toggleToDark")}
+            title={theme === "dark" ? t("theme.toggleToLight") : t("theme.toggleToDark")}
+          >
+            {theme === "dark" ? <Sun /> : <Moon />}
           </Button>
         </div>
       </header>
