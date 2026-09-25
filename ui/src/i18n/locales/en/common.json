@@ -4,7 +4,8 @@
   },
   "nav": {
     "dashboard": "Dashboard",
-    "wallet": "Wallet"
+    "wallet": "Wallet",
+    "inscribe": "Inscribe"
   },
   "theme": {
     "toggleToLight": "Switch to light theme",
@@ -196,6 +197,37 @@
       "confirmTitle": "Send bitcoin",
       "confirmDescription": "Send {{amount}} BTC to {{address}}"
     }
+  },
+  "inscribe": {
+    "title": "Inscribe",
+    "dropZone": "Drag and drop a file here to inscribe it",
+    "dropZoneHint": "Only available in the installed app, not this preview.",
+    "chosenFile": "File",
+    "fileSize": "Size",
+    "fileType": "Content type",
+    "removeFile": "Remove",
+    "feeRate": "Fee rate (sat/vB)",
+    "feeRateManualRequired": "Enter a fee rate",
+    "noEstimateMainnet": "No fee estimate is available yet -- enter a fee rate manually.",
+    "noEstimateRegtest": "No fee estimate available on this network; using a fallback of {{rate}} sat/vB.",
+    "advancedOptions": "Advanced options",
+    "postage": "Postage (sats)",
+    "postagePlaceholder": "10000",
+    "parent": "Parent inscription ID",
+    "parentPlaceholder": "Optional -- makes this a child inscription",
+    "preview": "Preview",
+    "previewTitle": "Preview",
+    "previewFee": "Fee",
+    "previewLocation": "Will be inscribed at",
+    "feeWarningRate": "{{rate}} sat/vB is an unusually high fee rate.",
+    "feeWarningAbsolute": "{{fee}} is an unusually high fee.",
+    "submit": "Inscribe",
+    "confirmTitle": "Create inscription",
+    "confirmDescription": "Inscribe this file for a fee of {{fee}}",
+    "cancel": "Cancel",
+    "done": "Inscribed",
+    "doneId": "Inscription ID",
+    "inscribeAnother": "Inscribe another"
   },
   "diskMonitor": {
     "title": "Disk usage",

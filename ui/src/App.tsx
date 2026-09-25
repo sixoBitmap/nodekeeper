@@ -6,13 +6,14 @@ import { DashboardScreen } from "@/components/DashboardScreen";
 import { EnvBanner } from "@/components/EnvBanner";
 import { EnvironmentSwitcher } from "@/components/EnvironmentSwitcher";
 import { FirstRunDisclaimer } from "@/components/FirstRunDisclaimer";
+import { InscribeStudioScreen } from "@/components/InscribeStudioScreen";
 import { LiveCommandMonitor } from "@/components/LiveCommandMonitor";
 import { SystemCheckScreen } from "@/components/SystemCheckScreen";
 import { WalletScreen } from "@/components/WalletScreen";
 import { selectedEnvironment, useEnvironmentStore } from "@/store/environment";
 import { useThemeStore } from "@/store/theme";
 
-type Screen = "dashboard" | "wallet";
+type Screen = "dashboard" | "wallet" | "inscribe";
 
 const DISCLAIMER_SETTING_KEY = "disclaimer_acknowledged";
 
@@ -74,6 +75,13 @@ function App() {
               >
                 {t("nav.wallet")}
               </Button>
+              <Button
+                variant={screen === "inscribe" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setScreen("inscribe")}
+              >
+                {t("nav.inscribe")}
+              </Button>
             </nav>
           )}
         </div>
@@ -92,8 +100,10 @@ function App() {
           // useDashboardStatus/LogViewer).
           screen === "dashboard" ? (
             <DashboardScreen key={selected.chain} environment={selected} />
-          ) : (
+          ) : screen === "wallet" ? (
             <WalletScreen key={selected.chain} environment={selected} />
+          ) : (
+            <InscribeStudioScreen key={selected.chain} environment={selected} />
           )
         ) : (
           <SystemCheckScreen onContinue={() => setPastSystemCheck(true)} />

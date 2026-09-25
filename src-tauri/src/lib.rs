@@ -722,6 +722,302 @@ async fn wallet_fee_estimate(
         .map(|btc_per_kvb| btc_per_kvb * 100_000.0))
 }
 
+/// docs/SPEC.md item 4's Inscribe studio: single inscribe's result --
+/// shared by the plain-inscribe and reinscribe Tauri commands, and by
+/// each entry of a batch's result (`parse_inscribe_results`).
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct InscribeResult {
+    pub id: String,
+    pub location: String,
+    #[ts(type = "number")]
+    pub fee: u64,
+}
+
+fn parse_inscribe_results(response: &serde_json::Value) -> Result<Vec<InscribeResult>, TypedError> {
+    let entries = response
+        .get("inscriptions")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| TypedError::from("ord did not return an inscriptions array".to_string()))?;
+    let fee = response
+        .get("total_fees")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| TypedError::from("ord did not return total_fees".to_string()))?;
+    entries
+        .iter()
+        .map(|entry| {
+            let id = entry
+                .get("id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    TypedError::from("ord did not return an inscription id".to_string())
+                })?
+                .to_string();
+            let location = entry
+                .get("location")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    TypedError::from("ord did not return an inscription location".to_string())
+                })?
+                .to_string();
+            Ok(InscribeResult { id, location, fee })
+        })
+        .collect()
+}
+
+fn parse_single_inscribe_result(response: serde_json::Value) -> Result<InscribeResult, TypedError> {
+    parse_inscribe_results(&response)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| TypedError::from("ord did not return an inscription".to_string()))
+}
+
+/// Preview only -- like `wallet_send_dry_run`, ord's `--dry-run` needs
+/// no wallet unlock at all (confirmed live for `send`, DECISIONS.md
+/// Phase 5 VERIFY; the same flag works the same way across every `ord
+/// wallet` subcommand), so this never touches `WalletSession`.
+/// `reinscribe_satpoint: Some(sp)` previews a reinscribe instead of a
+/// plain inscribe -- same underlying `ord wallet inscribe`, just with
+/// `--satpoint`/`--reinscribe` added (DECISIONS.md Phase 6 VERIFY).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn wallet_inscribe_dry_run(
+    chain: Chain,
+    file_path: String,
+    fee_rate: f64,
+    postage: Option<u64>,
+    parent: Option<String>,
+    reinscribe_satpoint: Option<String>,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<InscribeResult, TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
+    let response = nk_ord::wallet::inscribe(
+        &executor,
+        &ctx.target(),
+        std::path::Path::new(&file_path),
+        fee_rate,
+        postage,
+        parent.as_deref(),
+        reinscribe_satpoint.as_deref(),
+        true,
+    )
+    .await
+    .map_err(TypedError::from)?;
+    parse_single_inscribe_result(response)
+}
+
+/// The real, signing inscribe (and reinscribe, via `reinscribe_
+/// satpoint`) -- same unlock/remember/always-relock shape as
+/// `wallet_send`.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn wallet_inscribe(
+    chain: Chain,
+    file_path: String,
+    fee_rate: f64,
+    postage: Option<u64>,
+    parent: Option<String>,
+    reinscribe_satpoint: Option<String>,
+    passphrase: Option<String>,
+    remember: bool,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+    wallet_session: tauri::State<'_, WalletSession>,
+) -> Result<InscribeResult, TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
+
+    let passphrase: zeroize::Zeroizing<String> = match passphrase
+        .map(zeroize::Zeroizing::new)
+        .or_else(|| wallet_session.get(chain))
+    {
+        Some(p) => p,
+        None => {
+            return Err(TypedError {
+                code: Some(AppErrorCode::WalletLocked),
+                message: "This wallet is locked; enter its passphrase to continue.".to_string(),
+            })
+        }
+    };
+
+    ctx.rpc
+        .wallet_passphrase(DEFAULT_WALLET_NAME, &passphrase, WALLET_UNLOCK_TIMEOUT_SECS)
+        .await
+        .map_err(|e| TypedError::from(e.to_string()))?;
+    if remember {
+        wallet_session.remember(chain, passphrase.clone());
+    }
+
+    let response = nk_ord::wallet::inscribe(
+        &executor,
+        &ctx.target(),
+        std::path::Path::new(&file_path),
+        fee_rate,
+        postage,
+        parent.as_deref(),
+        reinscribe_satpoint.as_deref(),
+        false,
+    )
+    .await;
+    let _ = ctx.rpc.wallet_lock(DEFAULT_WALLET_NAME).await;
+
+    parse_single_inscribe_result(response.map_err(TypedError::from)?)
+}
+
+/// docs/SPEC.md item 4's "Visual batch-YAML builder." No `passphrase`-
+/// less dry-run split like single inscribe has its own pair of
+/// commands -- `dry_run` is just a bool here, since both paths share
+/// every other parameter and batch has no reinscribe option to also
+/// branch on (DECISIONS.md Phase 6 VERIFY: ord 0.29.0's batch schema
+/// rejects a per-entry `reinscribe` field outright).
+#[tauri::command]
+async fn wallet_inscribe_batch_dry_run(
+    chain: Chain,
+    file_paths: Vec<String>,
+    fee_rate: f64,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+) -> Result<Vec<InscribeResult>, TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
+    let entries: Vec<_> = file_paths
+        .into_iter()
+        .map(|p| nk_ord::wallet::BatchInscriptionEntry {
+            file_path: std::path::PathBuf::from(p),
+        })
+        .collect();
+    let response =
+        nk_ord::wallet::batch_inscribe(&executor, &ctx.target(), &entries, fee_rate, true)
+            .await
+            .map_err(TypedError::from)?;
+    parse_inscribe_results(&response)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn wallet_inscribe_batch(
+    chain: Chain,
+    file_paths: Vec<String>,
+    fee_rate: f64,
+    passphrase: Option<String>,
+    remember: bool,
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+    executor: tauri::State<'_, Executor>,
+    wallet_session: tauri::State<'_, WalletSession>,
+) -> Result<Vec<InscribeResult>, TypedError> {
+    let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
+
+    let passphrase: zeroize::Zeroizing<String> = match passphrase
+        .map(zeroize::Zeroizing::new)
+        .or_else(|| wallet_session.get(chain))
+    {
+        Some(p) => p,
+        None => {
+            return Err(TypedError {
+                code: Some(AppErrorCode::WalletLocked),
+                message: "This wallet is locked; enter its passphrase to continue.".to_string(),
+            })
+        }
+    };
+
+    ctx.rpc
+        .wallet_passphrase(DEFAULT_WALLET_NAME, &passphrase, WALLET_UNLOCK_TIMEOUT_SECS)
+        .await
+        .map_err(|e| TypedError::from(e.to_string()))?;
+    if remember {
+        wallet_session.remember(chain, passphrase.clone());
+    }
+
+    let entries: Vec<_> = file_paths
+        .into_iter()
+        .map(|p| nk_ord::wallet::BatchInscriptionEntry {
+            file_path: std::path::PathBuf::from(p),
+        })
+        .collect();
+    let response =
+        nk_ord::wallet::batch_inscribe(&executor, &ctx.target(), &entries, fee_rate, false).await;
+    let _ = ctx.rpc.wallet_lock(DEFAULT_WALLET_NAME).await;
+
+    parse_inscribe_results(&response.map_err(TypedError::from)?)
+}
+
+/// docs/SPEC.md item 4: "Drag-and-drop file, preview... content-type
+/// check, size warning" -- reads the dropped file's metadata (Tauri's
+/// drag-drop event hands the frontend a real filesystem path, not a
+/// browser `File` object, so there's no size/type available client-
+/// side without this). `content_type` is a best-effort guess from the
+/// file extension, same basis ord itself uses at inscribe time -- not
+/// authoritative, just enough for the UI's warning label. `data_url` is
+/// `None` above `MAX_PREVIEW_BYTES` (the sandboxed preview iframe falls
+/// back to a "too large to preview" placeholder instead of embedding
+/// megabytes of base64 through IPC for no benefit the user can see
+/// anyway in a small iframe).
+const MAX_PREVIEW_BYTES: u64 = 2 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, TS)]
+pub struct FilePreview {
+    #[ts(type = "number")]
+    pub size_bytes: u64,
+    pub content_type: String,
+    pub data_url: Option<String>,
+}
+
+fn guess_content_type(path: &std::path::Path) -> &'static str {
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "avif" => "image/avif",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "html" | "htm" => "text/html",
+        "txt" => "text/plain",
+        "css" => "text/css",
+        "js" | "mjs" => "text/javascript",
+        "json" => "application/json",
+        "md" => "text/markdown",
+        "pdf" => "application/pdf",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "gltf" => "model/gltf+json",
+        "glb" => "model/gltf-binary",
+        "woff2" => "font/woff2",
+        "woff" => "font/woff",
+        _ => "application/octet-stream",
+    }
+}
+
+#[tauri::command]
+fn inscribe_file_preview(path: String) -> Result<FilePreview, TypedError> {
+    let path = std::path::Path::new(&path);
+    let metadata = std::fs::metadata(path).map_err(|e| TypedError::from(e.to_string()))?;
+    let size_bytes = metadata.len();
+    let content_type = guess_content_type(path);
+    let data_url = if size_bytes <= MAX_PREVIEW_BYTES {
+        let bytes = std::fs::read(path).map_err(|e| TypedError::from(e.to_string()))?;
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        Some(format!("data:{content_type};base64,{encoded}"))
+    } else {
+        None
+    };
+    Ok(FilePreview {
+        size_bytes,
+        content_type: content_type.to_string(),
+        data_url,
+    })
+}
+
 #[tauri::command]
 async fn start_node(
     chain: Chain,
@@ -1013,6 +1309,11 @@ pub fn run() {
             wallet_send_dry_run,
             wallet_send,
             wallet_fee_estimate,
+            wallet_inscribe_dry_run,
+            wallet_inscribe,
+            wallet_inscribe_batch_dry_run,
+            wallet_inscribe_batch,
+            inscribe_file_preview,
             tail_debug_log,
             page_debug_log_before,
             search_debug_log,
@@ -1046,6 +1347,8 @@ mod tests {
         WalletInscriptionEntry::export_all(&config).unwrap();
         WalletTransactionEntry::export_all(&config).unwrap();
         WalletSendResult::export_all(&config).unwrap();
+        InscribeResult::export_all(&config).unwrap();
+        FilePreview::export_all(&config).unwrap();
         nk_core::log_tail::LogWindow::export_all(&config).unwrap();
         nk_store::CommandHistoryEntry::export_all(&config).unwrap();
         nk_exec::ExecEvent::export_all(&config).unwrap();

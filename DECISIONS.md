@@ -1955,6 +1955,48 @@ Not a Nodekeeper code concern (only came up in ad hoc scratch-testing
 tooling), but worth recording since it'll bite again in a future
 VERIFY session otherwise.
 
+## Phase 6 — the browser dev preview can't safely import `@tauri-apps/api/webview` (2026-09-25)
+
+Building the Inscribe studio's drag-and-drop file picker (docs/SPEC.md
+item 4), found live in the browser dev preview (not predicted, not in
+any docs) that a plain top-level `import { getCurrentWebview } from
+"@tauri-apps/api/webview"` crashes the entire app there -- not just
+"drag-and-drop doesn't work," the whole React tree unmounts with
+`TypeError: Cannot read properties of undefined (reading
+'currentWindow')`.
+
+Root cause: that module reads `window.__TAURI_INTERNALS__.metadata` at
+*import time* (module-evaluation side effect), not only when
+`getCurrentWebview()` is actually called. `dev-tauri-mock.ts`'s
+`mockIPC` (from `@tauri-apps/api/mocks`) sets `window.__TAURI_
+INTERNALS__.invoke`/`.transformCallback`/etc. but never `.metadata` --
+that's a separate `mockWindows()` export in the same mocks module,
+which this project's dev-preview setup never calls. So `window.
+__TAURI_INTERNALS__` genuinely exists in the dev preview (confirmed by
+reading `mocks.js`'s source directly), which makes a naive `if
+("__TAURI_INTERNALS__" in window)` guard actively wrong -- it reads as
+true in *both* the real app and the mocked browser preview, so it
+can't be used to distinguish them.
+
+**Fix, `InscribeStudioScreen.tsx`**:
+- The webview module is loaded via a *dynamic* `import()` inside a
+  try/catch, only at the point drag-drop subscription is actually
+  attempted -- never imported eagerly, so a browser-preview session
+  never evaluates it at all. Same shape as `store/monitor.ts`'s
+  existing exec-event subscription (try/catch + `console.warn`, not a
+  crash) for the identical underlying reason (Phase 3).
+- A new `isRealTauriRuntime()` helper checks `window.__TAURI_
+  INTERNALS__?.metadata` specifically (not mere presence of `__TAURI_
+  INTERNALS__`) to gate the dev-preview-only "click to load a
+  placeholder file" affordance -- this is the one property the real
+  Tauri runtime always populates and this project's mock setup never
+  does.
+
+Worth remembering for any future feature that touches
+`@tauri-apps/api/webview` (window management, more drag-drop, etc.):
+never add a static top-level import of that module to a component that
+also needs to render in the browser dev preview.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

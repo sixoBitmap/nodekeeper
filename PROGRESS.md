@@ -1152,39 +1152,79 @@ direct source for "all inscriptions on this sat, in order" (needs
       several concurrent real bitcoind processes starved
       windows-latest runners past their startup timeout).
 
-Backend — Tauri commands
-- [ ] `wallet_inscribe_dry_run`/`wallet_inscribe` (file content read from
-      a path the frontend got via drag-and-drop, `--destination`/
-      `--postage`/`--parent` as optional advanced params)
-- [ ] `wallet_inscribe_batch_dry_run`/`wallet_inscribe_batch` (build the
-      YAML server-side from a typed list of files, never hand-edited
-      YAML text sent as-is -- avoids a path-injection-shaped surface)
-- [ ] `wallet_reinscribe_dry_run`/`wallet_reinscribe` (single only, per
-      the VERIFY above), gated on ord being caught up (spec: "block the
-      action if the ord index isn't fully synced")
-- [ ] `sat_inscriptions(sat_number)` for the reinscribe gallery, `None`
-      (not an error) when `--index-sats` is off
+Backend — Tauri commands — **single inscribe and batch done, reinscribe gating and the sat lookup command still open**
+- [x] `wallet_inscribe_dry_run`/`wallet_inscribe` -- file path comes
+      from the frontend (drag-and-drop or the dev-preview placeholder),
+      `postage`/`parent` as optional advanced params, plus
+      `reinscribe_satpoint` (unused by the frontend yet -- reinscribe
+      mode UI is still a separate task below, but the same command
+      already supports it since it's the same underlying `ord wallet
+      inscribe` call either way)
+- [x] `wallet_inscribe_batch_dry_run`/`wallet_inscribe_batch` -- built
+      (mirrors the single-inscribe command's unlock/remember/relock
+      shape), but nothing calls them yet -- the batch-YAML builder UI
+      is still a separate task below
+- [x] `inscribe_file_preview`: size + best-effort extension-based
+      content-type + a capped base64 `data_url` for the sandboxed
+      preview (`None` above 2 MiB -- no point embedding megabytes of
+      base64 through IPC for a small preview iframe)
+- [ ] A dedicated `sat_inscriptions(sat_number)` Tauri command for the
+      reinscribe gallery (the `OrdClient::sat`/`inscription` HTTP calls
+      it would wrap already exist) -- not built, reinscribe mode isn't
+      built yet either
+- [ ] Explicit "block the action if the ord index isn't fully synced"
+      gating for reinscribe specifically (spec item 4) -- today only
+      the general `wallet_context` bitcoind+ord-running check applies,
+      not an ord-*caught-up* check; needed once reinscribe mode exists
 
-Frontend — Inscribe studio
-- [ ] Drag-and-drop file picker, sandboxed preview (Foundation D, reuse
-      the gallery's `<iframe sandbox>` pattern), content-type check,
-      size warning
-- [ ] Fee-rate picker + fee guard (reuse `WalletSendForm`'s thresholds/
-      component, don't reimplement), estimated total cost, dry-run
-      preview with cost breakdown
-- [ ] Mainnet extra confirmation (reuse the shared `ConfirmDialog`, no
-      screen implements its own flow per Foundation D/the wallet
-      precedent)
+Frontend — Inscribe studio — **single inscribe done; batch UI and reinscribe mode are separate, later tasks**
+- [x] `InscribeStudioScreen`: drag-and-drop via Tauri's core
+      `onDragDropEvent` webview API (no plugin needed), sandboxed
+      preview (`<iframe sandbox="allow-scripts">`, same Foundation D
+      pattern as the wallet gallery, `src` a `data:` URI since there's
+      no ord-hosted URL before inscribing), content-type + size shown,
+      a size warning past `LARGE_FILE_WARNING_BYTES`. **Real drag-and-
+      drop can't be exercised in the browser dev preview** -- confirmed
+      live that `@tauri-apps/api/webview` reads `window.__TAURI_
+      INTERNALS__.metadata` at *import* time (not just when called),
+      which `dev-tauri-mock.ts`'s `mockIPC` never sets, so even a
+      dynamic import crashes there unless wrapped in try/catch (fixed;
+      same shape as `store/monitor.ts`'s exec-event subscription). The
+      dev preview instead gets a click-to-load-a-placeholder-path
+      affordance, gated on a new `isRealTauriRuntime()` helper (checks
+      `.metadata` specifically, not just `__TAURI_INTERNALS__`
+      presence, since the mock defines the latter too) -- used to
+      verify the rest of the screen live.
+- [x] Fee-rate picker + fee guard (same thresholds/shape as
+      `WalletSendForm`, not reimplemented from scratch), dry-run
+      preview showing fee + target location.
+- [x] Mainnet extra confirmation via the existing shared
+      `ConfirmDialog` -- no bespoke flow, verified live on both mainnet
+      (extra ack + passphrase step) and regtest (neither).
+- [x] Advanced options (hidden by default): postage, parent inscription
+      ID.
 - [ ] Visual batch-YAML builder: add/remove files, export the generated
-      YAML, no reinscribe option per entry (per the VERIFY above)
-- [ ] Advanced options (hidden by default): parent/child, postage
+      YAML, no reinscribe option per entry (per the VERIFY above).
 - [ ] Reinscribe mode: pick an owned inscription from the gallery, show
       the sat's full inscription history in order (or the Foundation F
       explanation if `--index-sats` is off), permanence/visibility
       explainer before the first reinscription, dry-run + review screen
       with target sat/existing inscriptions/new content/fee/resulting
       count, mandatory "I understand this sat already has inscriptions"
-      checkbox, "Reinscription #N on sat X" labeling
+      checkbox, "Reinscription #N on sat X" labeling.
+
+**Observed, not yet addressed**: the passphrase-unlock flow (both
+`wallet_send`, Phase 5, and the new `wallet_inscribe`) always attempts
+`walletpassphrase` before a real signing action, on every chain -- this
+assumes the wallet is encrypted. Mainnet now always is (Phase 5's fix),
+but a regtest/signet/testnet4 wallet still isn't by default, so a real
+(non-dry-run) send or inscribe against a never-encrypted test-chain
+wallet would hit bitcoind's own "running with an unencrypted wallet"
+RPC error rather than a clean UX. Not a new Phase 6 regression --
+`wallet_send` already has the identical shape -- and every automated
+test so far happens to encrypt the wallet first either way, so this
+edge case has never actually been exercised end to end. Worth a look
+whenever wallet flows are revisited next, not fixed here.
 
 Acceptance criteria (from docs/SPEC.md Phase 6 "Done when"):
 - [ ] [CI] inscribe and reinscribe both work on regtest; the sat shows

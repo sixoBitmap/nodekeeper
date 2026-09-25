@@ -33,6 +33,7 @@ nk-rpc = { workspace = true }
 nk-ord = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 zeroize = "1"
+base64 = "0.22"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -364,6 +364,48 @@ export function installDevTauriMockIfNeeded() {
         if (remember) rememberedPassphrases.set(chain, effectivePassphrase);
         return { txid: "mock-send-txid", fee: Math.round(feeRate * 200) };
       }
+      case "inscribe_file_preview": {
+        const { path } = args as { path: string };
+        return {
+          size_bytes: 128,
+          content_type: "image/png",
+          // A real 1x1 transparent PNG, so the sandboxed preview
+          // iframe in the dev browser preview has actual content to
+          // render, same reasoning as MOCK_INSCRIPTIONS' real-shaped ids.
+          data_url:
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+          path,
+        };
+      }
+      case "wallet_inscribe_dry_run": {
+        return { id: "mockinscriptionidmockinscriptionidmockinscriptionidmocki0", location: "mocktxidmocktxidmocktxidmocktxidmocktxidmocktxidmocktxidmocktx:0:0", fee: 500 };
+      }
+      case "wallet_inscribe": {
+        const { chain, passphrase, remember } = args as {
+          chain: Chain;
+          passphrase: string | null;
+          remember: boolean;
+        };
+        const effectivePassphrase = passphrase ?? rememberedPassphrases.get(chain);
+        if (!effectivePassphrase) {
+          return Promise.reject({
+            code: "WALLET_LOCKED",
+            message: "This wallet is locked; enter its passphrase to continue.",
+          });
+        }
+        if (effectivePassphrase !== MOCK_WALLET_PASSPHRASE) {
+          return Promise.reject({
+            code: null,
+            message: `rpc error -14: the wallet passphrase entered was incorrect (dev mock -- try "${MOCK_WALLET_PASSPHRASE}")`,
+          });
+        }
+        if (remember) rememberedPassphrases.set(chain, effectivePassphrase);
+        return {
+          id: "mockinscriptionidmockinscriptionidmockinscriptionidmocki0",
+          location: "mocktxidmocktxidmocktxidmocktxidmocktxidmocktxidmocktxidmocktx:0:0",
+          fee: 500,
+        };
+      }
       default:
         throw new Error(`dev-tauri-mock: no mock for IPC command "${cmd}"`);
     }
