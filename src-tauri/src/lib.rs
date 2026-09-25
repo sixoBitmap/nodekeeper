@@ -199,6 +199,102 @@ fn configured_ord_path(store: &tauri::State<Arc<Mutex<Store>>>) -> Result<String
     })
 }
 
+/// Where downloaded-and-verified binaries are extracted to. Deliberately
+/// under `data_root()` (Nodekeeper's own fixed app-data location), not
+/// `environment_data_root()` -- a verified Bitcoin Core/ord binary isn't
+/// tied to any one environment's (possibly external-drive, possibly
+/// later-relocated) data directory, so moving that directory shouldn't
+/// force a redownload.
+fn binaries_root() -> std::path::PathBuf {
+    data_root().join("bin")
+}
+
+/// Setup wizard progress event (docs/SPEC.md item 1: "show progress")
+/// emitted on `"setup-download-progress"` while `download_and_verify_*`
+/// runs. `binary` is `"bitcoin_core"` or `"ord"` so one frontend listener
+/// can drive both progress bars.
+#[derive(Debug, Clone, Serialize, TS)]
+struct DownloadProgress {
+    binary: String,
+    #[ts(type = "number")]
+    downloaded_bytes: u64,
+    #[ts(type = "number | null")]
+    total_bytes: Option<u64>,
+}
+
+/// Setup wizard step (docs/SPEC.md item 1, Phase 2): downloads and
+/// verifies the pinned Bitcoin Core release for this platform (SHA-256 +
+/// >= 3 pinned-key signatures, `nk_verify::bitcoin_core`), extracts it,
+/// and -- only on success -- persists its path as the binary the rest of
+/// the app launches. Fails closed: any error leaves `bitcoind_path`
+/// unset, same as if this had never run.
+#[tauri::command]
+async fn download_and_verify_bitcoin_core(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+) -> Result<String, TypedError> {
+    let dest_dir =
+        binaries_root().join(format!("bitcoin-core-{}", nk_verify::bitcoin_core::VERSION));
+    let installed = nk_verify::bitcoin_core::download_verify_and_install_bitcoin_core(
+        &dest_dir,
+        move |downloaded_bytes, total_bytes| {
+            let _ = app.emit(
+                "setup-download-progress",
+                DownloadProgress {
+                    binary: "bitcoin_core".to_string(),
+                    downloaded_bytes,
+                    total_bytes,
+                },
+            );
+        },
+    )
+    .await
+    .map_err(|e| TypedError::from(format!("Bitcoin Core download/verification failed: {e}")))?;
+
+    let path = installed.binary_path.display().to_string();
+    store
+        .lock()
+        .unwrap()
+        .set_setting(BITCOIND_PATH_SETTING, &path)
+        .map_err(|e| TypedError::from(e.to_string()))?;
+    Ok(path)
+}
+
+/// Same as `download_and_verify_bitcoin_core`, for ord (docs/SPEC.md
+/// item 1, Phase 4) -- verified against Nodekeeper's pinned SHA-256
+/// (`nk_verify::ord`; ord publishes no maintainer-signed checksums file
+/// to check against, so the pinned hash *is* the verification here).
+#[tauri::command]
+async fn download_and_verify_ord(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+) -> Result<String, TypedError> {
+    let dest_dir = binaries_root().join(format!("ord-{}", nk_verify::ord::VERSION));
+    let installed = nk_verify::ord::download_verify_and_install_ord(
+        &dest_dir,
+        move |downloaded_bytes, total_bytes| {
+            let _ = app.emit(
+                "setup-download-progress",
+                DownloadProgress {
+                    binary: "ord".to_string(),
+                    downloaded_bytes,
+                    total_bytes,
+                },
+            );
+        },
+    )
+    .await
+    .map_err(|e| TypedError::from(format!("ord download/verification failed: {e}")))?;
+
+    let path = installed.binary_path.display().to_string();
+    store
+        .lock()
+        .unwrap()
+        .set_setting(ORD_PATH_SETTING, &path)
+        .map_err(|e| TypedError::from(e.to_string()))?;
+    Ok(path)
+}
+
 /// Only the default wallet Nodekeeper creates on first use of a chain's
 /// wallet screen -- "Multiple named wallets" (docs/SPEC.md item 3) is a
 /// later task; every wallet command hardcodes this name for now, same
@@ -1486,6 +1582,8 @@ pub fn run() {
             list_default_environments,
             get_environment_data_root,
             set_environment_data_root,
+            download_and_verify_bitcoin_core,
+            download_and_verify_ord,
             get_setting,
             set_setting,
             start_node,
@@ -1554,5 +1652,6 @@ mod tests {
         nk_core::log_tail::LogWindow::export_all(&config).unwrap();
         nk_store::CommandHistoryEntry::export_all(&config).unwrap();
         nk_exec::ExecEvent::export_all(&config).unwrap();
+        DownloadProgress::export_all(&config).unwrap();
     }
 }

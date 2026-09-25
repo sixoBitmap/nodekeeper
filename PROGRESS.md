@@ -425,9 +425,13 @@ Newly tracked here, not built yet:
       while any environment is running, validates the folder is
       writable). See DECISIONS.md "Setup wizard UI: data-directory
       picker, scoped deliberately (2026-09-25)".
-- [ ] Setup wizard screen: trigger `nk_verify::bitcoin_core`'s download
+- [x] Setup wizard screen: trigger `nk_verify::bitcoin_core`'s download
       + verify, show progress and the verification result (fail closed,
-      same as the backend already does)
+      same as the backend already does) — `BinarySetupScreen`, real
+      pure-Rust download/extract/install orchestration
+      (`nk_verify::bitcoin_core::download_verify_and_install_bitcoin_core`),
+      live-verified end to end. See DECISIONS.md "Setup wizard UI:
+      binary download + verify screens (2026-09-25)".
 - [ ] "Offer to attach" UI: when an already-running bitcoind is
       detected on the target data directory and its cookie
       authenticates, let the user attach instead of refusing outright
@@ -818,11 +822,16 @@ to include "ord and index options in Phase 4," and again only the
 backend (`nk-verify`'s pinned-hash ord verification, `nk_core::
 ord_conf`'s index-option plumbing) was built, no screen. Newly tracked
 here, not built yet:
-- [ ] Setup wizard screen: trigger `nk_verify::ord`'s download + verify
-      with progress/result, then the index-options step -- explain disk/
-      time cost per option, list which app features each unlocks
-      (Foundation F), and state clearly the choice is effectively
-      permanent (changing it later means a full reindex)
+- [x] Setup wizard screen: trigger `nk_verify::ord`'s download + verify
+      with progress/result — `BinarySetupScreen` (shared with Bitcoin
+      Core, above), real pure-Rust download/extract/install
+      orchestration (`nk_verify::ord::download_verify_and_install_ord`),
+      live-verified end to end. See DECISIONS.md "Setup wizard UI:
+      binary download + verify screens (2026-09-25)".
+- [ ] The index-options step -- explain disk/time cost per option, list
+      which app features each unlocks (Foundation F), and state clearly
+      the choice is effectively permanent (changing it later means a
+      full reindex)
 - [ ] Wizard default: per spec, start ord indexing automatically once
       Bitcoin Core finishes its initial sync, with a "start now anyway"
       override and warning -- no such sequencing exists yet; today

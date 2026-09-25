@@ -54,6 +54,24 @@
     "chooseDataDir": "Choose a data directory",
     "continue": "Continue"
   },
+  "binarySetup": {
+    "title": "Set up Bitcoin Core and ord",
+    "intro": "Nodekeeper downloads these directly from their official sources and verifies them before use -- Bitcoin Core against its maintainers' checksums and signatures, ord against a hash Nodekeeper has pinned in advance. Nothing runs until it passes.",
+    "bitcoinCore": "Bitcoin Core",
+    "ord": "ord (ordinals indexer)",
+    "download": "Download & verify",
+    "retry": "Retry",
+    "starting": "Starting…",
+    "downloadedNoTotal": "{{size}} downloaded…",
+    "downloadedOfTotal": "{{downloaded}} / {{total}}",
+    "status": {
+      "checking": "Checking…",
+      "not_installed": "Not installed",
+      "downloading": "Downloading and verifying…",
+      "installed": "Verified",
+      "error": "Failed"
+    }
+  },
   "environmentSwitcher": {
     "label": "Environment"
   },

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { BinarySetupScreen } from "@/components/BinarySetupScreen";
 import { DashboardScreen } from "@/components/DashboardScreen";
 import { EnvBanner } from "@/components/EnvBanner";
 import { EnvironmentSwitcher } from "@/components/EnvironmentSwitcher";
@@ -15,6 +16,7 @@ import { selectedEnvironment, useEnvironmentStore } from "@/store/environment";
 import { useThemeStore } from "@/store/theme";
 
 type Screen = "dashboard" | "wallet" | "inscribe";
+type WizardStep = "systemCheck" | "binarySetup" | "done";
 
 const DISCLAIMER_SETTING_KEY = "disclaimer_acknowledged";
 
@@ -27,10 +29,12 @@ function App() {
 
   // null = not checked yet, matches the "loading" state below.
   const [disclaimerAcknowledged, setDisclaimerAcknowledged] = useState<boolean | null>(null);
-  // Not persisted: the system check is informational, not a one-time
-  // gate like the disclaimer, so it's fine (and simplest) to show it
-  // again on every launch rather than remembering "already seen".
-  const [pastSystemCheck, setPastSystemCheck] = useState(false);
+  // Not persisted as its own flag: the system check is informational, so
+  // it's fine to show it again on every launch. The binary setup step
+  // effectively *is* persisted, just via `bitcoind_path`/`ord_path`
+  // themselves (BinarySetupScreen skips straight past itself once both
+  // are already set) rather than a separate "wizard done" flag.
+  const [wizardStep, setWizardStep] = useState<WizardStep>("systemCheck");
   const [screen, setScreen] = useState<Screen>("dashboard");
 
   useEffect(() => {
@@ -60,7 +64,7 @@ function App() {
       <header className="flex items-center justify-between border-b border-border px-4 py-2">
         <div className="flex items-center gap-4">
           <h1 className="text-sm font-semibold">{t("app.title")}</h1>
-          {pastSystemCheck && (
+          {wizardStep === "done" && (
             <nav className="flex gap-1">
               <Button
                 variant={screen === "dashboard" ? "secondary" : "ghost"}
@@ -100,7 +104,7 @@ function App() {
         </div>
       </header>
       <main className="flex-1 overflow-y-auto">
-        {pastSystemCheck && selected ? (
+        {wizardStep === "done" && selected ? (
           // Keyed by chain (and now screen): switching environments or
           // screens should remount with fresh state, not carry over
           // the previous one's status/log-viewer state (see
@@ -112,8 +116,10 @@ function App() {
           ) : (
             <InscribeStudioScreen key={selected.chain} environment={selected} />
           )
+        ) : wizardStep === "binarySetup" ? (
+          <BinarySetupScreen onContinue={() => setWizardStep("done")} />
         ) : (
-          <SystemCheckScreen onContinue={() => setPastSystemCheck(true)} />
+          <SystemCheckScreen onContinue={() => setWizardStep("binarySetup")} />
         )}
       </main>
       <LiveCommandMonitor />

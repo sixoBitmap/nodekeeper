@@ -2135,6 +2135,85 @@ location — a pre-existing bug that would have kept showing free space
 on the wrong drive after this picker landed. Now resolves the real
 path via `get_environment_data_root` first.
 
+## Setup wizard UI: binary download + verify screens (2026-09-25)
+
+The user asked to actually be able to use the app end to end -- start
+downloading real Bitcoin Core and ord binaries through the UI, not just
+via the CI-only example scripts. Explicitly asked me to decide, rather
+than ask again, whether to build the remaining setup-wizard pieces now
+or continue phase-by-phase; decided to build the download-and-verify
+screens now (finishing already-assigned Phase 2/4 scope) and defer the
+"point at an already-installed binary" and "offer to attach a running
+node" flows, since the former needs new verify-on-pick logic that
+doesn't exist yet and the user's immediate need is fresh downloads.
+
+**Extraction had to be pure Rust, not a shell-out.** The CI-only
+`examples/fetch_bitcoin_core.rs`/`fetch_ord.rs` scripts extract their
+downloaded archive by shelling out to `unzip`/`tar`, explicitly exempted
+from CLAUDE.md's "all commands through the executor" rule in their own
+doc comments ("this is a CI/dev-only build helper, never bundled or run
+by Nodekeeper itself"). The real setup wizard runs inside the shipped
+app, so that exemption doesn't apply, and shelling out would also
+assume `unzip`/`tar` are on `PATH` (not guaranteed, especially on
+Windows). Added `crates/nk-verify/src/extract.rs`: a small pure-Rust
+`.zip` (via the `zip` crate) / `.tar.gz` (via `flate2` + `tar`)
+extractor. Both crates sanitize entry paths against zip-slip/tar-slip
+internally; not the actual trust boundary here anyway -- the SHA-256 +
+signature check already ran before extraction ever starts.
+
+**New `download_verify_and_install_{bitcoin_core,ord}` entry points**
+in `nk_verify::bitcoin_core`/`nk_verify::ord` compose download + verify
++ extract + locate-the-real-binary + (on Unix) chmod +x into one
+fail-closed call, mirroring the example scripts' cache-reuse logic
+(if `<dest_dir>/extracted/<bin_subpath>` already exists, trust it
+without re-downloading -- it can only exist there from a prior
+successful run of this same function). Live-tested end to end
+(`download_verify_and_install_extracts_a_real_working_binary` in both
+`bitcoin_core.rs` and `ord.rs`): real network download, real
+verification, real pure-Rust extraction, confirms a real working binary
+file lands where expected -- the one thing the CI script's shell-out
+extraction never exercised. A second test confirms the cache-hit path
+does zero network calls (`on_progress` panics if invoked).
+
+**Deduplicated the pinned version strings and platform-asset tables.**
+`VERSION` and `platform_asset_and_bin_subpath()` previously existed
+only as private consts/fns duplicated inside each `examples/fetch_*.rs`
+script. Since these are exactly the kind of security-relevant pinned
+value DECISIONS.md already treats carefully ("never invent or recall
+pinned values from memory"), having two copies was a real
+source-of-truth risk now that a second consumer (the real wizard)
+needs the same values -- moved them into the library
+(`nk_verify::bitcoin_core`/`nk_verify::ord`, both now `pub`) and had
+the example scripts import them instead of hardcoding their own copies.
+
+**Progress reporting**: `download_with_sha256` gained a
+`_with_progress` sibling taking an `on_progress(downloaded, total)`
+callback, throttled to ~10 calls/sec (plus one guaranteed final call)
+so a progress bar doesn't flood the UI with an event per network chunk.
+Threaded through to a new `DownloadProgress` IPC struct emitted on
+`"setup-download-progress"`. Caught and fixed before committing: the
+struct initially had `#[serde(rename_all = "camelCase")]`, which no
+other IPC type in this codebase uses (`SystemCheck`, `ExecEvent`, etc.
+are all plain snake_case) -- removed it so the frontend's
+`downloaded_bytes`/`total_bytes` destructuring actually matches the
+wire format, instead of silently reading `undefined`.
+
+**Frontend**: new `BinarySetupScreen`, inserted into `App.tsx`'s flow
+between System Check and the main shell (`wizardStep`: "systemCheck" ->
+"binarySetup" -> "done"). Skips itself automatically once
+`bitcoind_path`/`ord_path` are both already set -- those settings keys
+themselves are the "already done" marker, no separate flag needed, same
+reasoning as the disclaimer-vs-system-check split already established.
+Subscribes to `setup-download-progress` via a dynamic `import("@tauri-
+apps/api/event")` in a try/catch (matches `store/monitor.ts`'s existing
+`exec-event` subscription pattern) so a failure to subscribe in the
+dev-browser preview degrades to "no live progress bar" rather than a
+crash -- the `invoke()` call still resolves with the final result.
+Live-verified in the browser dev preview: both binaries show "Not
+installed" -> click "Download & verify" -> "Verified" with their path,
+Continue enables only once both are done, and the flow lands on a
+working Dashboard with nav.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

@@ -10,9 +10,7 @@
 //! Usage: `cargo run --release -p nk-verify --example fetch_ord`
 #![allow(clippy::disallowed_methods)]
 
-use nk_verify::ord::download_and_verify_ord_asset;
-
-const VERSION: &str = "0.29.0";
+use nk_verify::ord::{download_and_verify_ord_asset, platform_asset_and_bin_subpath, VERSION};
 
 #[tokio::main]
 async fn main() {
@@ -23,7 +21,7 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let (asset_name, bin_subpath) = platform_asset_and_binary_path();
+    let (asset_name, bin_subpath) = platform_asset_and_bin_subpath();
     let base_url = format!("https://github.com/ordinals/ord/releases/download/{VERSION}");
     let dest_dir = std::path::Path::new("target").join(format!("nodekeeper-ord-{VERSION}"));
     std::fs::create_dir_all(&dest_dir)?;
@@ -67,33 +65,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("{}", dunce::canonicalize(&bin_path)?.display());
     Ok(())
-}
-
-/// ord's archive layout (confirmed live, DECISIONS.md Phase 4): a
-/// version-named folder one level down, like Bitcoin Core's, but with
-/// no `bin/` subfolder -- the binary sits directly in `ord-<version>/`.
-fn platform_asset_and_binary_path() -> (&'static str, &'static str) {
-    if cfg!(target_os = "windows") {
-        (
-            "ord-0.29.0-x86_64-pc-windows-msvc.zip",
-            if cfg!(windows) {
-                "ord-0.29.0\\ord.exe"
-            } else {
-                "ord-0.29.0/ord.exe"
-            },
-        )
-    } else if cfg!(target_os = "macos") {
-        if cfg!(target_arch = "aarch64") {
-            ("ord-0.29.0-aarch64-apple-darwin.tar.gz", "ord-0.29.0/ord")
-        } else {
-            ("ord-0.29.0-x86_64-apple-darwin.tar.gz", "ord-0.29.0/ord")
-        }
-    } else {
-        (
-            "ord-0.29.0-x86_64-unknown-linux-gnu.tar.gz",
-            "ord-0.29.0/ord",
-        )
-    }
 }
 
 fn extract(archive: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {

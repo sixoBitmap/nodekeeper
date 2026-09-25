@@ -13,9 +13,9 @@
 //! Nodekeeper itself.
 #![allow(clippy::disallowed_methods)]
 
-use nk_verify::bitcoin_core::download_and_verify_bitcoin_core_asset;
-
-const VERSION: &str = "31.1";
+use nk_verify::bitcoin_core::{
+    download_and_verify_bitcoin_core_asset, platform_asset_and_bin_subpath, VERSION,
+};
 
 #[tokio::main]
 async fn main() {
@@ -26,7 +26,7 @@ async fn main() {
 }
 
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let (asset_name, bin_subpath) = platform_asset_and_binary_path();
+    let (asset_name, bin_subpath) = platform_asset_and_bin_subpath();
     let base_url = format!("https://bitcoincore.org/bin/bitcoin-core-{VERSION}");
     // A fixed, repo-relative location (not the OS temp dir) so CI's
     // actions/cache path and this example's actual output directory are
@@ -91,36 +91,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // NK_TEST_BITCOIND.
     println!("{}", dunce::canonicalize(&bin_path)?.display());
     Ok(())
-}
-
-fn platform_asset_and_binary_path() -> (&'static str, &'static str) {
-    if cfg!(target_os = "windows") {
-        (
-            "bitcoin-31.1-win64.zip",
-            if cfg!(windows) {
-                "bitcoin-31.1\\bin\\bitcoind.exe"
-            } else {
-                "bitcoin-31.1/bin/bitcoind.exe"
-            },
-        )
-    } else if cfg!(target_os = "macos") {
-        if cfg!(target_arch = "aarch64") {
-            (
-                "bitcoin-31.1-arm64-apple-darwin.tar.gz",
-                "bitcoin-31.1/bin/bitcoind",
-            )
-        } else {
-            (
-                "bitcoin-31.1-x86_64-apple-darwin.tar.gz",
-                "bitcoin-31.1/bin/bitcoind",
-            )
-        }
-    } else {
-        (
-            "bitcoin-31.1-x86_64-linux-gnu.tar.gz",
-            "bitcoin-31.1/bin/bitcoind",
-        )
-    }
 }
 
 fn extract(archive: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {

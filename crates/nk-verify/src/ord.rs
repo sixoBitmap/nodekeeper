@@ -4,9 +4,46 @@
 //! 4), so Nodekeeper's own pinned hash *is* the verification here, not
 //! a supplement to a published one.
 
-use crate::download::{download_with_sha256, DownloadError};
-use std::path::Path;
+use crate::download::{download_with_sha256_and_progress, DownloadError};
+use crate::extract::{extract_archive, ExtractError};
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 use thiserror::Error;
+
+/// The pinned ord release Nodekeeper downloads and verifies -- single
+/// source of truth shared by `examples/fetch_ord.rs` (CI) and the real
+/// setup wizard (`src-tauri`), so there's exactly one place recording
+/// this security-relevant pinned value (DECISIONS.md Phase 4).
+pub const VERSION: &str = "0.29.0";
+
+/// ord's release asset filename and the path to `ord` inside its
+/// extracted archive, for the platform this binary was compiled for.
+/// ord's archive layout (confirmed live, DECISIONS.md Phase 4): a
+/// version-named folder one level down, like Bitcoin Core's, but with no
+/// `bin/` subfolder -- the binary sits directly in `ord-<version>/`.
+pub fn platform_asset_and_bin_subpath() -> (&'static str, &'static str) {
+    if cfg!(target_os = "windows") {
+        (
+            "ord-0.29.0-x86_64-pc-windows-msvc.zip",
+            if cfg!(windows) {
+                "ord-0.29.0\\ord.exe"
+            } else {
+                "ord-0.29.0/ord.exe"
+            },
+        )
+    } else if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") {
+            ("ord-0.29.0-aarch64-apple-darwin.tar.gz", "ord-0.29.0/ord")
+        } else {
+            ("ord-0.29.0-x86_64-apple-darwin.tar.gz", "ord-0.29.0/ord")
+        }
+    } else {
+        (
+            "ord-0.29.0-x86_64-unknown-linux-gnu.tar.gz",
+            "ord-0.29.0/ord",
+        )
+    }
+}
 
 /// Pinned per-platform SHA-256 hashes for ord releases Nodekeeper
 /// supports. Independently computed by downloading each asset and
@@ -71,6 +108,17 @@ pub async fn download_and_verify_ord_asset(
     asset_url: &str,
     dest_dir: &Path,
 ) -> Result<VerifiedOrdRelease, OrdVerificationError> {
+    download_and_verify_ord_asset_with_progress(version, asset_url, dest_dir, |_, _| {}).await
+}
+
+/// Same as `download_and_verify_ord_asset`, but reports progress (bytes
+/// downloaded so far, total if known) as the download proceeds.
+pub async fn download_and_verify_ord_asset_with_progress(
+    version: &str,
+    asset_url: &str,
+    dest_dir: &Path,
+    on_progress: impl FnMut(u64, Option<u64>) + Send,
+) -> Result<VerifiedOrdRelease, OrdVerificationError> {
     let filename = asset_url
         .rsplit('/')
         .next()
@@ -86,7 +134,7 @@ pub async fn download_and_verify_ord_asset(
     })?;
 
     let dest_path = dest_dir.join(&filename);
-    let actual = download_with_sha256(asset_url, &dest_path).await?;
+    let actual = download_with_sha256_and_progress(asset_url, &dest_path, on_progress).await?;
     verify_checksum(&filename, expected, &actual)?;
 
     Ok(VerifiedOrdRelease {
@@ -95,11 +143,93 @@ pub async fn download_and_verify_ord_asset(
     })
 }
 
+#[derive(Debug, Error)]
+pub enum InstallError {
+    #[error(transparent)]
+    Verification(#[from] OrdVerificationError),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("couldn't extract the downloaded archive: {0}")]
+    Extract(#[from] ExtractError),
+    #[error(
+        "expected to find ord at {0} after extraction, but it isn't there -- the archive's \
+         internal layout doesn't match what Nodekeeper expects for this platform"
+    )]
+    BinaryNotFoundAfterExtraction(PathBuf),
+}
+
+pub struct InstalledBinary {
+    pub binary_path: PathBuf,
+    pub sha256: String,
+}
+
+/// The setup wizard's actual entry point for ord: downloads the pinned
+/// release for this platform (docs/SPEC.md item 1), verifies its SHA-256
+/// against Nodekeeper's pinned hash, extracts it, and returns the path to
+/// the `ord` binary inside. Fails closed at every step. Mirrors
+/// `bitcoin_core::download_verify_and_install_bitcoin_core`'s
+/// cache-reuse behavior -- see that function's doc comment for the
+/// reasoning.
+pub async fn download_verify_and_install_ord(
+    dest_dir: &Path,
+    on_progress: impl FnMut(u64, Option<u64>) + Send,
+) -> Result<InstalledBinary, InstallError> {
+    let (asset_name, bin_subpath) = platform_asset_and_bin_subpath();
+    let extracted_dir = dest_dir.join("extracted");
+    let bin_path = extracted_dir.join(bin_subpath);
+
+    if bin_path.is_file() {
+        let bytes = std::fs::read(&bin_path)?;
+        return Ok(InstalledBinary {
+            binary_path: dunce::canonicalize(&bin_path)?,
+            sha256: hex_sha256(&bytes),
+        });
+    }
+
+    std::fs::create_dir_all(dest_dir)?;
+    let base_url = format!("https://github.com/ordinals/ord/releases/download/{VERSION}");
+    let verified = download_and_verify_ord_asset_with_progress(
+        VERSION,
+        &format!("{base_url}/{asset_name}"),
+        dest_dir,
+        on_progress,
+    )
+    .await?;
+
+    std::fs::create_dir_all(&extracted_dir)?;
+    extract_archive(&verified.path, &extracted_dir)?;
+
+    if !bin_path.is_file() {
+        return Err(InstallError::BinaryNotFoundAfterExtraction(bin_path));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&bin_path)?.permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        std::fs::set_permissions(&bin_path, perms)?;
+    }
+
+    Ok(InstalledBinary {
+        binary_path: dunce::canonicalize(&bin_path)?,
+        sha256: verified.sha256,
+    })
+}
+
 fn pinned_sha256_for(version: &str, filename: &str) -> Option<&'static str> {
     PINNED_ORD_HASHES
         .iter()
         .find(|(v, f, _)| *v == version && *f == filename)
         .map(|(_, _, hash)| *hash)
+}
+
+/// Only used to report a real digest back to the caller on a cache hit
+/// (see `download_verify_and_install_ord`) -- the actual trust decision
+/// already happened the first time this binary was extracted, not here.
+fn hex_sha256(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Pulled out of the async download flow so the mismatch case can be
@@ -189,5 +319,53 @@ mod tests {
             "abc123",
         );
         assert!(result.is_ok());
+    }
+
+    /// Real end-to-end coverage of the actual setup-wizard entry point:
+    /// download, verify, pure-Rust extract (no `unzip` shell-out), and
+    /// locate the real binary for whatever platform this test runs on.
+    #[tokio::test]
+    async fn download_verify_and_install_extracts_a_real_working_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut progress_calls = 0;
+        let mut last_progress = (0u64, None::<u64>);
+        let installed = download_verify_and_install_ord(dir.path(), |downloaded, total| {
+            progress_calls += 1;
+            last_progress = (downloaded, total);
+        })
+        .await
+        .expect("a real, untampered release must install");
+
+        assert!(installed.binary_path.is_file());
+        assert!(!installed.sha256.is_empty());
+        assert!(
+            progress_calls >= 1,
+            "on_progress must be called at least once"
+        );
+        assert!(
+            last_progress.0 > 0,
+            "the final progress call must report real bytes downloaded"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_verify_and_install_reuses_an_already_extracted_binary_without_a_network_call()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let (_, bin_subpath) = platform_asset_and_bin_subpath();
+        let bin_path = dir.path().join("extracted").join(bin_subpath);
+        std::fs::create_dir_all(bin_path.parent().unwrap()).unwrap();
+        std::fs::write(&bin_path, b"pretend this is already a verified binary").unwrap();
+
+        let installed = download_verify_and_install_ord(dir.path(), |_, _| {
+            panic!("on_progress must not be called on a cache hit -- that would mean it tried to download");
+        })
+        .await
+        .expect("an already-extracted binary should be reused, not re-downloaded");
+
+        assert_eq!(
+            installed.binary_path,
+            dunce::canonicalize(&bin_path).unwrap()
+        );
     }
 }

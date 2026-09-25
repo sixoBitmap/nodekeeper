@@ -19,16 +19,39 @@ pub enum DownloadError {
 /// of exactly what was written to disk (computed incrementally as each
 /// chunk arrives, not re-read afterward).
 pub async fn download_with_sha256(url: &str, dest: &Path) -> Result<String, DownloadError> {
+    download_with_sha256_and_progress(url, dest, |_, _| {}).await
+}
+
+/// Same as `download_with_sha256`, but calls `on_progress(bytes_so_far,
+/// total_bytes)` as the download proceeds -- `total_bytes` is `None` when
+/// the server didn't send a `Content-Length`. Throttled to at most ~10
+/// calls/second (plus one guaranteed final call with the finished byte
+/// count) so a setup-wizard progress bar doesn't flood the UI/IPC with an
+/// event per network chunk.
+pub async fn download_with_sha256_and_progress(
+    url: &str,
+    dest: &Path,
+    mut on_progress: impl FnMut(u64, Option<u64>) + Send,
+) -> Result<String, DownloadError> {
     let response = reqwest::get(url).await?.error_for_status()?;
+    let total = response.content_length();
     let mut stream = response.bytes_stream();
     let mut file = tokio::fs::File::create(dest).await?;
     let mut hasher = Sha256::new();
+    let mut downloaded: u64 = 0;
+    let mut last_emit = std::time::Instant::now();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         hasher.update(&chunk);
         file.write_all(&chunk).await?;
+        downloaded += chunk.len() as u64;
+        if last_emit.elapsed() >= std::time::Duration::from_millis(100) {
+            on_progress(downloaded, total);
+            last_emit = std::time::Instant::now();
+        }
     }
     file.flush().await?;
+    on_progress(downloaded, total);
     Ok(hex_encode(&hasher.finalize()))
 }
 

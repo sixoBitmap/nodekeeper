@@ -219,6 +219,16 @@ export function installDevTauriMockIfNeeded() {
         settings.set("environment_data_root", path);
         return undefined;
       }
+      case "download_and_verify_bitcoin_core": {
+        const path = "/dev-preview/bin/bitcoin-core-31.1/bitcoind";
+        settings.set("bitcoind_path", path);
+        return path;
+      }
+      case "download_and_verify_ord": {
+        const path = "/dev-preview/bin/ord-0.29.0/ord";
+        settings.set("ord_path", path);
+        return path;
+      }
       case "plugin:dialog|open":
         // The real native folder picker only works in the installed
         // app -- the dev preview stands in with a fixed fake path, same
