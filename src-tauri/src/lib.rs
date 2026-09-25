@@ -8,7 +8,9 @@ use nk_store::Store;
 use node_manager::{NodeManager, NodeManagerError};
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
-use tauri::Emitter;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager};
 use ts_rs::TS;
 use wallet_session::WalletSession;
 
@@ -2018,6 +2020,39 @@ fn delete_regtest_data_only(environment_data_root: &std::path::Path) -> std::io:
     Ok(())
 }
 
+/// The tray menu's "Quit" action: stops every running environment's
+/// ord and bitcoind gracefully (same timeouts `reset_test_lab` uses)
+/// before actually exiting, rather than leaving them as orphaned
+/// processes -- the window-hide-to-tray behavior above only works
+/// because something keeps them running intentionally; an explicit
+/// quit should still shut them down cleanly first.
+async fn stop_everything_and_exit(app: tauri::AppHandle) {
+    let node_manager = app.state::<NodeManager>();
+    for &chain in Chain::ALL.iter() {
+        if node_manager.is_ord_running(chain) {
+            let _ = node_manager
+                .stop_ord(chain, std::time::Duration::from_secs(30))
+                .await;
+        }
+        if node_manager.is_running(chain) {
+            let _ = node_manager
+                .stop(chain, std::time::Duration::from_secs(120))
+                .await;
+        }
+    }
+    app.exit(0);
+}
+
+/// Shows and focuses the main window -- shared by the tray icon's left
+/// click and its "Show Nodekeeper" menu item.
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     std::fs::create_dir_all(data_root()).expect("failed to create data directory");
@@ -2032,6 +2067,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(store.clone())
         .manage(executor.clone())
         .manage(node_manager)
@@ -2069,7 +2105,53 @@ pub fn run() {
                 }
             });
 
+            // docs/SPEC.md item 8: "Tray: minimize to tray while
+            // services run." The icon reuses the app's own configured
+            // window icon (`tauri.conf.json`'s `bundle.icon`) rather
+            // than shipping a second image just for this.
+            let show_i = MenuItem::with_id(app, "show", "Show Nodekeeper", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Quit Nodekeeper", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+            TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                })
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => show_main_window(app),
+                    "quit" => {
+                        tauri::async_runtime::spawn(stop_everything_and_exit(app.clone()));
+                    }
+                    _ => {}
+                })
+                .build(app)?;
+
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // docs/SPEC.md item 8: "minimize to tray while
+                // services run" -- with nothing running, a normal
+                // close (quit) is what the user expects; hiding to
+                // the tray with no background services to keep alive
+                // would just strand the app running invisibly for no
+                // reason. `any_running()` already covers every
+                // environment's bitcoind and ord (node_manager.rs).
+                let node_manager = window.state::<NodeManager>();
+                if node_manager.any_running() {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             system_check,

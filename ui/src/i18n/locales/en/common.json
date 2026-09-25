@@ -425,6 +425,20 @@
     "freeUnknown": "Unknown",
     "lowSpace": "Low space"
   },
+  "notifications": {
+    "nodeSynced": {
+      "title": "Node fully synced",
+      "body": "{{name}} has caught up to the tip of the chain."
+    },
+    "ordReady": {
+      "title": "ord is ready",
+      "body": "{{name}}'s ord index has caught up to the node."
+    },
+    "diskLow": {
+      "title": "Disk space is low",
+      "body": "{{name}} has less than 5 GB free -- Bitcoin Core will shut down if it runs out."
+    }
+  },
   "logViewer": {
     "searchPlaceholder": "Search debug.log",
     "loadOlder": "Load older",

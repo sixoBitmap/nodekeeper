@@ -6,7 +6,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 // docs/SPEC.md item 2: "warn well before free space gets low (Bitcoin
 // Core shuts down when the disk is nearly full)." A conservative fixed
 // threshold until settings makes this configurable per environment.
-const LOW_SPACE_WARNING_BYTES = 5 * 1024 ** 3; // 5 GiB
+export const LOW_SPACE_WARNING_BYTES = 5 * 1024 ** 3; // 5 GiB
 
 export function DiskMonitor({ disk }: { disk: DiskUsage }) {
   const { t } = useTranslation();

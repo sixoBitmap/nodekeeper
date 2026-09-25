@@ -1694,12 +1694,48 @@ Frontend + backend — Regtest Test Lab (docs/SPEC.md item 11)
 
 Frontend + backend — Notifications, tray, prevent-sleep (docs/SPEC.md
 item 8's Phase-8 sub-parts)
-- [ ] Notifications: "node fully synced", "ord ready", disk-space
-      warnings -- needs a Tauri notification plugin, VERIFY the exact
-      Tauri 2 API/permissions needed
-- [ ] Tray: minimize to tray while services run (installed mode only --
-      VERIFY how this interacts with portable mode, not built until
-      Phase 9)
+- [x] Notifications: "node fully synced", "ord ready", disk-space
+      warnings. VERIFY: the official plugin is `tauri-plugin-notification`
+      (singular -- several unofficial `-notifications` plural forks
+      exist and are not this), v2.4.0, confirmed compiling against this
+      workspace's `tauri = "2"`. `NotificationWatcher` (mounted
+      unconditionally in `App.tsx`) polls all 4 environments on its own
+      15s interval, independent of whichever screen is open, and fires
+      only on an observed transition this session (never just because
+      an environment happens to already be synced/caught-up the first
+      time it polls). Disk-space threshold reuses `DiskMonitor`'s
+      existing 5 GiB constant rather than a second magic number.
+- [x] Tray: minimize to tray while services run (installed mode). Cargo
+      feature `tray-icon` added to the `tauri` dependency; VERIFY:
+      current API is `TrayIconBuilder`/`Menu`/`MenuItem` in
+      `tauri::tray`/`tauri::menu`, `Builder::on_window_event`'s closure
+      takes `(&Window<R>, &WindowEvent)` (two args, not one) in the
+      current release, `WindowEvent::CloseRequested { api, .. }` +
+      `api.prevent_close()` to intercept the close button. Closing the
+      window hides it instead of quitting only when
+      `NodeManager::any_running()` is true (already existed, already
+      tested -- checks every environment's bitcoind and ord at once);
+      with nothing running, a normal close still quits, matching the
+      spec's "while services run." A tray "Quit Nodekeeper" menu item
+      stops every running environment gracefully (same timeouts
+      `reset_test_lab` uses) before actually exiting, so quitting from
+      the tray can't orphan a bitcoind/ord process. Portable-mode
+      interaction not yet relevant -- portable mode itself doesn't
+      exist until Phase 9.
+      **Verification limits, noted honestly**: a tray icon lives
+      outside any webview, so none of this session's browser-based
+      tools can click it or see it render. Verified what's actually
+      checkable: `cargo build`/`cargo check` succeed, `cargo test
+      --workspace` passes (including `any_running`'s existing real-
+      process tests), and a real build of the debug binary launches
+      and stays running for several seconds with no panic/log output
+      (proving `TrayIconBuilder::build(app)?` and the menu/window-event
+      wiring don't error at startup) before being killed. The tray
+      icon's actual appearance, click behavior, and the "hide on
+      close, show on tray-click, quit stops everything" end-to-end
+      flow still need a real manual check by the project owner
+      (`just dev` or `just build-app`) the next time this runs outside
+      this session.
 - [ ] Optional "prevent sleep during sync" setting -- VERIFY the
       cross-platform mechanism (Tauri plugin vs. platform-specific
       calls)

@@ -2954,6 +2954,101 @@ review instead, since they reuse the exact same real IPC commands
 already proven correct elsewhere (`useDashboardStatus`, the Live
 Command Monitor's own history fetch).
 
+### Notifications (Phase 8, 2026-09-25)
+
+**VERIFY: `tauri-plugin-notification` v2 API** (docs.rs, the plugin's
+GitHub README, both fetched live). Official plugin is
+`tauri-plugin-notification` (singular) from `tauri-apps/plugins-workspace`
+-- several unofficial `tauri-plugin-notifications` (plural) forks exist
+on GitHub/crates.io and are NOT this. Cargo: `tauri-plugin-notification =
+"2"` (resolved to 2.4.0, requires `tauri ^2.10` -- this workspace already
+pins `tauri = "2"`, compiled clean). Register via
+`.plugin(tauri_plugin_notification::init())`. Capability:
+`"notification:default"` added to `src-tauri/capabilities/default.json`.
+Frontend: `@tauri-apps/plugin-notification` (npm), permission via
+`isPermissionGranted()`/`requestPermission()`, sending via
+`sendNotification({ title, body })`.
+
+**Architecture: a dedicated background watcher, not the existing status
+hooks.** `useDashboardStatus`/`useOrdStatus` (used by
+Dashboard/Wallet/Overview) already poll `node_status`/`ord_status`, but
+only while their owning screen is mounted -- a node finishing sync while
+the user is on the Wallet screen would never trigger anything if
+notifications rode on those hooks. `NotificationWatcher` is mounted
+unconditionally in `App.tsx` (alongside `WalkthroughBanner`/
+`LiveCommandMonitor`) and polls every environment directly via `invoke`,
+independent of the current screen. Deliberately a slower, dedicated
+15s interval rather than reusing those hooks' 3s cadence -- a sync-
+completion notification doesn't need second-level precision, and
+polling full status for all 4 environments forever in the background
+(not just while a status screen happens to be open) is a real
+continuous cost not worth paying at 3s granularity.
+
+Each of the three notifications only fires on an observed *transition*
+this session (sync/index toggling from in-progress to done, disk space
+crossing under the existing `DiskMonitor` component's 5 GiB threshold,
+exported as `LOW_SPACE_WARNING_BYTES` and reused here rather than a
+second magic number) -- never just because a poll happens to see an
+already-settled state, which would notify on every app launch for an
+environment that finished syncing days ago.
+
+### Tray (Phase 8, 2026-09-25)
+
+**VERIFY: Tauri 2 tray/menu/close-intercept API**, all confirmed
+against docs.rs for `tauri` 2.11.6 (the version this workspace
+resolved) rather than assumed from general Tauri familiarity, since
+intermediate Tauri 2 releases changed some of these signatures:
+- Cargo: `tauri = { version = "2", features = ["tray-icon"] }` --
+  without the feature, `tauri::tray` doesn't exist at all (confirmed
+  the hard way: an earlier attempt to compile before adding the
+  feature failed with `E0432 unresolved import`, caught by a stale
+  background `cargo clippy` run started before the Cargo.toml edit
+  landed -- a race in this session's own tooling, not a real bug, but
+  worth its own note below).
+- `TrayIconBuilder::new().icon(...).menu(&menu).on_tray_icon_event(...)
+  .on_menu_event(...).build(app)?`, icon reused via
+  `app.default_window_icon().unwrap().clone()` rather than shipping a
+  second image.
+- `tauri::Builder::on_window_event`'s closure signature in the current
+  release is `Fn(&Window<R>, &WindowEvent)` -- **two** positional
+  arguments. Several code examples findable via search (including ones
+  Tauri's own GitHub discussions still surface) use an older single-
+  argument `|event| match event.event() { ... }` shape from an earlier
+  Tauri 2 pre-release; using that form here would not compile against
+  2.11.6.
+- `WindowEvent::CloseRequested { api, .. }` + `api.prevent_close()`
+  (`CloseRequestApi::prevent_close(&self)`) intercepts the close
+  button; combined with `window.hide()`.
+
+**Reused `NodeManager::any_running()` instead of writing a new
+predicate.** First pass wrote a standalone `should_hide_to_tray`
+function duplicating exactly what `any_running()` (node_manager.rs)
+already does -- checks every environment's bitcoind *and* ord in one
+call, with its own existing test
+(`any_running_is_false_on_a_fresh_manager`) plus indirect coverage from
+`starts_reports_status_and_stops_a_real_node`. Deleted the duplicate
+once found by re-reading `node_manager.rs` rather than shipping a
+second implementation of the same check.
+
+**Quit gracefully stops everything first.** Once the window-close
+button hides to the tray instead of quitting, the only way to actually
+exit is the tray's "Quit Nodekeeper" menu item -- so unlike a window
+close (which previously would've simply killed the whole process,
+orphaning any spawned bitcoind/ord), Quit now stops every running
+environment's ord then bitcoind with the same graceful timeouts
+`reset_test_lab` already uses (30s/120s) before calling `app.exit(0)`.
+
+**Background-task race while editing Cargo.toml.** A `cargo clippy`
+run was already in flight when the `tray-icon` feature was added to
+Cargo.toml; that specific invocation had already resolved its
+dependency/feature graph before the edit landed, so it failed on the
+now-current `lib.rs`'s `use tauri::tray::...` with the feature not yet
+compiled in. Confirmed stale (not a real bug) by re-running `cargo
+check`/`clippy` fresh after all edits finished, both clean. Lesson
+applied for the rest of this session: don't edit `Cargo.toml`/`lib.rs`
+again while a background cargo invocation covering them is still
+running.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

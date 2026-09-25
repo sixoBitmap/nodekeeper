@@ -13,6 +13,7 @@ import { FirstRunDisclaimer } from "@/components/FirstRunDisclaimer";
 import { IndexOptionsScreen } from "@/components/IndexOptionsScreen";
 import { InscribeStudioScreen } from "@/components/InscribeStudioScreen";
 import { LiveCommandMonitor } from "@/components/LiveCommandMonitor";
+import { NotificationWatcher } from "@/components/NotificationWatcher";
 import { OverviewScreen } from "@/components/OverviewScreen";
 import { ScriptsScreen } from "@/components/ScriptsScreen";
 import { SystemCheckScreen } from "@/components/SystemCheckScreen";
@@ -148,6 +149,7 @@ function App() {
           </Button>
         </div>
       </header>
+      {wizardStep === "done" && <NotificationWatcher environments={environments} />}
       {wizardStep === "done" && <WalkthroughBanner onNavigate={setScreen} />}
       <main className="flex-1 overflow-y-auto">
         {wizardStep === "done" && screen === "overview" ? (
