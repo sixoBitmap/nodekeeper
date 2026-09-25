@@ -1476,17 +1476,38 @@ Frontend — Console UI
 - [ ] Saved command templates with fill-in fields
 - [x] Add to the main nav
 
-Backend + frontend — Script runner
-- [ ] Detect Python/Node on the machine (bash unavailable on stock
-      Windows -- say so); scripts run with `NKP_NETWORK`, RPC URL,
-      cookie path, and ord server URL as env/args, through the executor
-- [ ] Environment must be chosen before running; "regtest only" is
-      enforced by the runner reading the script's own declared
-      restriction, not trusted from the script's content
+Backend — Script runner foundation
+- [x] New `nk-scripts` crate: `detect_interpreters` (real probe --
+      spawns `<name> --version` through the executor and checks
+      `exit_code == 0`, not a PATH-presence check), `script_env_vars`
+      (the four `NKP_*` variables), `run_script` (spawns through the
+      executor with those env vars, `CommandSource::Script`). Found and
+      handled live: on Windows, `python`/`python3` resolve on PATH but
+      can be only the Microsoft Store app-execution-alias stub (prints
+      "Python was not found... install from the Microsoft Store", exits
+      49) -- a presence check alone would have been a false positive.
+      Same shape as the already-known `bash` WSL-stub gotcha docs/
+      SPEC.md calls out; both are handled for free by the same
+      "actually run it and check the exit code" probe. Added `env_vars`
+      to `nk_exec::CommandSpec` (threaded through to the real child
+      process's environment) and a new `CommandSource::Script` so
+      scripts show up distinctly in the Live Command Monitor. 6 tests
+      total (2 pure, 2 real end-to-end -- including one that writes a
+      real script and confirms an env var actually arrives in the
+      child process, not just that the field was set). See
+      DECISIONS.md "Phase 7 — script runner foundation" for the full
+      write-up.
+- [ ] `run_script` Tauri command wiring: choose environment before
+      running, "regtest only" enforced by a flag Nodekeeper itself
+      stores per script (never read from the script file's own
+      content, which a user could edit to lie about it)
 - [ ] Import/create warning: scripts are trusted code with full node
       control
-- [ ] Live output streaming (reuse the executor's existing event
-      broadcast, same as every other live-output surface)
+- [ ] Script library UI: list, import, the mandatory warning, run
+      button, live output (the executor's existing event broadcast
+      already streams script output to the Live Command Monitor for
+      free once `run_script` is wired to a Tauri command -- this item
+      is the dedicated Scripts screen on top of that)
 - [ ] 3 example scripts: export inscriptions to CSV, alert when the
       node falls behind, daily disk-usage report
 

@@ -37,6 +37,11 @@ pub enum CommandSource {
     /// because it's not an `ord` subprocess invocation at all -- same
     /// reasoning as `Rpc` being distinct from `BitcoinCli`.
     OrdApi,
+    /// A user script (bash/python/js) run through the script runner
+    /// (docs/SPEC.md item 6) -- distinct from every other source since
+    /// it's arbitrary user/imported code, not a Nodekeeper-issued
+    /// ord/bitcoin-cli/RPC call.
+    Script,
 }
 
 impl CommandSource {
@@ -51,6 +56,7 @@ impl CommandSource {
             Self::BitcoinCli => "bitcoincli",
             Self::Rpc => "rpc",
             Self::OrdApi => "ordapi",
+            Self::Script => "script",
         }
     }
 }
@@ -106,6 +112,12 @@ pub struct CommandSpec {
     /// can be a meaningful one-off check in one context and repetitive
     /// polling noise in another.
     pub background: bool,
+    /// Extra environment variables for the child process, on top of
+    /// whatever it inherits from Nodekeeper's own process. Added for
+    /// the script runner (docs/SPEC.md item 6: scripts "receive the RPC
+    /// URL, cookie path, ord server URL, and NKP_NETWORK"), empty for
+    /// every ord/bitcoin-cli/RPC command, which need no extra env.
+    pub env_vars: Vec<(String, String)>,
 }
 
 /// Tagging info for `Executor::record` — the same shape as `CommandSpec`
@@ -186,6 +198,7 @@ mod tests {
             CommandSource::BitcoinCli,
             CommandSource::Rpc,
             CommandSource::OrdApi,
+            CommandSource::Script,
         ] {
             let via_serde = serde_json::to_value(source).unwrap();
             assert_eq!(via_serde.as_str().unwrap(), source.as_str());

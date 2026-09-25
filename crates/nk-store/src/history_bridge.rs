@@ -107,6 +107,7 @@ mod tests {
             sensitivity: Sensitivity::Normal,
             redact: vec![],
             background: false,
+            env_vars: vec![],
         }
     }
 

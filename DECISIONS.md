@@ -2464,6 +2464,42 @@ populates `key` properly) and verified the actual submit flow via the
 Run button instead -- this is a testing-tool artifact, not something to
 chase further in the app's own code.
 
+## Phase 7 — script runner foundation: interpreter detection has to be a real probe (2026-09-25)
+
+Building `nk-scripts` (interpreter detection, the standard `NKP_*` env
+vars, running a script through the executor) surfaced a real, live-
+confirmed gap in the obvious approach: **checking whether `python`/
+`python3`/`bash` are "on PATH" is not the same as checking whether they
+work.**
+
+On the actual Windows machine this was built on: `python3 --version`
+and `python --version` both resolve (via `where`) to real files under
+`...\WindowsApps\`, and both actually run without error -- but what
+they print is `"Python was not found; run without arguments to install
+from the Microsoft Store, or disable this shortcut from Settings > Apps
+> Advanced app settings > App execution aliases."`, exit code **49**,
+not 0. These are Windows' own app-execution-alias stubs, not Python.
+`bash` has the same shape for a different reason (already suspected
+from docs/SPEC.md's explicit "bash is unavailable on stock Windows, so
+say so," confirmed live): stock Windows ships a real
+`System32\bash.exe` that exists specifically to prompt installing WSL,
+and running it prints a distinct `WSL ... ERROR: CreateProcessCommon`
+message and exits 1, not 0, when WSL isn't installed.
+
+Both cases are real files, resolvable on PATH, spawnable without an OS
+"file not found" error -- a presence check (`which`/`where`, or even a
+successful `spawn()`) would have reported a false positive for both.
+`detect_interpreters` instead actually runs `<name> --version` through
+the executor and checks `exit_code == Some(0)`, which handles both
+cases correctly for free, with no special-case string matching needed.
+
+This also forced the test suite itself to stop assuming *which*
+interpreters are present (an earlier version hard-asserted Python was
+found, which failed immediately on this exact machine) -- tests now
+assert "at least one real interpreter was found" and run the actual
+env-var-passing test against whichever one that is, since the whole
+point of this module is that availability varies by machine.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

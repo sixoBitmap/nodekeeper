@@ -60,6 +60,7 @@ impl Executor {
 
         let mut child = Command::new(&spec.program)
             .args(&spec.args)
+            .envs(spec.env_vars.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -247,6 +248,7 @@ mod tests {
             sensitivity: Sensitivity::Normal,
             redact: vec![],
             background: false,
+            env_vars: vec![],
         }
     }
 
@@ -347,6 +349,7 @@ mod tests {
             sensitivity: Sensitivity::Normal,
             redact: vec![],
             background: false,
+            env_vars: vec![],
         };
         let outcome = executor.execute(spec).await.unwrap();
         assert!(String::from_utf8_lossy(&outcome.stdout).contains("secret-mnemonic-word"));

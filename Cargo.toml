@@ -8,6 +8,7 @@ members = [
     "crates/nk-rpc",
     "crates/nk-ord",
     "crates/nk-secrets",
+    "crates/nk-scripts",
     "crates/nk-store",
     "crates/nk-testkit",
     "src-tauri",
@@ -27,6 +28,7 @@ nk-verify = { path = "crates/nk-verify" }
 nk-rpc = { path = "crates/nk-rpc" }
 nk-ord = { path = "crates/nk-ord" }
 nk-secrets = { path = "crates/nk-secrets" }
+nk-scripts = { path = "crates/nk-scripts" }
 nk-store = { path = "crates/nk-store" }
 nk-testkit = { path = "crates/nk-testkit" }
 

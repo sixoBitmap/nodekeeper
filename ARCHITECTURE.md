@@ -14,6 +14,7 @@ crates/nk-verify   downloads, SHA-256, PGP verification, pinned values
 crates/nk-rpc      Bitcoin Core JSON-RPC client (calls go through nk-exec)
 crates/nk-ord      ord CLI and ord server API wrappers
 crates/nk-secrets  keychain, encrypted secrets file, zeroization
+crates/nk-scripts  script runner: interpreter detection, env vars, execution
 crates/nk-store    SQLite and migrations
 crates/nk-testkit  regtest fixture for integration tests
 src-tauri/         thin Tauri command layer only (no business logic)

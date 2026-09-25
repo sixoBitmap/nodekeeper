@@ -504,6 +504,7 @@ async fn run(
             sensitivity,
             redact: vec![],
             background: false,
+            env_vars: vec![],
         })
         .await?;
 
