@@ -227,7 +227,16 @@
     "cancel": "Cancel",
     "done": "Inscribed",
     "doneId": "Inscription ID",
-    "inscribeAnother": "Inscribe another"
+    "inscribeAnother": "Inscribe another",
+    "modeSingle": "Single",
+    "modeBatch": "Batch",
+    "batchDropZone": "Drag and drop files here to add them to the batch",
+    "batchCount": "Inscriptions",
+    "batchDone": "{{count}} inscriptions created",
+    "viewYaml": "View batch YAML",
+    "exportYaml": "Export YAML",
+    "batchConfirmTitle": "Create batch inscriptions",
+    "batchConfirmDescription": "Inscribe {{count}} files for a total fee of {{fee}}"
   },
   "diskMonitor": {
     "title": "Disk usage",

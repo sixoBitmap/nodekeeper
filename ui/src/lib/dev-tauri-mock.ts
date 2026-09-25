@@ -406,6 +406,41 @@ export function installDevTauriMockIfNeeded() {
           fee: 500,
         };
       }
+      case "wallet_inscribe_batch_dry_run": {
+        const { filePaths } = args as { filePaths: string[] };
+        return filePaths.map((_, i) => ({
+          id: `mockbatchinscriptionidmockbatchinscriptionidmockbatchi${i}`,
+          location: `mockbatchtxidmockbatchtxidmockbatchtxidmockbatchtxidmockbatchtx:${i}:0`,
+          fee: 500,
+        }));
+      }
+      case "wallet_inscribe_batch": {
+        const { chain, filePaths, passphrase, remember } = args as {
+          chain: Chain;
+          filePaths: string[];
+          passphrase: string | null;
+          remember: boolean;
+        };
+        const effectivePassphrase = passphrase ?? rememberedPassphrases.get(chain);
+        if (!effectivePassphrase) {
+          return Promise.reject({
+            code: "WALLET_LOCKED",
+            message: "This wallet is locked; enter its passphrase to continue.",
+          });
+        }
+        if (effectivePassphrase !== MOCK_WALLET_PASSPHRASE) {
+          return Promise.reject({
+            code: null,
+            message: `rpc error -14: the wallet passphrase entered was incorrect (dev mock -- try "${MOCK_WALLET_PASSPHRASE}")`,
+          });
+        }
+        if (remember) rememberedPassphrases.set(chain, effectivePassphrase);
+        return filePaths.map((_, i) => ({
+          id: `mockbatchinscriptionidmockbatchinscriptionidmockbatchi${i}`,
+          location: `mockbatchtxidmockbatchtxidmockbatchtxidmockbatchtxidmockbatchtx:${i}:0`,
+          fee: 500,
+        }));
+      }
       default:
         throw new Error(`dev-tauri-mock: no mock for IPC command "${cmd}"`);
     }

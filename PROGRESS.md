@@ -1203,8 +1203,30 @@ Frontend — Inscribe studio — **single inscribe done; batch UI and reinscribe
       (extra ack + passphrase step) and regtest (neither).
 - [x] Advanced options (hidden by default): postage, parent inscription
       ID.
-- [ ] Visual batch-YAML builder: add/remove files, export the generated
-      YAML, no reinscribe option per entry (per the VERIFY above).
+- [x] Visual batch-YAML builder (`BatchInscribeForm`): drag-and-drop
+      (or single-click in the dev preview) adds files, de-duplicated;
+      each has its own Remove button. "Visual"/"edit" read as building
+      the batch by adding/removing files, not by hand-editing raw YAML
+      that then gets shelled out to ord -- the actual command is always
+      built server-side from this same typed file list, matching why
+      the backend never accepted free-text YAML in the first place
+      (DECISIONS.md). A collapsible "View batch YAML" section shows a
+      client-side mirror of that exact data (same `mode: separate-
+      outputs` / `file:`-per-entry shape VERIFIED live against real
+      ord) purely for transparency, with an "Export YAML" button (a
+      client-side Blob download, same mechanism as the Live Command
+      Monitor's own export). No reinscribe option per entry, no
+      parent/postage -- ord 0.29.0's batch schema doesn't support the
+      former at all (VERIFIED live) and `BatchInscriptionEntry` isn't
+      wired for the latter yet. Shares `SingleInscribeForm`'s fee-guard
+      thresholds and `ConfirmDialog` usage; both now share a new
+      `useDragDropFiles` hook (extracted rather than duplicating the
+      hard-won drag-drop-in-a-browser-preview handling, DECISIONS.md).
+      Verified live in the browser: 3 placeholder files added, YAML
+      preview matches exactly, dry-run shows the right count/fee,
+      mainnet confirmation + passphrase flow, success screen lists all
+      3 created inscriptions. Single mode re-verified working
+      unchanged after being extracted into its own component.
 - [ ] Reinscribe mode: pick an owned inscription from the gallery, show
       the sat's full inscription history in order (or the Foundation F
       explanation if `--index-sats` is off), permanence/visibility
