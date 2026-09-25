@@ -1840,14 +1840,23 @@ Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
       immediately (not lagging a poll tick behind), and starting
       something again correctly hides the confirmation and brings the
       button back.
-      **Still open**: warning if the window is closed while services
-      are running, and its interaction with Phase 8's Tray "hide
-      instead of quit while anything runs" behavior -- portable mode
-      likely shouldn't hide-to-tray and keep a drive's bitcoind running
-      in the background the way installed mode does, since the drive
-      itself could be unplugged out from under it. Needs a decision
-      before Tray's existing behavior is left as-is for portable mode
-      too; tracked as a separate follow-up.
+      **Follow-up done**: the window-close warning and its Tray
+      interaction. VERIFY: `tauri-plugin-dialog`'s `MessageDialogBuilder
+      ::show` (async, callback-based -- its `blocking_show` explicitly
+      can't run on the main thread, so this is the one usable directly
+      inside `on_window_event`'s closure) with `MessageDialogButtons::
+      YesNo`. Portable mode's `CloseRequested` handler now branches:
+      installed mode keeps Phase 8's hide-to-tray behavior unchanged;
+      portable mode instead shows a native Yes/No warning ("closing now
+      will stop them so it's safe to unplug") and, on confirmation,
+      runs the same graceful stop-everything path as Safe Eject before
+      exiting -- never silently hides to the tray and leaves bitcoind
+      holding files open on a drive that could be unplugged. Compiled
+      and passed the full workspace test suite; the dialog's actual
+      on-screen appearance/click behavior falls under this phase's
+      standing Windows-only verification limit (compiles + a real
+      headless launch with no panic, same as Tray in Phase 8 -- not
+      click-tested, since it's outside any webview).
 - [ ] Master password unlock at launch, for the encrypted secrets file
       (Foundation E -- `nk-secrets`, built Phase 5, needs a launch-time
       UI flow wired to it for portable mode specifically)

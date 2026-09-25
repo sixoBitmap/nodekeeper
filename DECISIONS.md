@@ -3165,6 +3165,29 @@ enough, no need to wait for the next poll to agree. Live-verified both
 the immediate success message and the message correctly disappearing
 again once a service was restarted.
 
+### Window-close warning in portable mode (Phase 9, 2026-09-25)
+
+**VERIFY: `tauri-plugin-dialog`'s blocking dialog can't run on the main
+thread.** `MessageDialogBuilder::blocking_show()`'s own docs state it
+"cannot be executed on the main thread as it will freeze your
+application" (docs.rs) -- and `on_window_event`'s closure runs on the
+main thread, so calling it there directly was never an option. Used
+`show(callback)` instead (async under the hood, takes an
+`FnOnce(bool)`), which is exactly what's needed: `api.prevent_close()`
+fires synchronously first, then the dialog's callback decides whether
+to actually stop everything and exit once the user responds.
+
+**Portable mode branches away from Phase 8's hide-to-tray behavior
+entirely**, rather than adding a warning on top of it. Installed mode
+keeps hiding to the tray on close while anything runs (unchanged).
+Portable mode shows a native Yes/No warning instead and, on
+confirmation, runs the same `stop_every_running_environment` path
+`safe_eject` uses before exiting -- resolves the interaction flagged
+as open when Safe Eject was built: a drive's bitcoind should never be
+left running in the background the way installed mode's tray
+deliberately keeps it running, since the drive itself could be
+unplugged at any moment.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

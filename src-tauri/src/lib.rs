@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::DialogExt;
 use ts_rs::TS;
 use wallet_session::WalletSession;
 
@@ -2272,15 +2273,38 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // docs/SPEC.md item 8: "minimize to tray while
-                // services run" -- with nothing running, a normal
-                // close (quit) is what the user expects; hiding to
-                // the tray with no background services to keep alive
-                // would just strand the app running invisibly for no
-                // reason. `any_running()` already covers every
-                // environment's bitcoind and ord (node_manager.rs).
                 let node_manager = window.state::<NodeManager>();
-                if node_manager.any_running() {
+                if !node_manager.any_running() {
+                    // Nothing running: a normal close (quit) is what
+                    // the user expects, same in both modes.
+                    return;
+                }
+                if is_portable_install() {
+                    // docs/SPEC.md item 12: unlike installed mode,
+                    // portable mode must not silently hide to the tray
+                    // and keep bitcoind/ord holding files open on a
+                    // drive that could be unplugged at any moment --
+                    // warn and offer to stop everything first instead.
+                    api.prevent_close();
+                    let app = window.app_handle().clone();
+                    window
+                        .dialog()
+                        .message(
+                            "Bitcoin Core or ord is still running. Closing now will stop \
+                             them so it's safe to unplug this drive. Continue?",
+                        )
+                        .title("Services are still running")
+                        .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
+                        .buttons(tauri_plugin_dialog::MessageDialogButtons::YesNo)
+                        .show(move |confirmed| {
+                            if confirmed {
+                                tauri::async_runtime::spawn(stop_everything_and_exit(app));
+                            }
+                        });
+                } else {
+                    // docs/SPEC.md item 8: "minimize to tray while
+                    // services run" -- installed mode keeps everything
+                    // running in the background instead.
                     let _ = window.hide();
                     api.prevent_close();
                 }
