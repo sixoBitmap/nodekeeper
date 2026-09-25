@@ -1550,7 +1550,82 @@ Backend — Script runner foundation
 
 ## Phase 8 — Multi-environment UI and Test Lab
 
-Not started. See docs/SPEC.md Phase 8.
+In progress. Tasks (one at a time: implement -> test -> quality gate ->
+commit -> tick). docs/SPEC.md's "Build:" line for this phase covers
+two of item 10/11's full scope plus three sub-parts of item 8
+(notifications, tray, prevent-sleep) -- item 8's other sub-parts
+(plain-language errors, diagnostics export, accessibility) already
+shipped earlier or belong to a later phase per its own summary line.
+
+Frontend — Multi-environment UI (docs/SPEC.md item 10)
+- [ ] `OverviewScreen`: one card per environment (reusing
+      `useDashboardStatus`/`useOrdStatus` per chain -- no new backend
+      needed, both hooks already poll+start/stop/restart), each
+      showing bitcoind + ord status side by side; a "stop all" button
+      that stops everything and silently ignores "wasn't running"
+      errors, since it isn't the caller's job to know in advance what
+      is or isn't up
+- [ ] Combined resource summary: aggregate `NodeStatus.disk.
+      used_by_data_bytes` across currently-running environments
+      (already available per-environment, no new command) +
+      `system_check`'s total/available RAM; warn when several heavy
+      environments are running at once and available RAM is low.
+      Scoped down from the spec's literal "combined RAM... across
+      running environments": precise per-process RAM attribution needs
+      new backend instrumentation (tracking each spawned bitcoind/ord
+      PID's actual memory via `sysinfo`) not built yet -- this pass
+      uses system-wide available RAM plus a running-environment count
+      as the signal instead, tracked as a follow-up for the precise
+      version
+- [ ] Full switcher: add a live running/stopped status badge per
+      environment to `EnvironmentSwitcher`'s dropdown (today it only
+      shows the color dot + name, no status)
+- [ ] Add Overview to the main nav
+
+Frontend + backend — Regtest Test Lab (docs/SPEC.md item 11)
+- [ ] VERIFY: does ord 0.29.0 have a built-in regtest environment
+      command (e.g. `ord env`)? If so, decide whether to use it
+      internally or keep the app's own controls only (spec: "the app's
+      own controls must still work" either way)
+- [ ] One-click setup: start regtest bitcoind + ord, create a test
+      wallet, mine 101 blocks to it (100-confirmation coinbase
+      maturity) so its coins are spendable immediately
+- [ ] "Mine blocks" control (number field, default 1, `generatetoaddress`
+      against the current wallet) usable standalone
+- [ ] "Get test coins" button (mine blocks to the current wallet)
+- [ ] Post-action "Mine 1 block to confirm" offer after a send/inscribe
+      on regtest, plus an optional auto-mine toggle
+- [ ] 5 guided walkthroughs with checkpoints, opening the Live Command
+      Monitor automatically: (a) create wallet -> receive -> mine ->
+      check balance, (b) inscribe -> mine -> see it in the gallery,
+      (c) reinscribe -> mine -> see both on the sat, (d) send an
+      inscription to a second test wallet -> mine -> confirm arrival,
+      (e) run a console command and an example script
+- [ ] "Reset Test Lab": stop regtest services gracefully, delete only
+      the regtest data directories after confirmation, start fresh --
+      the docs/SPEC.md [CI] acceptance criterion ("Reset Test Lab
+      deletes only regtest data") needs a real test proving other
+      environments' directories are untouched
+- [ ] Wire the setup wizard's "Try it safely" (currently doesn't exist
+      as a real link) to open the full Test Lab
+
+Frontend + backend — Notifications, tray, prevent-sleep (docs/SPEC.md
+item 8's Phase-8 sub-parts)
+- [ ] Notifications: "node fully synced", "ord ready", disk-space
+      warnings -- needs a Tauri notification plugin, VERIFY the exact
+      Tauri 2 API/permissions needed
+- [ ] Tray: minimize to tray while services run (installed mode only --
+      VERIFY how this interacts with portable mode, not built until
+      Phase 9)
+- [ ] Optional "prevent sleep during sync" setting -- VERIFY the
+      cross-platform mechanism (Tauri plugin vs. platform-specific
+      calls)
+
+Security self-review at the end of this phase isn't explicitly
+required by CLAUDE.md's "Phases 2, 5, and 7" list, but Test Lab's
+"delete only regtest data" destructive-operation path deserves the
+same VERIFY-before-trusting scrutiny as everything else touching
+on-disk deletion in this project.
 
 ## Phase 9 — Portable mode
 
