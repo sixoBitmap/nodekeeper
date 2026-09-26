@@ -1990,7 +1990,187 @@ adjacent surface the same discipline should apply to).
 
 ## Phase 10 — Extras and release
 
-Not started. See docs/SPEC.md Phase 10.
+Scoped 2026-09-26 by a read-only analysis: one analyst per spec feature,
+then a cross-cutting critic that re-checked claims against the repo and
+ordered the work. The order below is the critic's. Phase 10 **cannot be
+fully closed from this Windows dev machine** (systemd/launchd, a real
+SSH host, a real Tor daemon, macOS/Linux installers, code-signing certs,
+and GitHub Actions billing (blocked since 2026-09-24) are all outside
+it), so the plan is the same as earlier phases: close what is verifiable
+here, record the limits in DECISIONS.md, leave [MANUAL] boxes unticked,
+and don't commit unverifiable cfg-gated macOS/Linux code (Phase 9
+precedent). Several analyst claims about external tools (updater plugin,
+russh, Tor PROTOCOLINFO, ord index schema, WebView2 env vars, MSI
+pre-release limits) came from web summaries -- treat as leads, VERIFY
+live before relying on them (CLAUDE.md).
+
+Done when (docs/SPEC.md):
+- [ ] [CI] installers build; the support bundle contains no secrets
+- [ ] [CI] a signed test update installs and verifies; an unsigned one
+      is rejected
+- [ ] [CI] a default backup contains no private descriptors; an
+      encrypted private backup restores only with the correct backup
+      password
+- [ ] [MANUAL] remote mode works through an SSH tunnel; Tor toggle works
+      with a system Tor daemon
+
+### Tasks, in order
+
+- [ ] **Step 0 -- Windows release-build process handling** (gates
+      packaging, services, updater, scheduling, safe-eject). Found by
+      the critic, not by any analyst: the release exe is a GUI-subsystem
+      program, so `ord`'s CTRL_BREAK stop and every child spawn behave
+      differently from every build tested so far.
+  - [x] VERIFIED live 2026-09-26 (DECISIONS.md "Windows release builds:
+        console-less process handling"): on unmodified code a console-
+        less parent **cannot stop ord** (`GenerateConsoleCtrlEvent` ->
+        "The handle is invalid", ord orphaned) and **every child gets a
+        visible console window**. bitcoind's RPC stop is unaffected.
+        Probe + driver: `crates/nk-testkit/examples/console_less_probe.*`.
+  - [x] Leading fix prototyped and verified (hidden consoles +
+        attach-and-signal ord stop: no windows, ord exit code 0, no
+        orphans) on local branch `wip/phase10-step0-console-fix`.
+  - [ ] **BLOCKED -- STOP AND ASK (graceful ord shutdown):** owner to
+        choose option A/B/C from that DECISIONS.md entry, and approve
+        making `stop_every_running_environment` continue past failures
+        and report all of them.
+  - [ ] Real implementation with the runtime console/no-console split,
+        a regression test that runs the console-less probe (Windows),
+        and a final check with a real Tauri release exe before any
+        packaging work.
+- [ ] **Step 1 -- foundation fixes to shipped code** (small, separate
+      commits; verifiable here against real regtest bitcoind/ord)
+  - [ ] (a) Block private-material console commands: `ord wallet dump`,
+        `listdescriptors`, `gethdkeys` are classed ReadOnly and
+        `RpcClient::call_at` hardcodes `Sensitivity::Normal`, so
+        `listdescriptors true` would put xprvs in the monitor and
+        `command_history`. **STOP AND ASK** (departs from spec item 6's
+        "read-only runs instantly"); also decide whether to scrub
+        existing history rows.
+  - [ ] (b) One shared `with_wallet_unlocked` helper: skip
+        `walletpassphrase` only for an unencrypted wallet on a
+        non-mainnet chain (checked via `getwalletinfo`; VERIFY that
+        `unlocked_until` is absent when unencrypted), fail-closed on
+        mainnet. Fixes the "Observed, not yet addressed" dead end where
+        Send/Inscribe/Reinscribe on an unencrypted regtest wallet asks
+        for a passphrase that doesn't exist (wallet_send, both inscribe
+        commands). **STOP AND ASK** (wallet-security adjacent): skip-
+        when-unencrypted vs. optional encrypt-on-create for test chains.
+  - [ ] (c) Acquire `SingleInstanceLock` in src-tauri -- spec Foundation
+        C requires it; grep shows it is never used. No owner input.
+  - [ ] (d) Call `prune_command_history` (spec item 7, ~5,000 entries per
+        environment) -- only tests call it today. No owner input.
+- [ ] **Step 2 -- signet/testnet4 live smoke test.** Mostly built. Only
+      `[regtest]` and `[main]` were ever run live (DECISIONS.md), yet
+      `bitcoin_conf.rs` says the section names are "also live-verified"
+      -- a wrong `[signet]`/`[testnet4]` name is a fatal bitcoind startup
+      error. Generalise `mainnet_smoke_test` to a chain parameter, fix
+      the comment. Needs owner approval for a short real-P2P run. Real
+      use also needs 1(b) and the open Phase 4 "start ord after IBD"
+      task. Note signet and testnet4 share the `tb` address prefix, so
+      the UI must not claim to prevent mixing them up.
+- [ ] **Step 3 -- diagnostics export** (redacted support bundle). No
+      dependencies, fully verifiable here, no new network/deps (`zip` is
+      already in nk-verify). New `nk-diagnostics` crate (ARCHITECTURE.md
+      update, owner approval). Build the canary-scanner harness first
+      (fake mnemonic/passphrase/cookie/xprv scanned across the zip, the
+      raw SQLite file and debug.log, with a negative control) -- steps
+      4, 10 and 6 reuse it. Create the Settings screen only together
+      with its first real occupant (this export button).
+- [ ] **Step 4 -- backups**: default public-descriptor backup with a
+      no-private-material guard and positive-control test first; the
+      encrypted private backup + restore after owner decisions. Needs
+      1(a)+1(b), a bytes-level `nk-secrets` file API with its own magic,
+      a sensitivity-aware `nk-rpc` descriptor call, and a `ConfirmDialog`
+      extension. Fully verifiable on real regtest. Security self-review
+      at the end. (Prior VERIFY in DECISIONS.md already showed the seed/
+      fingerprint unchanged by `encryptwallet`; only "does the descriptor
+      list gain entries" remains to check.)
+- [ ] **Step 5 -- Tor toggle** (backend slice first). Do the shared
+      node-config-options refactor first -- Tor, resource limits,
+      per-environment ports and services all feed `generate_bitcoin_conf`
+      and `NodeManager::start`. The [MANUAL] criterion needs a real Tor
+      daemon.
+- [ ] **Step 6 -- script scheduling** (in-app scheduler only; built-in
+      read-only scripts first). Needs step 0, 1(c), 1(d), an `nk-exec`
+      timeout-and-kill option, and `triggering_action`/`background`
+      params on `run_script`.
+- [ ] **Step 7 -- Core/ord update checker** (read-only slice first:
+      strict version parsing, bitcoincore.org RSS + ord releases.atom;
+      install/update-all after the Settings shell and step 0).
+- [ ] **Step 8 -- packaging, Windows slice** (unsigned MSI only, a
+      version-sync test, a draft `release.yml`) + user-docs skeleton;
+      user docs last. Needs approval to download WiX and to install/
+      uninstall a test MSI here. `targets: "all"` would also emit NSIS/
+      RPM -- MSI only (owner to confirm).
+- [ ] **Step 9 -- signed self-updates.** A throwaway-key signature
+      accept/reject spike can run any time under `spikes/`; real
+      integration is blocked on the owner generating the production
+      keypair (private key never on this machine), the repo-visibility
+      decision (repo is private), one Windows installer type, and
+      billing. The opt-in gate must live in Rust; no `updater:*`
+      permission for the webview.
+- [ ] **Step 10 -- remote mode via SSH tunnel.** Most decision-heavy; sits
+      after backups so it reuses their secrets refactor and canary
+      harness. Needs per-environment ports persisted, the deferred
+      master-password unlock, and a real remote host for [MANUAL].
+- [ ] **Step 11 -- OS background services**: only the OS-neutral
+      "attach to an already-running bitcoind" primitive (already an open
+      Foundation C task); ask the owner whether to defer the rest (spec
+      lists services under "Later"). No unverifiable systemd/launchd
+      code.
+
+### Cross-cutting foundations (design once, reused above)
+
+- One Settings shell, and an environment-less variant of the shared
+  `ConfirmDialog` (it requires an `environment` today; CLAUDE.md forbids
+  screens building their own confirmation). Needs owner approval.
+- One node-handle/ownership abstraction in `NodeManager` (spawned /
+  attached / service-managed / remote): quit, update, safe-eject and the
+  close handler must never send `stop` to a node Nodekeeper doesn't own.
+- One node-config-options struct behind `generate_bitcoin_conf` /
+  `NodeManager::start` (Tor, limits, ports, services); keep the existing
+  5-argument call sites stable.
+- One new `CommandSource` variant for probes/tunnel/service events
+  (ripples into ts-rs bindings, `as_str`, the store column, UI filter);
+  `CREATE_NO_WINDOW` on every spawn (see step 0).
+- One secret-leak canary harness; one `with_wallet_unlocked`; one
+  network-allowlist amendment covering everything new (SSH to the user's
+  own host, release-CDN redirect hosts, version feeds, the WebView2
+  bootstrapper, local Tor ports) -- the no-telemetry rule has no
+  mechanical enforcement today, unlike the executor rule.
+- Settings-key allowlists (diagnostics, backups, `bitcoin.conf` keys)
+  must stay in sync with new keys; anything gating a security behavior
+  is enforced in Rust, never trusted from the frontend.
+- Portable-mode matrix, decided once: services refuse in the backend,
+  self-update is check-only, remote needs master-password unlock,
+  backups warn against saving on the same drive, diagnostics scrub
+  paths, schedules count toward the portable close warning.
+- Item 9 leftovers not assigned to any feature: per-environment ports,
+  resource limits (dbcache, max connections), language selection (SPEC
+  ~457/462). Ports persistence is a hard dependency of remote mode, CSP
+  regeneration and service drift. Owner to say whether these belong in
+  Phase 10.
+- A Phase 10 security self-review (CLAUDE.md schedules them only for
+  Phases 2/5/7, but backups, remote, self-update, services and Tor each
+  add a trust boundary).
+
+### Owner decisions needed (batched; none is needed for step 0's analysis)
+
+Blocking now: step 0 fix choice (above). Blocking their steps: 1(a)
+console secrets; 1(b) unencrypted test-chain unlock; step 2 real-P2P
+smoke-run approval; step 3 new `nk-diagnostics` crate + fail-closed
+policy + privacy level; step 4 restore semantics, export mechanism,
+backup-password policy/warning wording, ConfirmDialog second field;
+step 5 Tor routing mode/scope; step 6 app-closed behavior, schedule
+format, mainnet/imported-script policy; step 7 update policy, network
+wording, dependencies; step 8 signing provider/publisher, targets,
+LICENSE file (Cargo.toml says MIT, none exists), identifier
+`com.nodekeeper.desktop` final, WiX download approval; step 9 updater
+keypair (owner-generated), endpoint/repo visibility; step 10 network
+allowlist + SSH implementation + wallet scope + key handling; step 11
+whether to defer. Full text of each is in the scoping output
+(2026-09-26 session); re-ask per step rather than all at once.
 
 ## Backlog — ideas not in docs/SPEC.md (not scheduled)
 

@@ -3247,6 +3247,136 @@ here (out of scope for this feature; the existing tests all clean up
 via their own explicit `.stop()`/`.kill_sync()` calls on the success
 path), but worth a future look if it recurs.
 
+### Windows release builds: console-less process handling (Phase 10 step 0, 2026-09-26)
+
+**Why this was checked.** The Phase 10 scoping critic noticed that every
+earlier check of process handling ran under a parent that had a console
+(the Phase 0 PowerShell spike, `cargo test`, `tauri dev`, the debug
+build), but the shipped exe does not: `src-tauri/src/main.rs` makes
+release builds a Windows *GUI* subsystem program. `nk-proc` stops `ord`
+with `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid)`, which per the
+Win32 docs only reaches processes that share the caller's console.
+Nothing had ever exercised that combination, and CI only builds
+`tauri build --debug --no-bundle`.
+
+**How it was checked.** `crates/nk-testkit/examples/console_less_probe.rs`
+is itself a `windows_subsystem = "windows"` exe (no console, exactly the
+release situation) and drives the *same* `nk-proc`/`nk-exec` code the app
+uses: start regtest bitcoind, start `ord server`, run one console-
+subsystem child through the executor (`ping -n 6`), then graceful-stop
+ord, then bitcoind, logging each step to a file. The driver
+`crates/nk-testkit/examples/console_less_probe.ps1` launches it with
+`Start-Process`, samples the process tree and visible top-level windows
+while everything is alive, and reports survivors. A full Tauri release
+build was not used (disk was at ~8.5 GB free); the probe reproduces the
+only relevant property -- a GUI-subsystem parent spawning console-
+subsystem children -- with none of the GUI code in the way. The
+bitcoind/ord binaries are the cached verified ones (bitcoind 31.1, ord
+0.29.0). Commands (PowerShell; cargo is at `%USERPROFILE%\.cargo\bin`,
+which was not on PATH in this session):
+
+```
+cargo build -p nk-testkit --example console_less_probe
+./crates/nk-testkit/examples/console_less_probe.ps1
+```
+
+**Result on unmodified code (master at 34d3d5e):**
+
+```
+Name                     Pid Parent                       ConsoleHostChildren
+console_less_probe.exe 15836 powershell.exe#724
+bitcoind.exe           16184 console_less_probe.exe#15836 conhost.exe#10340
+ord.exe                 7016 console_less_probe.exe#15836 conhost.exe#14900
+PING.EXE                4852 console_less_probe.exe#15836 conhost.exe#7800
+
+NEW visible top-level windows since before the probe
+11652|CASCADIA_HOSTING_WINDOW_CLASS|...\ping.exe
+11652|CASCADIA_HOSTING_WINDOW_CLASS|...\ord.exe
+11652|CASCADIA_HOSTING_WINDOW_CLASS|...\bitcoind.exe
+
+[  3582ms] bitcoind started, pid Some(16184)
+[  5308ms] ord started, pid Some(7016)
+[ 13396ms] stop_ord FAILED after 0ms: Ord(Io(Os { code: 6, kind: Uncategorized, message: "The handle is invalid." })); ord still detected running: Some(7016)
+[ 13516ms] bitcoind stop OK in 120ms
+survivors after probe exit: ord.exe 7016 (orphaned, still running)
+```
+
+Two real defects in what a release build would ship:
+
+1. **`ord` cannot be stopped gracefully.** `GenerateConsoleCtrlEvent`
+   fails with `ERROR_INVALID_HANDLE` because the caller has no console.
+   ord keeps running as an orphan (holding its index open), and
+   `stop_every_running_environment` (`src-tauri/src/lib.rs`) aborts at
+   that first error, so that environment's bitcoind and every later
+   environment are never stopped either; tray Quit ignores the result
+   (`let _ =`) and exits anyway. Safe Eject would report the failure,
+   but everything else stays running. bitcoind itself is fine (RPC
+   `stop`, 120 ms).
+2. **Every child process gets its own visible console window.** A GUI
+   parent with no console makes Windows allocate a new console for each
+   console-subsystem child. Here (Windows 11 with Windows Terminal as
+   the default terminal) that shows as a terminal window titled with the
+   exe path for bitcoind, ord, and every executor-spawned command
+   (`ord wallet ...`, `bitcoin-cli`, scripts); on machines with the
+   classic console host they'd be plain black console windows (not
+   observed here). Closing such a window would normally terminate the
+   process in it -- standard Windows behavior, not tested.
+
+**Prototype of the leading fix (not shipped -- see below).** Preserved,
+uncommitted-to-master, on local branch `wip/phase10-step0-console-fix`
+(commit 95f8aa9): `CREATE_NO_WINDOW` on the bitcoind, ord and executor
+spawns (each child gets a console-less-window host of its own), plus,
+for ord only, a stop that temporarily joins ord's hidden console
+(`FreeConsole` + `AttachConsole(ord_pid)`), sends `CTRL_BREAK_EVENT` to
+ord's process group, and leaves again, all under a mutex (attach/free is
+process-wide state). Same probe, same machine:
+
+```
+NEW visible top-level windows since before the probe: (none)
+[ 12937ms] stop_ord OK in 1523ms; ord still detected running: None
+[ 13063ms] bitcoind stop OK in 125ms
+survivors after probe exit: (none)
+ord exit status: ExitStatus(0) code=Some(0)     (second run, stop_ord 1593 ms)
+```
+
+Exit code 0 (not `0xC000013A`, what an unhandled CTRL_BREAK gives) and a
+~1.5 s stop mean ord's own shutdown handler ran -- a graceful stop, not a
+kill. Known gap in the prototype, deliberately not papered over: it
+calls `FreeConsole()` unconditionally, which would detach a *developer's*
+terminal (debug builds, `cargo test`) from the process and could break
+later stdout writes there. A real implementation must branch at runtime
+on "does this process have a console" (`GetConsoleProcessList`): with a
+console, keep today's verified shared-console behavior (no
+`CREATE_NO_WINDOW` on ord, direct `GenerateConsoleCtrlEvent`); without
+one, use hidden consoles plus the attach-and-signal stop. That runtime
+split is also what a regression test needs to cover (the probe is that
+test's console-less half).
+
+**STOP AND ASK (CLAUDE.md: graceful ord shutdown is a named non-
+negotiable).** Options put to the project owner:
+
+- **A (recommended, prototyped and verified above):** hidden consoles for
+  every child + attach-and-signal graceful stop for ord, with the runtime
+  console/no-console split. Trade-off: a few lines of process-global
+  Win32 state (serialized by a lock) that must stay correct as more
+  features stop things concurrently.
+- **B:** give the app one hidden console at startup (`AllocConsole` +
+  hide) so children inherit it and today's stop code works unchanged.
+  Trade-off: with Windows Terminal as the default terminal the console
+  can still show a window and hiding it is unreliable; not tested.
+- **C:** force-kill ord. Rejected: the spec requires a graceful stop and
+  a killed ord risks a repair/reindex on next start.
+- Independent of A/B: make `stop_every_running_environment` keep going
+  after a failure and report every failure at the end, rather than
+  aborting at the first (so one stuck ord no longer leaves bitcoind and
+  the other environments running).
+
+**Outcome: pending the project owner's decision.** No product code
+changed on master; only the probe and its driver were added.
+
+**Process note.** `cargo` was not on PATH in either shell this session;
+prefix `$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"`.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
