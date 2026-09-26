@@ -13,7 +13,6 @@ import { StatusBadge, type StatusVariant } from "@/components/StatusBadge";
 import { useDashboardStatus } from "@/hooks/useDashboardStatus";
 import { useOrdStatus } from "@/hooks/useOrdStatus";
 import { chainBgClass, chainTextClass } from "@/lib/environment-colors";
-import { friendlyError } from "@/lib/error-messages";
 import { formatBytes } from "@/lib/format";
 import { usePreventSleepStore } from "@/store/preventSleep";
 
@@ -129,17 +128,17 @@ export function OverviewScreen({ environments }: { environments: Environment[] }
         <div className="space-y-2 rounded-md border-2 border-primary/40 bg-primary/5 p-3">
           <h3 className="text-sm font-semibold">{t("overview.safeEject.title")}</h3>
           <p className="text-xs text-muted-foreground">{t("overview.safeEject.hint")}</p>
-          {ejectError &&
-            (() => {
-              const friendly = friendlyError(ejectError);
-              return (
-                <ErrorPanel
-                  title={friendly.title}
-                  message={friendly.whatToDo ? `${friendly.message} ${friendly.whatToDo}` : friendly.message}
-                  technicalDetails={ejectError.message}
-                />
-              );
-            })()}
+          {/* Any failure here means "not confirmed safe", so this is worded
+              for that -- not the generic "Something went wrong" -- and puts
+              which service is still running in plain view, not behind the
+              technical-details toggle. */}
+          {ejectError && (
+            <ErrorPanel
+              title={t("overview.safeEject.failedTitle")}
+              message={t("overview.safeEject.failedMessage", { details: ejectError.message })}
+              technicalDetails={ejectError.message}
+            />
+          )}
           {showSafeToUnplug ? (
             <p className="text-sm font-medium text-success">{t("overview.safeEject.safeToUnplug")}</p>
           ) : (

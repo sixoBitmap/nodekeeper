@@ -3259,13 +3259,14 @@ Win32 docs only reaches processes that share the caller's console.
 Nothing had ever exercised that combination, and CI only builds
 `tauri build --debug --no-bundle`.
 
-**How it was checked.** `crates/nk-testkit/examples/console_less_probe.rs`
-is itself a `windows_subsystem = "windows"` exe (no console, exactly the
-release situation) and drives the *same* `nk-proc`/`nk-exec` code the app
-uses: start regtest bitcoind, start `ord server`, run one console-
-subsystem child through the executor (`ping -n 6`), then graceful-stop
-ord, then bitcoind, logging each step to a file. The driver
-`crates/nk-testkit/examples/console_less_probe.ps1` launches it with
+**How it was checked.** `crates/nk-testkit/src/bin/console_less_probe.rs`
+(first written as an example; see "Implementation" below for why it is
+now a bin target) is itself a `windows_subsystem = "windows"` exe (no
+console, exactly the release situation) and drives the *same* `nk-proc`/
+`nk-exec` code the app uses: start regtest bitcoind, start `ord server`,
+run one console-subsystem child through the executor (`ping -n 6`), then
+graceful-stop ord, then bitcoind, logging each step to a file. The driver
+`crates/nk-testkit/scripts/console_less_probe.ps1` launches it with
 `Start-Process`, samples the process tree and visible top-level windows
 while everything is alive, and reports survivors. A full Tauri release
 build was not used (disk was at ~8.5 GB free); the probe reproduces the
@@ -3276,8 +3277,8 @@ bitcoind/ord binaries are the cached verified ones (bitcoind 31.1, ord
 which was not on PATH in this session):
 
 ```
-cargo build -p nk-testkit --example console_less_probe
-./crates/nk-testkit/examples/console_less_probe.ps1
+cargo build -p nk-testkit --bins
+./crates/nk-testkit/scripts/console_less_probe.ps1
 ```
 
 **Result on unmodified code (master at 34d3d5e):**
@@ -3371,8 +3372,239 @@ negotiable).** Options put to the project owner:
   aborting at the first (so one stuck ord no longer leaves bitcoind and
   the other environments running).
 
-**Outcome: pending the project owner's decision.** No product code
-changed on master; only the probe and its driver were added.
+**Outcome: the project owner approved option A** (2026-09-26), including
+the keep-going-past-failures change.
+
+**Implementation (2026-09-26).**
+
+- `nk-exec/src/console.rs`: `no_console_window(&mut Command)` and
+  `CREATE_NO_WINDOW`; applied to every executor child (all executor stdio
+  is piped, so none needs a console). Trade-off, stated in the file: with
+  a console, a developer's Ctrl+C no longer also reaches an executor child
+  that is mid-run.
+- `nk-proc/src/console.rs`: `ConsoleMode::{Shared, Hidden}`, decided once
+  at ord's spawn from `GetConsoleProcessList` and stored on `OrdProcess`
+  so the stop uses the route the spawn set up. **Shared** (Nodekeeper has
+  a console: dev, debug, `cargo test`) is unchanged from the behavior
+  verified since Phase 0 -- same creation flags, same signal; the one
+  difference is that the ord/bitcoind spawns now set stdin to null. **Hidden** (the release exe):
+  `CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW` at spawn; at stop,
+  `AttachConsole(ord_pid)` -> `GenerateConsoleCtrlEvent(CTRL_BREAK,
+  ord_pid)` -> `FreeConsole`, serialized by a process-wide lock (Windows
+  only -- see the dead-code finding below). Unlike the prototype there is
+  deliberately **no `FreeConsole` before the attach**: if this process
+  somehow does hold a console, `AttachConsole` fails (access denied) and
+  is reported, rather than tearing down a console we don't own.
+  `process_has_console()` is public (the probe logs it, so its test
+  cannot pass vacuously under a console); always `true` off Windows.
+- **The stop also saves and restores this process's three standard
+  handles** (`GetStdHandle` before the attach, `SetStdHandle` after
+  `FreeConsole`), and the ord and bitcoind spawns set `stdin` to null
+  explicitly. Found by the review, not by my first tests: in a
+  console-less process the std handles start NULL, `AttachConsole` fills
+  them in, and `FreeConsole` closes them but leaves the stale numbers, so
+  the next `ord`/`bitcoind` spawn (default stdin = inherit = duplicate
+  `GetStdHandle`) failed with "The handle is invalid (os error 6)" until
+  Nodekeeper was restarted. Reproduced by two independent skeptics and by
+  the negative control below.
+- bitcoind gets `CREATE_NO_WINDOW` **only when Nodekeeper has no
+  console** (`hide_window_when_console_less`); with a console it keeps
+  sharing it, so Ctrl+C in a developer's terminal still stops it (review
+  finding: the first version hid it unconditionally and would have left
+  an orphan there).
+- `OrdProcess::stop` returns ord's `ExitStatus` (callers ignored the old
+  `()`), so a test can tell graceful (exit 0) from killed. An ord that
+  **already exited** is now a successful stop (checked before the signal
+  and again if the signal fails; pid file removed): on the Windows hidden
+  route the signal cannot even be attempted for a dead process, which
+  used to make Stop / Safe Eject report a failure for something that
+  wasn't running.
+- `NodeManager::stop_everything(&environments)` (+ `StopFailure`,
+  `Service`, `NodeManagerError::StillRunning`): ord-then-bitcoind per
+  chain in `Chain::ALL` order, unchanged 30 s / 120 s timeouts, **never
+  returns early**, and then **verifies against reality**. `stop` and
+  `stop_ord` untrack a process the moment a stop is *asked for*, so after
+  a failed or timed-out stop the process can be alive yet invisible --
+  and a second Safe Eject used to find nothing tracked and say "safe to
+  unplug" while it was still running (review finding; predates this
+  change, but this change is what makes stop failures reachable). Now
+  each chain's `bitcoind.pid` / `ord.pid` is checked after the stops
+  (3 s settle window for a process that is still disappearing) and
+  anything alive is reported, tracked or not -- which also catches an
+  orphan from an earlier crashed session. Calls are **single-flight**
+  (an async gate) and `any_running()` counts calls in flight, so a
+  double-clicked window close or Quit-during-Eject no longer sees "nothing
+  running" while a stop is still waiting on a slow bitcoind.
+  `stop_every_running_environment` turns the failure list into one
+  `TypedError` naming every failure (the structured `code` is kept only
+  for a single failure). Tray Quit is still best-effort by design; Safe
+  Eject reports.
+- **A stop can no longer hang forever** (second review). `BitcoindProcess::
+  stop` used to await the `stop` RPC *outside* its timeout, and the RPC
+  client has no request timeout, so a bitcoind that accepts the
+  connection but never answers (RPC threads stuck behind a stalled
+  drive -- the portable case) hung it for good; under the new
+  single-flight gate that would also have wedged `any_running()` and
+  every later Quit / window close, which used to be an escape hatch. Now
+  the RPC is bounded by the same timeout (worst case two timeouts), and
+  `stop_everything` wraps each service's stop in an outer bound
+  (`StopBudget`: ord 30 s + 5 s; bitcoind 2 x 120 s + 5 s) that turns a
+  hang into an ordinary `StopTimeout` failure and releases the gate.
+  Worst case for Quit with everything hung is therefore long (several
+  minutes) but bounded.
+- `NodeManagerError::StillRunning` reads "still running (process id N)"
+  with no "after being asked to stop": it is also what an orphan from a
+  crashed session or a node started outside Nodekeeper looks like, and
+  a retry can never stop those. Safe Eject's panel says so ("close that
+  program yourself, for example in Task Manager").
+- Safe Eject's failure panel (`OverviewScreen`) is now specific -- "Not
+  everything stopped / Do not unplug this drive yet ... <which service is
+  still running>" -- instead of the generic "Something went wrong" with
+  the real cause hidden behind the technical-details toggle. No new
+  `AppErrorCode` was added (that enum is the spec's named set); any
+  failure of `safe_eject` means "not confirmed safe", so the wording is
+  specific to Safe Eject rather than code-driven.
+- Probe and helper are `[[bin]]` targets of `nk-testkit`
+  (`console_less_probe`, `console_probe_child`), driver in
+  `crates/nk-testkit/scripts/`, regression test in
+  `crates/nk-testkit/tests/console_less.rs`.
+
+**Verification.**
+
+- Live, console-less, final code (`console_less_probe.ps1`): no new
+  visible windows; `has console: false`, std handles `[0, 0, 0]` at start
+  and again after the stop; `executor child console: console_window=none`;
+  `stop_ord OK in 1441ms; ord exit code: Some(0)`; **ord restarted and
+  stopped again (exit 0); a second bitcoind started and stopped after the
+  first ord stop**; no survivors.
+- Regression test `nk-testkit/tests/console_less.rs` (Windows) asserts all
+  of the above from the probe's log. **Three negative controls**, each
+  reverted afterwards:
+  1. force `ConsoleMode::Shared` (the old behavior): fails in ~7 s with
+     `stop_ord FAILED ... code: 6 ... "The handle is invalid"` and
+     `ord still detected running: Some(pid)`, no processes left behind;
+  2. remove both the std-handle restore and the null stdin: fails at the
+     respawn -- std handles `[1472, 1664, 1860]` after the stop, `ord
+     restart FAILED: ... The handle is invalid. (os error 6)`, `second
+     bitcoind start FAILED` (the reviewers' bug, reproduced exactly);
+  3. remove `no_console_window` from the executor: fails with `executor
+     child console: console_window=present`.
+- Unit: mode selection, per-mode creation flags, "a failed hidden-console
+  signal leaves this process's console state alone", stopping an
+  already-exited ord on both routes (+ pid file removed), and 11
+  tests in `node_manager.rs` (9 through a fake that models "tracked" and
+  "alive" separately, 2 on message shape) plus 3 for the error mapping in
+  `lib.rs`; the fake covers: ordering, nothing running, a failing ord doesn't
+  stop the rest (reported once, not twice), every failure reported, **a
+  retry after a failed stop does not report success**, an untracked live
+  process is reported, a lingering process gets its settle window,
+  overlapping calls run one after the other and `any_running()` stays true
+  in between, message shapes. Negative control: with the gate and the
+  verification pass disabled exactly the four tests that should fail did
+  (retry, untracked orphan, settle window, overlap).
+- Second-review additions: the probe now also asks Windows which
+  processes own a *visible* window and the test asserts none belongs to
+  the long-lived bitcoind or ord (previously only the executor helper
+  was checked automatically; by owning pid, so reliable under Windows
+  Terminal but able to miss with the classic console host -- the .ps1
+  driver samples every visible window as the backstop); the first-stop
+  assertion is one whole-line match, because separate substring checks
+  were satisfied by the *second* stop's log line. Negative controls:
+  (4) unbounded stop RPC -> `a_stop_rpc_that_never_answers_cannot_hang_
+  the_stop_forever` fails after 10 s ("stop must give up by itself");
+  (5) bitcoind and ord without their hidden-window flags -> the
+  regression test fails with `visible windows owned by bitcoind/ord:
+  [17936, 22424]`. Both reverted.
+- UI: Vitest for the Safe Eject failure state (specific title, "do not
+  unplug", the service named in plain view, no all-clear, button usable
+  again) and the success state; looked at in the dev preview with a
+  failing `safe_eject`.
+- **Non-Windows compile check (simulated).** Only the Windows target is
+  installed, so both console modules were compiled as copies with the
+  `cfg(windows)` gates flipped and `rustc -D warnings`: clean. The control
+  (lock left ungated, as in the first version) reproduces the reviewers'
+  `static CONSOLE_LOCK is never used` / `function lock is never used`
+  errors, so the simulation can see the problem. Not a substitute for
+  macOS/Linux CI.
+- Console (Shared) path: the existing real-node tests (`starts_ord_
+  reports_status_and_stops_it`, the nk-testkit wallet/inscribe suites)
+  exercise it and stayed green.
+
+**Review of the implementation (2026-09-26).** A 4-lens read-only
+workflow (Win32 semantics, regression risk, stop-everything semantics,
+test validity), every finding then attacked by two skeptics instructed to
+refute it (40 agents, the first attempt lost three lenses to an API
+connection error and was re-run). Fixed: the stale-std-handles spawn
+failure (high, above), stop of an already-exited ord, dead code on
+non-Windows CI, bitcoind Ctrl+C in dev, the retry-says-safe hole, the
+double-close race, the generic Safe Eject error, and test gaps (a probe
+that never spawned after a stop; cleanup that missed a process whose
+startup failed; `pid None` matching `started`; no test for executor
+windows; stale PROGRESS path). **Deliberately not changed:** the
+portable-mode window-close path and tray Quit still discard stop failures
+and exit (both skeptics: pre-existing, documented best-effort design --
+though the close dialog's "safe to unplug" wording is worth revisiting);
+`stop`/`stop_ord` still untrack before stopping (the verification pass
+makes that safe rather than redesigning process ownership); the test
+skips silently when `NK_TEST_*` are unset (the project-wide convention).
+
+**Second review, of the fixes (2026-09-26).** Same shape (3 lenses, two
+skeptics per finding, 21 agents). No critical or high findings; six
+survived, all rated low by their skeptics except the hang. Fixed: the
+stop that could hang forever (above), the misleading "after being asked
+to stop" / "wait and retry" wording for untracked processes (above), no
+automated window check for bitcoind/ord (above), the first-stop
+assertion satisfiable by the second stop's log line (above), and
+documentation slips (a build command that missed the helper binary,
+a test count, "byte-for-byte"). **Deliberately not changed -- pid
+reuse:** the verification pass (like `detect_running_*` before it)
+trusts "pid file names a live pid", so a stale `bitcoind.pid` whose pid
+an unrelated process has since reused makes Safe Eject say "not
+everything stopped" until that process exits or the file is deleted.
+Making liveness check the process *name* would trade that (fails safe:
+an unnecessary "don't unplug") for a false "nothing running" whenever
+the process is not literally called bitcoind/ord -- notably Bitcoin-Qt,
+which writes the same `bitcoind.pid` -- which is the dangerous
+direction for a safe-to-unplug check. The reported message names the
+pid so the user can see what it is. Rejected by their skeptics:
+`any_running()` ignoring manual Stop/Restart (the documented
+untrack-before-stop design), per-poll `sysinfo` cost, and
+`kill_stragglers` matching a stale parent pid (needs a user's real
+node to be a child of a dead probe's reused pid).
+
+**Not verified / limits.** The probe stands in for a real Tauri release
+exe (no GUI code, debug profile); a check with a real release exe is
+still owed before any packaging work (disk was too tight to build one).
+Nothing here ran on macOS/Linux: those platforms keep the direct SIGINT
+path and the new code is cfg-gated, but only Windows compiled and ran it
+(plus the simulated check above). The prototype branch
+`wip/phase10-step0-console-fix` (commit 95f8aa9) is superseded.
+
+**Test-engineering lessons.**
+
+1. `cargo test` does **not** rebuild examples (checked: the probe exe was
+   17 minutes older than its source after a `cargo test`), so a regression
+   test that launches an example can silently run a stale binary. The
+   probe is therefore a `[[bin]]`: Cargo builds bins before an integration
+   test runs and hands it the exact path via `CARGO_BIN_EXE_*`.
+2. An **orphaned ord inherits the probe's stdout/stderr pipe handles**
+   (Windows children inherit every inheritable handle even when their own
+   std handles are redirected to NUL), so the executor never sees
+   end-of-output and the test hangs -- my first negative control ran 612 s
+   until the orphan was killed by hand. Same mechanism as the "orphaned
+   bitcoind stalls the background command" note above. The test now waits
+   on the probe's own `DONE` line, kills any bitcoind/ord that is a
+   *child of the probe* (found by parent pid, so a process whose startup
+   failed is caught too; pid *and* name matched, since pids get reused) on
+   every path including panics, and includes the probe log in every
+   failure message.
+3. A probe/test must **exercise what happens after** the thing under test:
+   the first version stopped ord and checked it stopped, and so missed
+   that the stop broke every later spawn.
+4. Disk on this machine filled again mid-run (`no space on device`); the
+   fix was deleting only `target\debug` (leaving the cached verified
+   binaries) and building with `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0`
+   (environment only, no repo change).
 
 **Process note.** `cargo` was not on PATH in either shell this session;
 prefix `$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"`.

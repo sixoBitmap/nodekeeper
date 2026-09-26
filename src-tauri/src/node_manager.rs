@@ -28,6 +28,7 @@ use nk_rpc::RpcClient;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use thiserror::Error;
@@ -53,6 +54,13 @@ pub enum NodeManagerError {
     Io(#[from] std::io::Error),
     #[error("rpc error: {0}")]
     Rpc(#[from] nk_rpc::RpcError),
+    /// Found alive (pid file plus liveness) after everything had been
+    /// asked to stop -- see `NodeManager::stop_everything`. Deliberately
+    /// worded without "after being asked to stop": it is also what an
+    /// orphan from a crashed session, or a node started outside
+    /// Nodekeeper, looks like, and a retry can never stop those.
+    #[error("still running (process id {pid})")]
+    StillRunning { pid: u32 },
 }
 
 impl NodeManagerError {
@@ -66,7 +74,8 @@ impl NodeManagerError {
             | Self::OrdNotRunning { .. }
             | Self::OrdApi(_)
             | Self::Io(_)
-            | Self::Rpc(_) => None,
+            | Self::Rpc(_)
+            | Self::StillRunning { .. } => None,
         }
     }
 }
@@ -137,6 +146,15 @@ struct RunningOrd {
 pub struct NodeManager {
     running: Mutex<HashMap<Chain, RunningNode>>,
     running_ord: Mutex<HashMap<Chain, RunningOrd>>,
+    /// Held for the whole of a `stop_everything` call, so two of them
+    /// (a double-clicked close, Quit during Safe Eject) run one after the
+    /// other instead of racing. Async because it is held across awaits.
+    stop_gate: tokio::sync::Mutex<()>,
+    /// How many `stop_everything` calls are running or queued.
+    /// `any_running()` counts them: a stop removes each process from the
+    /// tracking maps as soon as it *starts*, so without this everything
+    /// would read as "stopped" while a slow bitcoind is still flushing.
+    stops_in_flight: AtomicUsize,
 }
 
 impl NodeManager {
@@ -308,6 +326,7 @@ impl NodeManager {
                 .lock()
                 .expect("mutex should not be poisoned")
                 .is_empty()
+            || self.stops_in_flight.load(Ordering::SeqCst) > 0
     }
 
     /// Starts `chain`'s ord server, pointed at this manager's own
@@ -450,6 +469,292 @@ impl NodeManager {
             .expect("mutex should not be poisoned")
             .contains_key(&chain)
     }
+
+    /// Gracefully stops every running ord and bitcoind, across all
+    /// chains -- the shared core of tray Quit, Safe Eject, and the
+    /// portable-mode close warning.
+    ///
+    /// - **Keeps going past a failure** and reports every one at the end:
+    ///   one ord that won't stop must not leave its own environment's
+    ///   bitcoind, or every later environment, running. (The first
+    ///   version aborted at the first error, which on a Windows release
+    ///   build -- where ord's stop failed -- would have orphaned
+    ///   everything; DECISIONS.md, "Windows release builds: console-less
+    ///   process handling".)
+    /// - **Verifies, rather than trusting its own bookkeeping.** `stop`
+    ///   and `stop_ord` stop *tracking* a process the moment a stop is
+    ///   asked for, so after a failed or timed-out stop the process can
+    ///   still be alive yet invisible here -- and a second Safe Eject
+    ///   would find nothing tracked and say "safe to unplug". So once the
+    ///   stops are done, each environment's `bitcoind.pid` / `ord.pid` is
+    ///   checked too (`environments`: one per chain, where those files
+    ///   live), and anything still alive is reported -- which also catches
+    ///   an orphan left by an earlier crashed session.
+    /// - **One at a time.** A second call (a double-clicked window close,
+    ///   Quit while Safe Eject runs) waits for the first instead of racing
+    ///   it -- racing would let it see "nothing tracked" while the first is
+    ///   still waiting on a slow bitcoind and report success -- and
+    ///   `any_running()` stays true for as long as any call is in flight.
+    pub async fn stop_everything(&self, environments: &[Environment]) -> Vec<StopFailure> {
+        self.stop_everything_via(
+            &ManagerStopControl {
+                manager: self,
+                environments,
+            },
+            StopBudget::REAL,
+            VERIFY_SETTLE,
+        )
+        .await
+    }
+
+    /// `stop_everything` over any `StopControl` (the tests use a fake),
+    /// with the single-flight gate and the in-flight count.
+    pub(crate) async fn stop_everything_via<C: StopControl>(
+        &self,
+        control: &C,
+        budget: StopBudget,
+        settle: Duration,
+    ) -> Vec<StopFailure> {
+        // Counted *before* waiting for the gate, so a caller queued
+        // behind a slow stop already makes `any_running()` true.
+        let _in_flight = InFlight::enter(&self.stops_in_flight);
+        let _one_at_a_time = self.stop_gate.lock().await;
+        stop_everything_with(control, budget, settle).await
+    }
+}
+
+/// Counts a `stop_everything` call as in flight until dropped (so it is
+/// undone even if the call's future is cancelled).
+struct InFlight<'a>(&'a AtomicUsize);
+
+impl<'a> InFlight<'a> {
+    fn enter(counter: &'a AtomicUsize) -> Self {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Self(counter)
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Graceful-stop budget per service when stopping everything (docs/
+/// SPEC.md Foundation C: bitcoind's default is 120s; ord only has to
+/// flush its index, so 30s).
+pub const ORD_STOP_TIMEOUT: Duration = Duration::from_secs(30);
+pub const BITCOIND_STOP_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long each service's stop may take before `stop_everything` gives
+/// up on it and records a failure, so **nothing under the single-flight
+/// gate can hang forever** -- a hung stop would otherwise hold the gate
+/// (and `any_running()`) for good, and a second Quit or window close,
+/// which used to be an escape hatch, would just queue behind it.
+///
+/// The per-service timeouts (`ord`, `bitcoind`) are what the stop itself
+/// is given; the outer bound adds what the stop can legitimately spend on
+/// top: bitcoind's stop bounds its RPC call *and* its wait by the timeout
+/// (so up to twice it), ord's only the wait; plus `slack`.
+#[derive(Clone, Copy)]
+pub(crate) struct StopBudget {
+    ord: Duration,
+    bitcoind: Duration,
+    slack: Duration,
+}
+
+impl StopBudget {
+    pub(crate) const REAL: Self = Self {
+        ord: ORD_STOP_TIMEOUT,
+        bitcoind: BITCOIND_STOP_TIMEOUT,
+        slack: Duration::from_secs(5),
+    };
+
+    fn ord_outer_bound(self) -> Duration {
+        self.ord + self.slack
+    }
+
+    fn bitcoind_outer_bound(self) -> Duration {
+        self.bitcoind * 2 + self.slack
+    }
+}
+
+/// After the stops, how long a process that is still alive gets to finish
+/// disappearing before it is reported as still running (a process that
+/// has just been waited on can linger in the process table for a moment),
+/// and how often it is re-checked meanwhile.
+const VERIFY_SETTLE: Duration = Duration::from_secs(3);
+const VERIFY_POLL: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Service {
+    Ord,
+    Bitcoind,
+}
+
+impl std::fmt::Display for Service {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Ord => "ord",
+            Self::Bitcoind => "bitcoind",
+        })
+    }
+}
+
+/// One service that failed to stop during `stop_everything`.
+#[derive(Debug)]
+pub struct StopFailure {
+    pub chain: Chain,
+    pub service: Service,
+    pub error: NodeManagerError,
+}
+
+impl std::fmt::Display for StopFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({:?}): {}", self.service, self.chain, self.error)
+    }
+}
+
+/// What `stop_everything_with` needs from a node manager. A trait only
+/// so the "keep going past a failure" and "verify afterwards" logic can
+/// be tested with a fake -- real processes can't be made to fail on
+/// demand. The `+ Send` on each future is what lets the Tauri commands
+/// that await this stay `Send`.
+pub(crate) trait StopControl {
+    fn is_ord_running(&self, chain: Chain) -> bool;
+    fn is_running(&self, chain: Chain) -> bool;
+    fn stop_ord(
+        &self,
+        chain: Chain,
+        timeout: Duration,
+    ) -> impl std::future::Future<Output = Result<(), NodeManagerError>> + Send;
+    fn stop(
+        &self,
+        chain: Chain,
+        timeout: Duration,
+    ) -> impl std::future::Future<Output = Result<(), NodeManagerError>> + Send;
+    /// Services of `chain` whose process is actually alive right now
+    /// (pid file plus liveness), whether or not this manager is tracking
+    /// them, with their pids.
+    fn live_services(&self, chain: Chain) -> Vec<(Service, u32)>;
+}
+
+/// The real `StopControl`: the manager's own tracked processes, plus each
+/// chain's pid files for the verification pass.
+struct ManagerStopControl<'a> {
+    manager: &'a NodeManager,
+    environments: &'a [Environment],
+}
+
+impl StopControl for ManagerStopControl<'_> {
+    fn is_ord_running(&self, chain: Chain) -> bool {
+        self.manager.is_ord_running(chain)
+    }
+    fn is_running(&self, chain: Chain) -> bool {
+        self.manager.is_running(chain)
+    }
+    async fn stop_ord(&self, chain: Chain, timeout: Duration) -> Result<(), NodeManagerError> {
+        self.manager.stop_ord(chain, timeout).await
+    }
+    async fn stop(&self, chain: Chain, timeout: Duration) -> Result<(), NodeManagerError> {
+        self.manager.stop(chain, timeout).await
+    }
+    fn live_services(&self, chain: Chain) -> Vec<(Service, u32)> {
+        let Some(environment) = self.environments.iter().find(|e| e.chain == chain) else {
+            return Vec::new();
+        };
+        let mut live = Vec::new();
+        if let Some(pid) = nk_proc::detect_running_ord(environment) {
+            live.push((Service::Ord, pid));
+        }
+        if let Some(pid) = nk_proc::detect_running_bitcoind(environment) {
+            live.push((Service::Bitcoind, pid));
+        }
+        live
+    }
+}
+
+/// Per chain, ord first (it depends on bitcoind being reachable while
+/// it shuts down), then bitcoind. A failure is recorded and the loop
+/// carries on; nothing here returns early. Afterwards every chain is
+/// verified against reality (`live_services`), giving anything still
+/// alive up to `settle` to finish going away: "untracked" is not
+/// "stopped".
+pub(crate) async fn stop_everything_with<C: StopControl>(
+    control: &C,
+    budget: StopBudget,
+    settle: Duration,
+) -> Vec<StopFailure> {
+    let mut failures = Vec::new();
+    for &chain in Chain::ALL.iter() {
+        if control.is_ord_running(chain) {
+            let stopped = tokio::time::timeout(
+                budget.ord_outer_bound(),
+                control.stop_ord(chain, budget.ord),
+            )
+            .await;
+            // Timing out here means the stop hung past even its own
+            // internal bounds: give up on it like any other failure.
+            let error = match stopped {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(error),
+                Err(_elapsed) => Some(NodeManagerError::OrdProcess(
+                    nk_proc::OrdProcessError::StopTimeout,
+                )),
+            };
+            if let Some(error) = error {
+                failures.push(StopFailure {
+                    chain,
+                    service: Service::Ord,
+                    error,
+                });
+            }
+        }
+        if control.is_running(chain) {
+            let stopped = tokio::time::timeout(
+                budget.bitcoind_outer_bound(),
+                control.stop(chain, budget.bitcoind),
+            )
+            .await;
+            let error = match stopped {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(error),
+                Err(_elapsed) => Some(NodeManagerError::Bitcoind(
+                    nk_proc::BitcoindError::StopTimeout,
+                )),
+            };
+            if let Some(error) = error {
+                failures.push(StopFailure {
+                    chain,
+                    service: Service::Bitcoind,
+                    error,
+                });
+            }
+        }
+    }
+
+    let deadline = tokio::time::Instant::now() + settle;
+    for &chain in Chain::ALL.iter() {
+        let mut live = control.live_services(chain);
+        while !live.is_empty() && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(VERIFY_POLL).await;
+            live = control.live_services(chain);
+        }
+        for (service, pid) in live {
+            // A stop that already failed is reported once, not twice.
+            if !failures
+                .iter()
+                .any(|f| f.chain == chain && f.service == service)
+            {
+                failures.push(StopFailure {
+                    chain,
+                    service,
+                    error: NodeManagerError::StillRunning { pid },
+                });
+            }
+        }
+    }
+    failures
 }
 
 #[cfg(test)]
@@ -685,5 +990,388 @@ mod tests {
     fn any_running_is_false_on_a_fresh_manager() {
         let manager = NodeManager::new();
         assert!(!manager.any_running());
+    }
+
+    /// A `StopControl` with scripted state, modelling the real manager's
+    /// two views of a process separately: whether it is *tracked* (a stop
+    /// removes it the moment it is asked for, working or not) and whether
+    /// it is actually *alive* (only a stop that succeeds ends it).
+    #[derive(Default)]
+    struct FakeControl {
+        ord_tracked: Mutex<Vec<Chain>>,
+        bitcoind_tracked: Mutex<Vec<Chain>>,
+        alive: Mutex<Vec<(Chain, Service, u32)>>,
+        failing: Vec<(Chain, Service)>,
+        /// If set, every alive process disappears once `live_services`
+        /// has been called more than this many times (a process that
+        /// takes a moment to finish going away).
+        vanish_after_polls: Option<usize>,
+        polls: AtomicUsize,
+        /// Sleep inside every stop, to keep one "in flight".
+        stop_delay: Duration,
+        attempts: Mutex<Vec<(Chain, Service)>>,
+    }
+
+    impl FakeControl {
+        /// Tracked and alive: `ord_on` / `bitcoind_on` are the chains where
+        /// each service was started.
+        fn running(ord_on: &[Chain], bitcoind_on: &[Chain]) -> Self {
+            let mut alive = Vec::new();
+            for (n, &chain) in ord_on.iter().enumerate() {
+                alive.push((chain, Service::Ord, 1000 + n as u32));
+            }
+            for (n, &chain) in bitcoind_on.iter().enumerate() {
+                alive.push((chain, Service::Bitcoind, 2000 + n as u32));
+            }
+            Self {
+                ord_tracked: Mutex::new(ord_on.to_vec()),
+                bitcoind_tracked: Mutex::new(bitcoind_on.to_vec()),
+                alive: Mutex::new(alive),
+                ..Default::default()
+            }
+        }
+
+        fn failing_to_stop(mut self, chain: Chain, service: Service) -> Self {
+            self.failing.push((chain, service));
+            self
+        }
+
+        /// Alive but not tracked -- e.g. left over from a crashed session.
+        fn with_orphan(self, chain: Chain, service: Service, pid: u32) -> Self {
+            self.alive.lock().unwrap().push((chain, service, pid));
+            self
+        }
+
+        /// A stop begins: like the real manager, the process is untracked
+        /// *immediately* (whether or not the stop then works), while the
+        /// stop itself takes `stop_delay` to finish.
+        async fn attempt(&self, chain: Chain, service: Service) -> Result<(), NodeManagerError> {
+            self.attempts.lock().unwrap().push((chain, service));
+            let tracked = match service {
+                Service::Ord => &self.ord_tracked,
+                Service::Bitcoind => &self.bitcoind_tracked,
+            };
+            tracked.lock().unwrap().retain(|&c| c != chain);
+            tokio::time::sleep(self.stop_delay).await;
+            if self.failing.contains(&(chain, service)) {
+                return Err(NodeManagerError::Io(std::io::Error::other(format!(
+                    "scripted {service} stop failure"
+                ))));
+            }
+            self.alive
+                .lock()
+                .unwrap()
+                .retain(|&(c, s, _)| !(c == chain && s == service));
+            Ok(())
+        }
+
+        fn attempts(&self) -> Vec<(Chain, Service)> {
+            self.attempts.lock().unwrap().clone()
+        }
+    }
+
+    impl StopControl for FakeControl {
+        fn is_ord_running(&self, chain: Chain) -> bool {
+            self.ord_tracked.lock().unwrap().contains(&chain)
+        }
+        fn is_running(&self, chain: Chain) -> bool {
+            self.bitcoind_tracked.lock().unwrap().contains(&chain)
+        }
+        async fn stop_ord(&self, chain: Chain, _timeout: Duration) -> Result<(), NodeManagerError> {
+            self.attempt(chain, Service::Ord).await
+        }
+        async fn stop(&self, chain: Chain, _timeout: Duration) -> Result<(), NodeManagerError> {
+            self.attempt(chain, Service::Bitcoind).await
+        }
+        fn live_services(&self, chain: Chain) -> Vec<(Service, u32)> {
+            let polls = self.polls.fetch_add(1, Ordering::SeqCst) + 1;
+            if self.vanish_after_polls.is_some_and(|n| polls > n) {
+                return Vec::new();
+            }
+            self.alive
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|&&(c, _, _)| c == chain)
+                .map(|&(_, service, pid)| (service, pid))
+                .collect()
+        }
+    }
+
+    const NO_SETTLE: Duration = Duration::ZERO;
+
+    /// Generous next to the fake's own delays (at most a few hundred ms),
+    /// so ordinary tests never trip the outer bound.
+    const TEST_BUDGET: StopBudget = StopBudget {
+        ord: Duration::from_secs(5),
+        bitcoind: Duration::from_secs(5),
+        slack: Duration::from_secs(1),
+    };
+
+    #[tokio::test]
+    async fn stopping_everything_with_nothing_running_attempts_nothing() {
+        let control = FakeControl::default();
+        let failures = stop_everything_with(&control, TEST_BUDGET, NO_SETTLE).await;
+        assert!(failures.is_empty());
+        assert!(control.attempts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn stopping_everything_stops_ord_before_bitcoind_on_each_chain_in_order() {
+        let control = FakeControl::running(
+            &[Chain::Mainnet, Chain::Regtest],
+            &[Chain::Mainnet, Chain::Regtest, Chain::Signet],
+        );
+        let failures = stop_everything_with(&control, TEST_BUDGET, NO_SETTLE).await;
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(
+            control.attempts(),
+            vec![
+                (Chain::Mainnet, Service::Ord),
+                (Chain::Mainnet, Service::Bitcoind),
+                (Chain::Regtest, Service::Ord),
+                (Chain::Regtest, Service::Bitcoind),
+                (Chain::Signet, Service::Bitcoind),
+            ]
+        );
+    }
+
+    /// The Windows release-build failure mode this exists for: ord
+    /// won't stop. Everything else must still be asked to stop -- its
+    /// own environment's bitcoind and every later environment -- and
+    /// the failure must still be reported (once, not once for the failed
+    /// stop and again for the process being alive).
+    #[tokio::test]
+    async fn an_ord_that_will_not_stop_does_not_leave_anything_else_running() {
+        let control = FakeControl::running(
+            &[Chain::Mainnet, Chain::Regtest],
+            &[Chain::Mainnet, Chain::Regtest],
+        )
+        .failing_to_stop(Chain::Mainnet, Service::Ord);
+        let failures = stop_everything_with(&control, TEST_BUDGET, NO_SETTLE).await;
+        assert_eq!(control.attempts().len(), 4, "every service was attempted");
+        assert!(control
+            .attempts()
+            .contains(&(Chain::Mainnet, Service::Bitcoind)));
+        assert!(control.attempts().contains(&(Chain::Regtest, Service::Ord)));
+        assert!(control
+            .attempts()
+            .contains(&(Chain::Regtest, Service::Bitcoind)));
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(failures[0].chain, Chain::Mainnet);
+        assert_eq!(failures[0].service, Service::Ord);
+        assert!(matches!(failures[0].error, NodeManagerError::Io(_)));
+    }
+
+    #[tokio::test]
+    async fn every_failed_stop_is_reported_not_just_the_first() {
+        let control = FakeControl::running(&[Chain::Mainnet], &[Chain::Mainnet, Chain::Regtest])
+            .failing_to_stop(Chain::Mainnet, Service::Ord)
+            .failing_to_stop(Chain::Regtest, Service::Bitcoind);
+        let failures = stop_everything_with(&control, TEST_BUDGET, NO_SETTLE).await;
+        let reported: Vec<_> = failures.iter().map(|f| (f.chain, f.service)).collect();
+        assert_eq!(
+            reported,
+            vec![
+                (Chain::Mainnet, Service::Ord),
+                (Chain::Regtest, Service::Bitcoind)
+            ]
+        );
+    }
+
+    /// The Safe Eject retry hole: a failed (or timed-out) stop leaves the
+    /// process alive but no longer *tracked*, so a second attempt sees
+    /// "nothing running" -- and used to report success ("safe to unplug")
+    /// with the process still holding the drive. It must keep reporting
+    /// the process until it is really gone.
+    #[tokio::test]
+    async fn a_retry_after_a_failed_stop_does_not_report_success() {
+        let control = FakeControl::running(&[Chain::Mainnet], &[])
+            .failing_to_stop(Chain::Mainnet, Service::Ord);
+
+        let first = stop_everything_with(&control, TEST_BUDGET, NO_SETTLE).await;
+        assert_eq!(first.len(), 1);
+        assert!(!control.is_ord_running(Chain::Mainnet), "no longer tracked");
+
+        let second = stop_everything_with(&control, TEST_BUDGET, NO_SETTLE).await;
+        assert_eq!(
+            second.len(),
+            1,
+            "still alive, so still not safe: {second:?}"
+        );
+        assert_eq!(second[0].chain, Chain::Mainnet);
+        assert_eq!(second[0].service, Service::Ord);
+        assert!(
+            matches!(
+                second[0].error,
+                NodeManagerError::StillRunning { pid: 1000 }
+            ),
+            "{:?}",
+            second[0].error
+        );
+        // And the retry did not pretend to stop something it no longer tracks.
+        assert_eq!(control.attempts().len(), 1);
+    }
+
+    /// Something alive that this manager never tracked -- an orphan from
+    /// a crashed earlier session, or a node started outside Nodekeeper --
+    /// makes "safe to unplug" untrue just the same.
+    #[tokio::test]
+    async fn a_live_process_nobody_is_tracking_is_reported_too() {
+        let control = FakeControl::default().with_orphan(Chain::Regtest, Service::Bitcoind, 99);
+        let failures = stop_everything_with(&control, TEST_BUDGET, NO_SETTLE).await;
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert_eq!(failures[0].chain, Chain::Regtest);
+        assert_eq!(failures[0].service, Service::Bitcoind);
+        assert!(matches!(
+            failures[0].error,
+            NodeManagerError::StillRunning { pid: 99 }
+        ));
+        assert!(control.attempts().is_empty(), "nothing was tracked to stop");
+    }
+
+    /// A process that has just exited can linger in the process table for
+    /// a moment; it gets a short window to finish going away before being
+    /// reported (and reported at once if that window is zero).
+    #[tokio::test]
+    async fn a_process_that_is_still_going_away_gets_a_moment_before_being_reported() {
+        let lingering = || {
+            let mut control = FakeControl::default().with_orphan(Chain::Signet, Service::Ord, 5);
+            control.vanish_after_polls = Some(3);
+            control
+        };
+
+        let patient = stop_everything_with(&lingering(), TEST_BUDGET, Duration::from_secs(5)).await;
+        assert!(patient.is_empty(), "{patient:?}");
+
+        let impatient = stop_everything_with(&lingering(), TEST_BUDGET, NO_SETTLE).await;
+        assert_eq!(impatient.len(), 1);
+    }
+
+    /// Two overlapping calls (a double-clicked window close, Quit during
+    /// Safe Eject) must not race. The second waits for the first, then
+    /// finds everything really gone; racing it would have seen "nothing
+    /// tracked" while the first was still stopping, and reported a
+    /// failure (still alive) or -- worse -- exited early. And
+    /// `any_running()` must stay true the whole time, because the
+    /// tracking maps empty out as soon as a stop *starts*.
+    #[tokio::test]
+    async fn overlapping_stop_calls_run_one_after_the_other() {
+        let manager = NodeManager::new();
+        let control = FakeControl {
+            stop_delay: Duration::from_millis(200),
+            ..FakeControl::running(&[Chain::Mainnet], &[])
+        };
+
+        let started = std::time::Instant::now();
+        let first = async {
+            let failures = manager
+                .stop_everything_via(&control, TEST_BUDGET, NO_SETTLE)
+                .await;
+            (failures, started.elapsed())
+        };
+        let second = async {
+            let failures = manager
+                .stop_everything_via(&control, TEST_BUDGET, NO_SETTLE)
+                .await;
+            (failures, started.elapsed())
+        };
+        let watcher = async {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            // The fake already untracked the ord, yet a stop is in flight.
+            assert!(!control.is_ord_running(Chain::Mainnet));
+            manager.any_running()
+        };
+        let ((first_failures, first_done), (second_failures, second_done), any_running_midway) =
+            tokio::join!(first, second, watcher);
+
+        assert!(first_failures.is_empty(), "{first_failures:?}");
+        assert!(
+            second_failures.is_empty(),
+            "the second call must wait, not race: {second_failures:?}"
+        );
+        assert!(second_done >= first_done, "second finished before first");
+        assert!(any_running_midway, "a stop in flight counts as running");
+        assert!(!manager.any_running(), "and stops counting once done");
+        assert_eq!(control.attempts().len(), 1, "stopped exactly once");
+    }
+
+    /// A stop that hangs past even its own internal bounds -- here the
+    /// fake sleeps a full minute -- must be given up on and recorded as a
+    /// failure, not held forever: it runs under the single-flight gate, so
+    /// a hang would wedge `any_running()` and every later Quit / window
+    /// close (which used to be an escape hatch) for good.
+    #[tokio::test]
+    async fn a_stop_that_hangs_is_given_up_on_and_does_not_hold_the_gate() {
+        let manager = NodeManager::new();
+        let control = FakeControl {
+            stop_delay: Duration::from_secs(60),
+            ..FakeControl::running(&[Chain::Mainnet], &[Chain::Mainnet])
+        };
+        let tiny = StopBudget {
+            ord: Duration::from_millis(10),
+            bitcoind: Duration::from_millis(10),
+            slack: Duration::from_millis(10),
+        };
+
+        let started = std::time::Instant::now();
+        let failures = manager.stop_everything_via(&control, tiny, NO_SETTLE).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "gave up promptly, not after the fake's minute: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(failures.len(), 2, "{failures:?}");
+        assert!(matches!(
+            failures[0].error,
+            NodeManagerError::OrdProcess(nk_proc::OrdProcessError::StopTimeout)
+        ));
+        assert!(matches!(
+            failures[1].error,
+            NodeManagerError::Bitcoind(nk_proc::BitcoindError::StopTimeout)
+        ));
+
+        // The gate was released, so a second call is not stuck behind it
+        // -- and, both processes still being alive, does not say "safe".
+        let again = tokio::time::timeout(
+            Duration::from_secs(5),
+            manager.stop_everything_via(&control, tiny, NO_SETTLE),
+        )
+        .await
+        .expect("the gate must be free again");
+        assert_eq!(again.len(), 2, "{again:?}");
+        assert!(again
+            .iter()
+            .all(|f| matches!(f.error, NodeManagerError::StillRunning { .. })));
+        assert!(
+            !manager.any_running(),
+            "and nothing is left counted in flight"
+        );
+    }
+
+    #[test]
+    fn a_stop_failure_names_the_service_the_chain_and_the_cause() {
+        let failure = StopFailure {
+            chain: Chain::Mainnet,
+            service: Service::Ord,
+            error: NodeManagerError::OrdProcess(nk_proc::OrdProcessError::StopTimeout),
+        };
+        let text = failure.to_string();
+        assert!(text.contains("ord"), "{text}");
+        assert!(text.contains("Mainnet"), "{text}");
+        assert!(text.contains("did not exit within the timeout"), "{text}");
+    }
+
+    #[test]
+    fn a_still_running_failure_says_so_and_names_the_process() {
+        let failure = StopFailure {
+            chain: Chain::Regtest,
+            service: Service::Bitcoind,
+            error: NodeManagerError::StillRunning { pid: 4242 },
+        };
+        let text = failure.to_string();
+        assert!(text.contains("bitcoind (Regtest)"), "{text}");
+        assert!(text.contains("still running"), "{text}");
+        assert!(text.contains("4242"), "{text}");
     }
 }

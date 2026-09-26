@@ -2111,22 +2111,54 @@ fn delete_regtest_data_only(environment_data_root: &std::path::Path) -> std::io:
 /// before telling the user it's safe to unplug the drive -- silently
 /// swallowing a failure there would be actively wrong, not just
 /// unhelpful).
-async fn stop_every_running_environment(node_manager: &NodeManager) -> Result<(), TypedError> {
-    for &chain in Chain::ALL.iter() {
-        if node_manager.is_ord_running(chain) {
-            node_manager
-                .stop_ord(chain, std::time::Duration::from_secs(30))
-                .await
-                .map_err(TypedError::from)?;
-        }
-        if node_manager.is_running(chain) {
-            node_manager
-                .stop(chain, std::time::Duration::from_secs(120))
-                .await
-                .map_err(TypedError::from)?;
-        }
+///
+/// `environments` (one per chain) is where the pid files live: after the
+/// stops, anything still alive is reported even though the manager no
+/// longer tracks it, so a retry after a failure can't wrongly come back
+/// clean. See `NodeManager::stop_everything`.
+async fn stop_every_running_environment(
+    node_manager: &NodeManager,
+    environments: &[Environment],
+) -> Result<(), TypedError> {
+    stop_failures_to_result(node_manager.stop_everything(environments).await)
+}
+
+/// One default `Environment` per chain under the current data root --
+/// what `stop_every_running_environment` needs to find each chain's pid
+/// files. (Only the data root and chain matter for that; the per-chain
+/// index options `list_default_environments` also fills in do not.)
+fn all_environments(store: &tauri::State<'_, Arc<Mutex<Store>>>) -> Vec<Environment> {
+    let root = environment_data_root(store);
+    Chain::ALL
+        .iter()
+        .map(|&chain| Environment::new_default(chain, &root))
+        .collect()
+}
+
+/// Turns `NodeManager::stop_everything`'s failure list into the single
+/// error callers surface. Every failure is named in the message; the
+/// structured error `code` is only kept when there is exactly one
+/// failure (with several, no single code describes the situation).
+fn stop_failures_to_result(failures: Vec<node_manager::StopFailure>) -> Result<(), TypedError> {
+    match failures.as_slice() {
+        [] => Ok(()),
+        [only] => Err(TypedError {
+            code: only.error.code(),
+            message: only.to_string(),
+        }),
+        several => Err(TypedError {
+            code: None,
+            message: format!(
+                "{} services did not stop: {}",
+                several.len(),
+                several
+                    .iter()
+                    .map(|f| f.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        }),
     }
-    Ok(())
 }
 
 /// The tray menu's "Quit" action: stops every running environment
@@ -2138,7 +2170,8 @@ async fn stop_every_running_environment(node_manager: &NodeManager) -> Result<()
 /// when the user explicitly asked it to.
 async fn stop_everything_and_exit(app: tauri::AppHandle) {
     let node_manager = app.state::<NodeManager>();
-    let _ = stop_every_running_environment(&node_manager).await;
+    let environments = all_environments(&app.state::<Arc<Mutex<Store>>>());
+    let _ = stop_every_running_environment(&node_manager, &environments).await;
     app.exit(0);
 }
 
@@ -2147,8 +2180,12 @@ async fn stop_everything_and_exit(app: tauri::AppHandle) {
 /// swallowed -- telling the user it's safe to unplug the drive when
 /// something didn't actually stop would risk real data corruption.
 #[tauri::command]
-async fn safe_eject(node_manager: tauri::State<'_, NodeManager>) -> Result<(), TypedError> {
-    stop_every_running_environment(&node_manager).await
+async fn safe_eject(
+    node_manager: tauri::State<'_, NodeManager>,
+    store: tauri::State<'_, Arc<Mutex<Store>>>,
+) -> Result<(), TypedError> {
+    let environments = all_environments(&store);
+    stop_every_running_environment(&node_manager, &environments).await
 }
 
 /// Shows and focuses the main window -- shared by the tray icon's left
@@ -2416,6 +2453,63 @@ mod tests {
         ConsoleCommandPreview::export_all(&config).unwrap();
         ScriptInfo::export_all(&config).unwrap();
         InterpreterAvailability::export_all(&config).unwrap();
+    }
+
+    fn stop_failure(
+        chain: Chain,
+        service: node_manager::Service,
+        error: NodeManagerError,
+    ) -> node_manager::StopFailure {
+        node_manager::StopFailure {
+            chain,
+            service,
+            error,
+        }
+    }
+
+    #[test]
+    fn no_stop_failures_is_success() {
+        assert!(stop_failures_to_result(vec![]).is_ok());
+    }
+
+    #[test]
+    fn a_single_stop_failure_keeps_its_structured_error_code() {
+        let error = stop_failures_to_result(vec![stop_failure(
+            Chain::Regtest,
+            node_manager::Service::Ord,
+            NodeManagerError::OrdProcess(nk_proc::OrdProcessError::PortInUse { port: 1 }),
+        )])
+        .unwrap_err();
+        assert_eq!(error.code, Some(AppErrorCode::PortInUse));
+        assert!(error.message.contains("ord"), "{}", error.message);
+        assert!(error.message.contains("Regtest"), "{}", error.message);
+    }
+
+    #[test]
+    fn several_stop_failures_are_all_named_and_carry_no_single_code() {
+        let error = stop_failures_to_result(vec![
+            stop_failure(
+                Chain::Mainnet,
+                node_manager::Service::Ord,
+                NodeManagerError::OrdProcess(nk_proc::OrdProcessError::StopTimeout),
+            ),
+            stop_failure(
+                Chain::Regtest,
+                node_manager::Service::Bitcoind,
+                NodeManagerError::BitcoindNotRunning {
+                    chain: Chain::Regtest,
+                },
+            ),
+        ])
+        .unwrap_err();
+        assert_eq!(error.code, None);
+        assert!(error.message.starts_with("2 services did not stop"));
+        assert!(error.message.contains("ord (Mainnet)"), "{}", error.message);
+        assert!(
+            error.message.contains("bitcoind (Regtest)"),
+            "{}",
+            error.message
+        );
     }
 
     /// The literal docs/SPEC.md Phase 8 [CI] acceptance criterion:

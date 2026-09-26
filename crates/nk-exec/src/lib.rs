@@ -5,10 +5,14 @@
 //! `docs/SPEC.md` Foundation B.
 #![allow(clippy::disallowed_methods)]
 
+pub mod console;
 pub mod executor;
 pub mod redact;
 pub mod types;
 
+pub use console::no_console_window;
+#[cfg(windows)]
+pub use console::CREATE_NO_WINDOW;
 pub use executor::{ExecError, Executor};
 pub use types::{
     CommandId, CommandSource, CommandSpec, ExecEvent, ExecOutcome, OutputStream, RecordSpec,

@@ -1,8 +1,9 @@
 param(
     # Defaults are relative to the repo root (three levels above this
     # script); the bitcoind/ord binaries are the verified ones already
-    # cached under target/ by the nk-verify fetch examples.
-    [string]$Probe = "$PSScriptRoot\..\..\..\target\debug\examples\console_less_probe.exe",
+    # cached under target/ by the nk-verify fetch examples. Build the
+    # probe and its helper first: cargo build -p nk-testkit --bins
+    [string]$Probe = "$PSScriptRoot\..\..\..\target\debug\console_less_probe.exe",
     [string]$Bitcoind = "$PSScriptRoot\..\..\..\target\nodekeeper-bitcoin-core-31.1\extracted\bitcoin-31.1\bin\bitcoind.exe",
     [string]$Ord = "$PSScriptRoot\..\..\..\target\nodekeeper-ord-0.29.0\extracted\ord-0.29.0\ord.exe",
     [string]$Result = "$env:TEMP\console-less-probe-result.txt"

@@ -58,17 +58,21 @@ impl Executor {
             background: spec.background,
         });
 
-        let mut child = Command::new(&spec.program)
+        let mut command = Command::new(&spec.program);
+        command
             .args(&spec.args)
             .envs(spec.env_vars.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|source| ExecError::Spawn {
-                program: spec.program.clone(),
-                source,
-            })?;
+            .stderr(Stdio::piped());
+        // No console window per command on Windows (see console.rs): the
+        // release exe has no console, so each child would otherwise
+        // flash one.
+        crate::console::no_console_window(&mut command);
+        let mut child = command.spawn().map_err(|source| ExecError::Spawn {
+            program: spec.program.clone(),
+            source,
+        })?;
 
         if let Some(mut stdin_data) = spec.stdin.take() {
             if let Some(mut stdin) = child.stdin.take() {

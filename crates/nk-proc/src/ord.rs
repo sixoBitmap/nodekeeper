@@ -10,8 +10,11 @@
 //!   equivalent) — graceful shutdown is always a signal: SIGINT on
 //!   macOS/Linux, `CTRL_BREAK_EVENT` on Windows (Phase 0's spike,
 //!   `spikes/test-createprocess-v2.ps1`, proved the Windows mechanism
-//!   live; this is its first real Rust use).
+//!   live; this is its first real Rust use). On Windows the delivery
+//!   route depends on whether Nodekeeper itself has a console -- see
+//!   `console.rs`.
 
+use crate::console::ConsoleMode;
 use crate::process_check::process_is_alive;
 use nk_core::{AppErrorCode, Environment};
 use std::net::TcpListener;
@@ -60,6 +63,10 @@ pub struct OrdProcess {
     child: tokio::process::Child,
     pub pid: u32,
     pub started_at: std::time::Instant,
+    /// Decided once at spawn and reused at stop: the route the graceful
+    /// stop signal must take depends on how ord's console was set up
+    /// then, not on whatever this process looks like later.
+    console_mode: ConsoleMode,
 }
 
 impl OrdProcess {
@@ -91,20 +98,28 @@ impl OrdProcess {
         args.extend(nk_core::ord_conf::ord_server_args(environment));
 
         let mut command = tokio::process::Command::new(binary_path);
+        // stdin is null explicitly, not left to default to "inherit": an
+        // inherited stdin duplicates whatever this process's standard
+        // handle currently is, which can be a stale value in the release
+        // exe after an ord stop (see `console.rs`).
         command
             .args(&args)
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        // New process group so a later CTRL_BREAK_EVENT targets only ord
-        // (and nothing it spawns), not Nodekeeper's own process group —
-        // Windows-only; Unix's SIGINT is sent straight to ord's own pid.
+        // Windows-only: always a new process group, so a later
+        // CTRL_BREAK_EVENT targets only ord (and nothing it spawns), not
+        // Nodekeeper's own process group -- and, when Nodekeeper has no
+        // console (the shipped GUI exe), a hidden console of ord's own
+        // instead of a visible window. Unix's SIGINT is sent straight to
+        // ord's own pid and needs neither.
+        let console_mode = ConsoleMode::current();
         #[cfg(windows)]
         {
             // `tokio::process::Command` exposes `creation_flags` as an
             // inherent method on Windows (no `CommandExt` import
             // needed, unlike `std::process::Command`).
-            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-            command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+            command.creation_flags(crate::console::ord_creation_flags(console_mode));
         }
 
         let child = command.spawn().map_err(OrdProcessError::Spawn)?;
@@ -116,6 +131,7 @@ impl OrdProcess {
             child,
             pid,
             started_at: std::time::Instant::now(),
+            console_mode,
         })
     }
 
@@ -167,16 +183,39 @@ impl OrdProcess {
     /// 4). Removes the PID file Nodekeeper wrote in `start()` once ord
     /// has actually exited, so a stale file never causes a later
     /// `detect_running_ord` false positive.
+    ///
+    /// Returns ord's exit status so a caller (or test) can tell a
+    /// graceful shutdown (ord's own handler, exit code 0 on Windows)
+    /// from being killed by an unhandled signal; the stop itself only
+    /// fails if the signal couldn't be sent or ord didn't exit in time.
+    ///
+    /// An ord that has *already* exited (crashed, killed from Task
+    /// Manager, ...) is a successful stop, not an error: there is nothing
+    /// left to signal, and on the Windows hidden-console route the signal
+    /// itself cannot even be attempted (`AttachConsole` fails for a
+    /// process that no longer exists), so this is checked before the
+    /// signal and again if the signal fails.
     pub async fn stop(
         mut self,
         environment: &Environment,
         timeout: Duration,
-    ) -> Result<(), OrdProcessError> {
-        send_graceful_stop(self.pid)?;
-        match tokio::time::timeout(timeout, self.child.wait()).await {
-            Ok(Ok(_status)) => {
+    ) -> Result<std::process::ExitStatus, OrdProcessError> {
+        if let Ok(Some(status)) = self.child.try_wait() {
+            let _ = std::fs::remove_file(environment.ord_pid_path());
+            return Ok(status);
+        }
+        if let Err(signal_error) = send_graceful_stop(self.pid, self.console_mode) {
+            // It may have exited between the check above and the signal.
+            if let Ok(Some(status)) = self.child.try_wait() {
                 let _ = std::fs::remove_file(environment.ord_pid_path());
-                Ok(())
+                return Ok(status);
+            }
+            return Err(signal_error);
+        }
+        match tokio::time::timeout(timeout, self.child.wait()).await {
+            Ok(Ok(status)) => {
+                let _ = std::fs::remove_file(environment.ord_pid_path());
+                Ok(status)
             }
             Ok(Err(e)) => Err(OrdProcessError::Io(e)),
             Err(_elapsed) => Err(OrdProcessError::StopTimeout),
@@ -273,7 +312,7 @@ fn check_port_available(port: u16) -> Result<(), OrdProcessError> {
 }
 
 #[cfg(unix)]
-fn send_graceful_stop(pid: u32) -> Result<(), OrdProcessError> {
+fn send_graceful_stop(pid: u32, _console_mode: ConsoleMode) -> Result<(), OrdProcessError> {
     let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGINT) };
     if result == 0 {
         Ok(())
@@ -283,24 +322,11 @@ fn send_graceful_stop(pid: u32) -> Result<(), OrdProcessError> {
 }
 
 #[cfg(windows)]
-#[allow(non_snake_case)]
-fn send_graceful_stop(pid: u32) -> Result<(), OrdProcessError> {
-    const CTRL_BREAK_EVENT: u32 = 1;
-
-    extern "system" {
-        fn GenerateConsoleCtrlEvent(dwCtrlEvent: u32, dwProcessGroupId: u32) -> i32;
-    }
-
-    // Safety: `pid` is a plain u32 process/group id (no pointers), and
-    // this Win32 call has no failure mode worse than returning 0 -- the
-    // exact FFI signature Phase 0's spike proved live
-    // (spikes/test-createprocess-v2.ps1).
-    let ok = unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) };
-    if ok != 0 {
-        Ok(())
-    } else {
-        Err(OrdProcessError::Io(std::io::Error::last_os_error()))
-    }
+fn send_graceful_stop(pid: u32, console_mode: ConsoleMode) -> Result<(), OrdProcessError> {
+    // The FFI signature `GenerateConsoleCtrlEvent` uses is the one
+    // Phase 0's spike proved live (spikes/test-createprocess-v2.ps1);
+    // `console.rs` explains the extra hidden-console route.
+    crate::console::send_ctrl_break(pid, console_mode).map_err(OrdProcessError::Io)
 }
 
 #[cfg(test)]
@@ -385,6 +411,53 @@ mod tests {
             Err(OrdProcessError::PortInUse { port }) if port == env.ord_port
         ));
         drop(listener);
+    }
+
+    /// An ord that already exited on its own (crashed, killed from Task
+    /// Manager) is a *successful* stop on every console route -- most
+    /// importantly the Windows hidden-console one, where the signal
+    /// cannot even be attempted for a process that no longer exists
+    /// (`AttachConsole` fails), which used to make Stop / Safe Eject
+    /// report a failure for something that wasn't running. Also cleans up
+    /// the pid file, so it doesn't later read as an unclean shutdown.
+    #[tokio::test]
+    async fn stopping_an_ord_that_already_exited_succeeds_and_removes_its_pid_file() {
+        for console_mode in [ConsoleMode::Shared, ConsoleMode::Hidden] {
+            let dir = tempfile::tempdir().unwrap();
+            let env = Environment::new_default(Chain::Regtest, dir.path());
+            std::fs::create_dir_all(env.ord_index_dir()).unwrap();
+
+            let mut command =
+                tokio::process::Command::new(if cfg!(windows) { "cmd" } else { "true" });
+            if cfg!(windows) {
+                command.args(["/C", "exit", "0"]);
+            }
+            let mut child = command
+                .spawn()
+                .expect("failed to spawn a throwaway process");
+            let pid = child.id().expect("a just-spawned child has a pid");
+            child.wait().await.expect("throwaway process should exit");
+            std::fs::write(env.ord_pid_path(), pid.to_string()).unwrap();
+
+            let process = OrdProcess {
+                child,
+                pid,
+                started_at: std::time::Instant::now(),
+                console_mode,
+            };
+            let status = process
+                .stop(&env, Duration::from_secs(5))
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("stopping an already-exited ord ({console_mode:?}): {e}")
+                });
+
+            assert!(status.success());
+            assert!(
+                !env.ord_pid_path().exists(),
+                "pid file should be removed ({console_mode:?})"
+            );
+        }
     }
 
     /// Same helper (and rationale) as `bitcoind.rs`'s and `lock.rs`'s

@@ -2016,28 +2016,45 @@ Done when (docs/SPEC.md):
 
 ### Tasks, in order
 
-- [ ] **Step 0 -- Windows release-build process handling** (gates
+- [x] **Step 0 -- Windows release-build process handling** (gates
       packaging, services, updater, scheduling, safe-eject). Found by
       the critic, not by any analyst: the release exe is a GUI-subsystem
       program, so `ord`'s CTRL_BREAK stop and every child spawn behave
-      differently from every build tested so far.
-  - [x] VERIFIED live 2026-09-26 (DECISIONS.md "Windows release builds:
-        console-less process handling"): on unmodified code a console-
-        less parent **cannot stop ord** (`GenerateConsoleCtrlEvent` ->
-        "The handle is invalid", ord orphaned) and **every child gets a
-        visible console window**. bitcoind's RPC stop is unaffected.
-        Probe + driver: `crates/nk-testkit/examples/console_less_probe.*`.
-  - [x] Leading fix prototyped and verified (hidden consoles +
-        attach-and-signal ord stop: no windows, ord exit code 0, no
-        orphans) on local branch `wip/phase10-step0-console-fix`.
-  - [ ] **BLOCKED -- STOP AND ASK (graceful ord shutdown):** owner to
-        choose option A/B/C from that DECISIONS.md entry, and approve
-        making `stop_every_running_environment` continue past failures
-        and report all of them.
-  - [ ] Real implementation with the runtime console/no-console split,
-        a regression test that runs the console-less probe (Windows),
-        and a final check with a real Tauri release exe before any
-        packaging work.
+      differently from every build tested so far. **Done 2026-09-26** --
+      full write-up, commands, outputs, negative controls and the review
+      in DECISIONS.md "Windows release builds: console-less process
+      handling"; the one item still owed is listed last.
+  - [x] VERIFIED live: on unmodified code a console-less parent **cannot
+        stop ord** (`GenerateConsoleCtrlEvent` -> "The handle is
+        invalid", ord orphaned) and **every child gets a visible console
+        window**. bitcoind's RPC stop is unaffected.
+  - [x] STOP AND ASK answered: owner approved option A (hidden consoles +
+        attach-and-signal ord stop, with a runtime console/no-console
+        split) and stop-everything continuing past failures.
+  - [x] Implemented: `nk-exec/src/console.rs`, `nk-proc/src/console.rs`
+        (+ ord/bitcoind spawn and stop changes, standard handles saved
+        and restored around the attach, null stdin), `NodeManager::
+        stop_everything` (keeps going, verifies pid files afterwards,
+        single-flight, `any_running()` counts stops in flight), Safe
+        Eject's specific failure message.
+  - [x] Tests: probe + helper bins, driver, and the Windows regression
+        test `nk-testkit/tests/console_less.rs` (respawn after the stop,
+        NULL std handles, executor child without a console window,
+        graceful exit 0, no visible window for bitcoind/ord), each fix
+        shown to fail without it via negative controls (the exit-code-0
+        assertion itself was not separately shown to fail); unit tests
+        for the mode split, the already-exited ord, the hung stop RPC,
+        and the whole stop-everything behavior (keep going, verify,
+        single-flight, bounded); Vitest for Safe Eject.
+  - [x] Adversarial 4-lens review + skeptic verification; every
+        confirmed finding fixed or explicitly declined in DECISIONS.md.
+  - [ ] **Still owed before any packaging work:** one run with a real
+        Tauri *release* exe (disk was too tight to build one; the probe
+        stands in for it), and macOS/Linux CI (only a cfg-flip
+        simulation of the non-Windows build was possible here).
+  - [ ] Follow-up noted, not scheduled: the portable-mode window-close
+        dialog promises "safe to unplug" but the close path still exits
+        even if a stop failed (pre-existing best-effort design).
 - [ ] **Step 1 -- foundation fixes to shipped code** (small, separate
       commits; verifiable here against real regtest bitcoind/ord)
   - [ ] (a) Block private-material console commands: `ord wallet dump`,

@@ -90,12 +90,21 @@ impl BitcoindProcess {
             args.push(flag.to_string());
         }
 
-        let child = tokio::process::Command::new(binary_path)
+        let mut command = tokio::process::Command::new(binary_path);
+        // stdin is null explicitly, not left to default to "inherit": an
+        // inherited stdin duplicates whatever this process's standard
+        // handle currently is, which can be a stale value in the release
+        // exe after an ord stop (see `console.rs`).
+        command
             .args(&args)
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(BitcoindError::Spawn)?;
+            .stderr(Stdio::null());
+        // Windows: no visible console window when Nodekeeper itself has
+        // none (the shipped GUI exe); unchanged when it has one. bitcoind
+        // is stopped over RPC, so it never needs to share a console.
+        crate::console::hide_window_when_console_less(&mut command);
+        let child = command.spawn().map_err(BitcoindError::Spawn)?;
         let pid = child.id().expect("a just-spawned child process has a pid");
         // Windows builds of bitcoind have no `-daemon` flag (confirmed in
         // the Phase 0 spike, DECISIONS.md) — nk-proc always runs it as a
@@ -173,12 +182,19 @@ impl BitcoindProcess {
     /// default: 120s, configurable — the caller decides the duration).
     /// The RPC call is allowed to fail (e.g. the node already went away
     /// on its own) — we still wait for the process to exit either way.
+    ///
+    /// The RPC call is itself bounded by `timeout`: the RPC client has no
+    /// request timeout of its own, so a bitcoind that accepts the
+    /// connection but never answers (its RPC threads stuck behind a
+    /// stalled disk, say -- the portable-drive case) would otherwise hang
+    /// this call forever, outside the wait's timeout below. The worst case
+    /// is therefore two `timeout`s, not unbounded.
     pub async fn stop(
         mut self,
         rpc: &nk_rpc::RpcClient,
         timeout: Duration,
     ) -> Result<(), BitcoindError> {
-        let _ = rpc.stop().await;
+        let _ = tokio::time::timeout(timeout, rpc.stop()).await;
         match tokio::time::timeout(timeout, self.child.wait()).await {
             Ok(Ok(_status)) => Ok(()),
             Ok(Err(e)) => Err(BitcoindError::Io(e)),
@@ -420,6 +436,81 @@ mod tests {
             "bitcoind should remove its own pid file on a clean shutdown -- if this \
              assertion fails, a leftover bitcoind.pid can no longer be trusted as an \
              unclean-shutdown signal and any detection built on that assumption is wrong"
+        );
+    }
+
+    /// The stop RPC must not be able to hang `stop` forever: the RPC
+    /// client has no request timeout, and a bitcoind whose RPC threads
+    /// are stuck (a stalled external drive) accepts connections but never
+    /// answers. Here a listener does exactly that, and the "process" is a
+    /// long-lived throwaway that never exits on its own, so `stop` has to
+    /// give up on the RPC *and* on the wait -- after about two timeouts --
+    /// and report `StopTimeout`, instead of blocking the caller (and,
+    /// through it, `NodeManager::stop_everything`'s single-flight gate).
+    #[tokio::test]
+    async fn a_stop_rpc_that_never_answers_cannot_hang_the_stop_forever() {
+        // Accepts connections and keeps them open without ever replying.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let held = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let held_by_thread = held.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                held_by_thread.lock().unwrap().push(stream);
+            }
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let cookie = dir.path().join(".cookie");
+        std::fs::write(&cookie, "__cookie__:hunter2").unwrap();
+        let rpc = nk_rpc::RpcClient::from_cookie_file(
+            format!("http://127.0.0.1:{port}"),
+            &cookie,
+            nk_exec::Executor::new(),
+            "regtest".to_string(),
+            Chain::Regtest,
+        )
+        .unwrap();
+
+        // `kill_on_drop`: the stop gives up on this process and drops it.
+        let mut command =
+            tokio::process::Command::new(if cfg!(windows) { "ping" } else { "sleep" });
+        if cfg!(windows) {
+            command.args(["-n", "30", "127.0.0.1"]);
+        } else {
+            command.arg("30");
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let child = command
+            .spawn()
+            .expect("failed to spawn a long-lived process");
+        let pid = child.id().expect("a just-spawned child has a pid");
+        let process = BitcoindProcess {
+            child,
+            pid,
+            started_at: std::time::Instant::now(),
+        };
+
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            process.stop(&rpc, Duration::from_millis(300)),
+        )
+        .await
+        .expect("stop must give up by itself, not hang on the RPC");
+
+        assert!(
+            matches!(result, Err(BitcoindError::StopTimeout)),
+            "{result:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "took {:?}",
+            started.elapsed()
         );
     }
 

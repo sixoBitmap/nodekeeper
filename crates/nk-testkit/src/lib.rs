@@ -136,13 +136,26 @@ impl RegtestFixture {
     /// that wants to assert the graceful-stop path itself succeeded
     /// calls this explicitly, same reasoning as bitcoind's `stop()`.
     pub async fn stop_ord(&mut self) -> Result<(), FixtureError> {
-        if let Some(process) = self.ord_process.take() {
-            process
-                .stop(&self.environment, Duration::from_secs(15))
-                .await?;
-        }
+        self.stop_ord_with_status().await.map(|_| ())
+    }
+
+    /// `stop_ord`, also returning ord's exit status (`None` if ord
+    /// wasn't running) -- for tests that need to tell a graceful
+    /// shutdown (ord's own handler, exit code 0 on Windows) from being
+    /// killed by an unhandled signal.
+    pub async fn stop_ord_with_status(
+        &mut self,
+    ) -> Result<Option<std::process::ExitStatus>, FixtureError> {
+        let status = match self.ord_process.take() {
+            Some(process) => Some(
+                process
+                    .stop(&self.environment, Duration::from_secs(15))
+                    .await?,
+            ),
+            None => None,
+        };
         self.ord = None;
-        Ok(())
+        Ok(status)
     }
 
     /// Mines `n` blocks to a fresh address in the node's own wallet

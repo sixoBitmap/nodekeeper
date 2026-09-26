@@ -109,6 +109,8 @@
       "hint": "Stops every running environment cleanly (ord first, then Bitcoin Core) before you unplug this drive.",
       "button": "Safely shut down and eject",
       "ejecting": "Shutting down…",
+      "failedTitle": "Not everything stopped",
+      "failedMessage": "Do not unplug this drive yet -- something is still running and could be damaged: {{details}}. Wait a minute, then try again. If it keeps happening, close that program yourself (for example in Task Manager), then try again.",
       "safeToUnplug": "Everything has stopped -- it's safe to unplug this drive now."
     }
   },
