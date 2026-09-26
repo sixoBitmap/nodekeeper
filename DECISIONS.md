@@ -3609,6 +3609,172 @@ path and the new code is cfg-gated, but only Windows compiled and ran it
 **Process note.** `cargo` was not on PATH in either shell this session;
 prefix `$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"`.
 
+### Single-instance lock and command-history pruning (Phase 10 step 1c/1d, 2026-09-26)
+
+Both were spec-mandated and built, but never wired in (found by the Phase
+10 scoping critic, confirmed by grep): `SingleInstanceLock` (Foundation C)
+was never acquired by the app, and `Store::prune_command_history` (item 7,
+"last 5,000 entries per environment") had no caller outside its own test.
+
+**Single-instance lock.**
+
+- *Where and when:* on the app data folder (`data_root()`: the settings
+  database, and in portable mode -- where `config/` and `data/` sit side by
+  side on the drive -- effectively everything), at the very start of
+  `run()`, **before the settings database is opened**, so a second copy
+  never touches it.
+- *Refusal:* a native message box (`instance_lock.rs`) in plain words --
+  "Nodekeeper is already running" (with how long ago and where to look), or
+  "in use on another computer" (names it, says to close it there first, and
+  shows exactly which file to delete if that computer is really done), a
+  damaged lock file, or an unwritable folder -- then exit code 1. There is
+  deliberately **no "take over anyway" button** for a lock held by another
+  computer (two computers on one drive can corrupt it); the user deletes
+  the named file. The box is shown before the Tauri app exists, so it uses
+  `rfd` directly -- already in the build at 0.16.0 with exactly the features
+  `tauri-plugin-dialog` enables, so declaring it changed `Cargo.lock` by one
+  line (the edge) and downloaded nothing.
+- *Release:* **explicitly**, on `RunEvent::Exit`. Checked rather than
+  assumed: with the explicit release removed (negative control) a normal
+  window close left `.nodekeeper.lock` behind, i.e. Tauri's exit skips the
+  destructors of managed state; restored afterwards. A crash / kill still
+  leaves the file, which is what the stale detection is for.
+- *Stale detection made identity-aware.* `nk-proc`'s lock used a bare
+  "is any process running with that pid" check. Fine for a crash *within*
+  one session, but a lock outlives every exit that cannot clean up (Task
+  Manager, power loss, a future updater exiting) and pids are recycled
+  aggressively, especially across a reboot -- so after one such exit, the
+  data folder could stay "already running" for as long as an unrelated
+  program happened to hold that number. A process can only have *reused*
+  the pid if the holder was already gone, so `lock_holder_is_alive` asks
+  whether it **started no later than the lock was written** (5 s slack): if
+  so it can be the holder; if it started after, it cannot. That start time
+  is decisive when the OS reports it; **the executable name is only a
+  fallback for an unknown start time** (0: e.g. an elevated process seen
+  from a normal one). A first version required the name to match as well;
+  review showed that on Linux the OS reports the name a program was
+  *launched under* (a symlink's, truncated to 15 characters) while
+  `current_exe` gives the resolved target, so a live copy started through
+  a symlink would have been judged stale and two copies would share the
+  folder -- and the start time already covers pid reuse completely. Every
+  unknown errs toward "still held". This is **not** applied to the
+  bitcoind/ord pid-file checks (`process_is_alive` is unchanged): there a
+  name check could wrongly report "nothing running" for a node started
+  another way -- Bitcoin-Qt writes the same `bitcoind.pid` -- which is the
+  dangerous direction for a safe-to-unplug check (DECISIONS.md, console-
+  less process handling, second review).
+- *Verified live with the real app* (`target/debug/nodekeeper.exe` copied
+  into a temp folder with a `config/` sibling, i.e. an isolated portable
+  install; nothing near real data): (1) first copy takes the lock (hostname,
+  its pid, unix time); (2) a second copy stays up only as a message box
+  ("#32770 | Nodekeeper is already running", screenshot taken), leaves the
+  lock byte-for-byte unchanged, and exits with code 1 when dismissed; (3)
+  closing the first copy normally removes the lock; (4) after `Stop-Process
+  -Force` (a crash) the lock is left naming the dead pid and the next copy
+  takes it over and runs normally; (5) a lock written an hour ago naming a
+  live, unrelated `ping` (which necessarily started after it) is treated
+  as stale and the app starts; (6) **the race: three real copies launched
+  at once over a crashed lock -- exactly one gets a main window, two show
+  the "already running" message, and the lock names the running copy.**
+  (An earlier run of (5) "failed" because the script planted the lock
+  with `Get-Date -UFormat %s`, which in Windows PowerShell 5.1 is *local*
+  time -- 10,801 s ahead here -- making an "hour ago" lock two hours in
+  the future; the app correctly treated that as a live holder. Fixed in
+  the script, not the code.)
+  Unit tests: message wording per failure, ages, exclusive-then-released
+  through the real lock, the start-time/name decision (all combinations),
+  a lock whose pid a live unrelated process holds, and the lock-file race
+  cases below.
+- *Concurrency hardening of `acquire` (from review).* The first cut had a
+  read-then-`remove_file` takeover: inspecting a stale lock (a process-list
+  scan, ~0.1-1.4 s here) left a wide window in which a slow launch would
+  delete *another launch's brand-new, live lock* and create its own, so
+  both ran. `acquire` is now a bounded retry loop: the stale file is
+  removed only under an exclusive takeover guard (`.nodekeeper.lock.
+  takeover`, `create_new`) **and only if it still holds exactly the
+  contents that were judged stale**; the atomic `create_new` of the lock
+  itself then decides any remaining race. Negative control: with the
+  guard replaced by the old unconditional remove, the 8-way race test
+  failed on the first round with **"8 launches, 6 won"**. Also from
+  review: a lock that disappears while being inspected is a reason to
+  look again, not an I/O error; an empty or garbled lock is first waited
+  for (the file is created *then* filled in, so a second launch can catch
+  it empty), and is replaced only once too old to belong to a live writer
+  (10 s) -- a younger one is reported as damaged and never deleted; a
+  failed write (disk full, drive unplugged) removes the empty file it
+  just created; and losing the create race re-reads the winner instead
+  of reporting this process's own pid as "the other copy".
+- *Not covered / limits.* The environment data folder is locked only when
+  it is inside the app data folder (portable default) -- **one pointed at a
+  shared external drive is not locked**; there, bitcoind's own datadir lock
+  and the pid-file checks are the only guard, and a second computer would
+  not see this computer's bitcoind. Locking it too needs a decision on what
+  a refusal *there* should do (the user must still be able to reach the app
+  to change the folder), so it is left as a follow-up rather than guessed.
+  **Safe Eject leaves the app -- and so the lock -- in place** (found by
+  review; an owner decision is needed, not made here): "Safely shut down
+  and eject" stops the services and says it is safe to unplug, but
+  Nodekeeper keeps running on that computer holding `config/.nodekeeper.
+  lock` (and the settings database open) on the drive. Moving the drive to
+  a second computer without also closing Nodekeeper first therefore gets
+  the "in use on another computer" message there (recoverable: it names
+  the file to delete). Options: quit the app after a successful eject
+  (like the portable close-and-stop path already does), or release the
+  lock and close the database and change the wording -- the same
+  question as whether "safe to unplug" is true while the exe itself runs
+  from the drive. **Host identity is the OS hostname**, which macOS can
+  change with the network, and on Linux the process start time is derived
+  from the boot time, which moves if the wall clock is stepped: either can
+  make a same-computer lock read as foreign or a live holder as stale on
+  those platforms (untestable here; a stable machine id / boot id in the
+  lock would fix both).
+  No "focus the existing window" behavior (tauri-plugin-single-instance)
+  -- the message says where to look. Tray Quit and the portable close-and-
+  stop path also end via `app.exit(0)`, so they reach the same Exit
+  handler, but only the ordinary window close was exercised live (a tray
+  menu cannot be clicked from here). The message box on macOS/Linux is
+  untested (this is a Windows-only session).
+
+**Review of this change (2026-09-26).** Same shape as the earlier ones (3
+lenses -- lock lifecycle, stale detection, pruning + docs -- every finding
+attacked by two skeptics; 41 agents). Nothing critical; the substantive
+findings were fixed (above): the takeover race, empty/partial/vanishing
+lock files, the over-strict name check, the misplaced
+`#[cfg_attr(mobile, tauri::mobile_entry_point)]` (my new `open_store` had
+been inserted between it and `run()`; harmless on desktop, wrong on mobile),
+the pre-lock `create_dir_all().expect()` that would fail silently instead of
+showing the friendly message, and the throttle test. **Not changed:** Safe
+Eject vs. the lock (owner question, recorded above), hostname stability on
+macOS and the Linux clock-step case (untestable here, recorded above).
+Refuted by their skeptics: the startup prune being synchronous work before
+any window (5,000 rows x a few environments is milliseconds), a running
+command's row being prunable (only after 5,000 newer ones), and "a failed
+prune only logs" (true of every store write in this app).
+
+**Command-history pruning.**
+
+- `COMMAND_HISTORY_KEEP_PER_ENVIRONMENT = 5_000` (item 7's "e.g. last
+  5,000"). The event bridge (`persist_exec_events`) prunes an environment
+  every **100 new rows** in it -- not after every command, because
+  background polling records a great many rows and a `DELETE` each time is
+  wasteful for a limit that only has to hold *about* (worst overshoot: 100
+  rows per environment between prunes) -- and `open_store` trims every
+  environment once at launch, so a history that grew before pruning
+  existed (or while the app was closed) shrinks without waiting for new
+  commands. A failed prune only logs; it never interrupts anything.
+  `prune_command_history` now returns how many rows it deleted.
+- Tests: per-environment and whole-store pruning (counts, isolation,
+  idempotence); the shipped limits (5,000 / 100); end to end through the
+  real executor event stream with a small limit (keep 2, prune every 5)
+  asserting the **intermediate** states -- nothing pruned after four
+  commands (review: the first version only checked the end state, so
+  pruning after every command would have passed; negative control: with
+  that bug the test fails at "below the interval"), cut back at the fifth
+  and again at the tenth, another environment left alone; and the startup
+  path on a real file database reopened the way a launch does.
+- Rows are pruned by `started_at_ms`, so a very old command still marked
+  "running" could in principle be pruned -- only after 5,000 newer ones.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

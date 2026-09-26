@@ -9,6 +9,12 @@ mod history_bridge;
 
 pub use history_bridge::persist_exec_events;
 
+/// docs/SPEC.md item 7: "Rolling history (e.g. last 5,000 entries per
+/// environment) in SQLite." How many `command_history` rows are kept per
+/// environment; older ones are pruned (see `history_bridge` and
+/// `Store::prune_all_command_history`).
+pub const COMMAND_HISTORY_KEEP_PER_ENVIRONMENT: u32 = 5_000;
+
 use rusqlite::{params, Connection};
 use rusqlite_migration::{Migrations, M};
 use serde::Serialize;
@@ -258,10 +264,13 @@ impl Store {
 
     /// Deletes the oldest rows for `environment` beyond `keep`, keeping
     /// history bounded per environment (docs/SPEC.md item 7's "last
-    /// 5,000 entries per environment"). Call after every finished
-    /// command.
-    pub fn prune_command_history(&self, environment: &str, keep: u32) -> Result<(), StoreError> {
-        self.conn.execute(
+    /// 5,000 entries per environment"). Returns how many rows were
+    /// deleted. Called by `history_bridge` every so many new commands
+    /// (not after every one: a busy poll records a lot of rows, and the
+    /// history only has to stay *about* that size), and for every
+    /// environment at startup via `prune_all_command_history`.
+    pub fn prune_command_history(&self, environment: &str, keep: u32) -> Result<usize, StoreError> {
+        let deleted = self.conn.execute(
             "DELETE FROM command_history
              WHERE environment = ?1 AND id NOT IN (
                  SELECT id FROM command_history
@@ -271,7 +280,27 @@ impl Store {
              )",
             params![environment, keep],
         )?;
-        Ok(())
+        Ok(deleted)
+    }
+
+    /// `prune_command_history` for every environment that has any
+    /// history. Run once at startup so a history that grew past the limit
+    /// (before pruning existed, or while the app was closed mid-batch)
+    /// shrinks back without waiting for new commands to trigger it.
+    /// Returns the total number of rows deleted.
+    pub fn prune_all_command_history(&self, keep: u32) -> Result<usize, StoreError> {
+        let environments: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT DISTINCT environment FROM command_history")?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+            rows.collect::<Result<_, _>>()?
+        };
+        let mut deleted = 0;
+        for environment in environments {
+            deleted += self.prune_command_history(&environment, keep)?;
+        }
+        Ok(deleted)
     }
 }
 
@@ -451,7 +480,8 @@ mod tests {
             .record_command_started("mainnet-1", "mainnet", "ordcli", "t", "cmd", 0, false)
             .unwrap();
 
-        store.prune_command_history("regtest", 3).unwrap();
+        let deleted = store.prune_command_history("regtest", 3).unwrap();
+        assert_eq!(deleted, 7, "10 rows, keeping 3");
 
         let regtest = store.list_command_history(Some("regtest"), 100).unwrap();
         assert_eq!(regtest.len(), 3);
@@ -468,6 +498,42 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn prune_all_command_history_trims_every_environment_over_the_limit() {
+        let store = Store::open_in_memory().unwrap();
+        for (environment, count) in [("regtest", 8), ("mainnet", 5), ("signet", 2)] {
+            for i in 0..count {
+                store
+                    .record_command_started(
+                        &format!("{environment}-{i}"),
+                        environment,
+                        "ordcli",
+                        "t",
+                        "cmd",
+                        i,
+                        false,
+                    )
+                    .unwrap();
+            }
+        }
+
+        // Limit 5: regtest loses 3; mainnet (exactly 5) and signet (2)
+        // are left alone.
+        assert_eq!(store.prune_all_command_history(5).unwrap(), 3);
+        let count = |environment: &str| {
+            store
+                .list_command_history(Some(environment), 100)
+                .unwrap()
+                .len()
+        };
+        assert_eq!(count("regtest"), 5);
+        assert_eq!(count("mainnet"), 5);
+        assert_eq!(count("signet"), 2);
+
+        // Nothing over the limit any more: a second pass deletes nothing.
+        assert_eq!(store.prune_all_command_history(5).unwrap(), 0);
     }
 
     #[test]

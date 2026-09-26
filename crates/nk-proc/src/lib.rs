@@ -16,7 +16,7 @@ pub use bitcoind::{
     bitcoind_had_unclean_shutdown, detect_running_bitcoind, BitcoindError, BitcoindProcess,
 };
 pub use console::process_has_console;
-pub use lock::{LockError, SingleInstanceLock};
+pub use lock::{lock_file_path, LockError, SingleInstanceLock};
 pub use ord::{
     detect_running_ord, ord_had_unclean_shutdown, wait_until_caught_up, OrdProcess, OrdProcessError,
 };

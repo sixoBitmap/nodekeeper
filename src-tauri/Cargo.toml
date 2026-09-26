@@ -22,6 +22,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+# Already in the build (tauri-plugin-dialog is built on it, with exactly these
+# features); declared directly only so `instance_lock` can show its "already
+# running" message box *before* the Tauri app exists.
+rfd = { version = "0.16", default-features = false, features = ["common-controls-v6", "gtk3"] }
 tauri-plugin-notification = "2"
 keepawake = "0.6"
 dirs = "6"

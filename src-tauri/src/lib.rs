@@ -1,3 +1,4 @@
+mod instance_lock;
 mod node_manager;
 mod wallet_session;
 
@@ -2238,11 +2239,38 @@ fn set_prevent_sleep(
     Ok(())
 }
 
+/// Opens the settings database and trims the command history to `keep`
+/// rows per environment. docs/SPEC.md item 7 makes the history a *rolling*
+/// window (last 5,000 per environment): new commands prune as they go
+/// (`nk_store::persist_exec_events`), and this shrinks anything already
+/// over the limit at launch -- a history that grew before pruning existed,
+/// or while the app was closed mid-batch. A failed trim is not fatal.
+fn open_store(db_path: &std::path::Path, keep: u32) -> Store {
+    let store = Store::open(db_path).expect("failed to open the settings database");
+    if let Err(e) = store.prune_all_command_history(keep) {
+        eprintln!("could not prune the command history at startup: {e}");
+    }
+    store
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    std::fs::create_dir_all(data_root()).expect("failed to create data directory");
-    let db_path = data_root().join("nodekeeper.sqlite3");
-    let store = Store::open(&db_path).expect("failed to open the settings database");
+    let data_dir = data_root();
+
+    // docs/SPEC.md Foundation C: one copy of Nodekeeper per data folder
+    // (including a portable drive opened from two computers). Taken
+    // *before* the settings database is opened, so a second copy never
+    // touches it; a refusal is shown in a message box and ends the
+    // process. Released on `RunEvent::Exit` below. (Acquiring also creates
+    // the folder, and a folder that cannot be created gets the same plain
+    // message instead of a silent failure.)
+    let instance_lock = match instance_lock::acquire_or_refuse(&data_dir) {
+        Ok(lock) => instance_lock::InstanceLock::new(lock),
+        Err(refusal) => instance_lock::show_refusal_and_exit(refusal),
+    };
+
+    let db_path = data_dir.join("nodekeeper.sqlite3");
+    let store = open_store(&db_path, nk_store::COMMAND_HISTORY_KEEP_PER_ENVIRONMENT);
     let store = Arc::new(Mutex::new(store));
 
     let executor = Executor::new();
@@ -2258,6 +2286,7 @@ pub fn run() {
         .manage(node_manager)
         .manage(wallet_session)
         .manage(PreventSleepGuard::new())
+        .manage(instance_lock)
         .setup(move |app| {
             // Feeds every command the Live Command Monitor will show
             // (Phase 3) into the rolling history table (docs/SPEC.md
@@ -2415,8 +2444,17 @@ pub fn run() {
             safe_eject,
             had_unclean_shutdown,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Tauri ends the process with `std::process::exit`, which
+            // skips destructors -- so the lock is released here, not by
+            // `Drop`. (A crash still leaves it behind; the next launch
+            // detects that as stale.)
+            if let tauri::RunEvent::Exit = event {
+                app.state::<instance_lock::InstanceLock>().release();
+            }
+        });
 }
 
 #[cfg(test)]
@@ -2465,6 +2503,44 @@ mod tests {
             service,
             error,
         }
+    }
+
+    /// The startup half of the rolling command history (docs/SPEC.md item
+    /// 7): opening the settings database trims each environment to the
+    /// limit, on a real file database reopened the way a launch does, and
+    /// leaves an environment that is already within it alone.
+    #[test]
+    fn opening_the_store_trims_an_over_long_command_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nodekeeper.sqlite3");
+        {
+            let store = Store::open(&path).unwrap();
+            for (environment, rows) in [("regtest", 9), ("mainnet", 3)] {
+                for i in 0..rows {
+                    store
+                        .record_command_started(
+                            &format!("{environment}-{i}"),
+                            environment,
+                            "ordcli",
+                            "t",
+                            "cmd",
+                            i,
+                            false,
+                        )
+                        .unwrap();
+                }
+            }
+        }
+
+        let store = open_store(&path, 5);
+        let count = |environment: &str| {
+            store
+                .list_command_history(Some(environment), 100)
+                .unwrap()
+                .len()
+        };
+        assert_eq!(count("regtest"), 5);
+        assert_eq!(count("mainnet"), 3);
     }
 
     #[test]

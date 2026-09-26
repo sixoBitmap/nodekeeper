@@ -8,10 +8,28 @@
 //! nothing left to redact at this layer; it only needs to shape events
 //! into rows.
 
-use crate::Store;
+use crate::{Store, COMMAND_HISTORY_KEEP_PER_ENVIRONMENT};
 use nk_exec::ExecEvent;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast::error::RecvError;
+
+/// How many rows to keep per environment, and how many new commands in an
+/// environment to record between prunes of it. Pruning after *every*
+/// command would be a `DELETE` per command -- and background polling
+/// records a lot of them -- for a limit that only has to hold *about*
+/// (docs/SPEC.md item 7: "e.g. last 5,000"): the table can overshoot by
+/// at most `prune_every` rows per environment between prunes.
+#[derive(Debug, Clone, Copy)]
+struct Retention {
+    keep: u32,
+    prune_every: u32,
+}
+
+const DEFAULT_RETENTION: Retention = Retention {
+    keep: COMMAND_HISTORY_KEEP_PER_ENVIRONMENT,
+    prune_every: 100,
+};
 
 /// Consumes `events` until the sending `Executor` (and every one of its
 /// clones/subscribers) is dropped. A store write failure is logged and
@@ -20,8 +38,18 @@ use tokio::sync::broadcast::error::RecvError;
 /// its event reaches here.
 pub async fn persist_exec_events(
     store: Arc<Mutex<Store>>,
-    mut events: tokio::sync::broadcast::Receiver<ExecEvent>,
+    events: tokio::sync::broadcast::Receiver<ExecEvent>,
 ) {
+    persist_exec_events_with(store, events, DEFAULT_RETENTION).await
+}
+
+async fn persist_exec_events_with(
+    store: Arc<Mutex<Store>>,
+    mut events: tokio::sync::broadcast::Receiver<ExecEvent>,
+    retention: Retention,
+) {
+    // New rows recorded per environment since it was last pruned.
+    let mut since_prune: HashMap<String, u32> = HashMap::new();
     loop {
         let event = match events.recv().await {
             Ok(event) => event,
@@ -31,12 +59,37 @@ pub async fn persist_exec_events(
             Err(RecvError::Closed) => return,
         };
 
+        // Only a command *starting* adds a row (its output and finish
+        // update it), so that is what counts towards the next prune.
+        let started_in = match &event {
+            ExecEvent::Started { environment, .. } => Some(environment.clone()),
+            _ => None,
+        };
+
         let result = {
             let store = store.lock().expect("store mutex should not be poisoned");
             persist_one(&store, event)
         };
         if let Err(e) = result {
             tracing::warn!("failed to persist command history: {e}");
+            continue;
+        }
+
+        if let Some(environment) = started_in {
+            let recorded = since_prune.entry(environment.clone()).or_insert(0);
+            *recorded += 1;
+            if *recorded >= retention.prune_every {
+                *recorded = 0;
+                let pruned = {
+                    let store = store.lock().expect("store mutex should not be poisoned");
+                    store.prune_command_history(&environment, retention.keep)
+                };
+                // Like a failed write above: losing a prune must never
+                // interrupt anything; the next one will catch up.
+                if let Err(e) = pruned {
+                    tracing::warn!("failed to prune command history: {e}");
+                }
+            }
         }
     }
 }
@@ -208,6 +261,116 @@ mod tests {
         .await;
 
         assert!(entries[0].background);
+        bridge.abort();
+    }
+
+    /// The shipped limits are the spec's: last 5,000 per environment
+    /// (docs/SPEC.md item 7), pruned in batches of 100.
+    #[test]
+    fn the_default_retention_is_the_specs() {
+        assert_eq!(DEFAULT_RETENTION.keep, 5_000);
+        assert_eq!(DEFAULT_RETENTION.prune_every, 100);
+    }
+
+    /// Runs `count` one-liners in `environment`, one at a time (so their
+    /// timestamps differ), and waits until the bridge has fully processed
+    /// the last -- through its `Finished` event, which the bridge handles
+    /// *after* the `Started` event that may trigger a prune, so everything
+    /// that should have happened by now has.
+    async fn run_and_settle(
+        executor: &Executor,
+        store: &Arc<Mutex<Store>>,
+        environment: &str,
+        label: &str,
+        range: std::ops::Range<u32>,
+    ) {
+        for n in range.clone() {
+            let mut spec = shell_spec(&format!("echo {label} {n}"));
+            spec.environment = environment.to_string();
+            executor.execute(spec).await.unwrap();
+        }
+        let last = format!("{label} {}", range.end - 1);
+        timeout(Duration::from_secs(10), async {
+            loop {
+                let rows = store
+                    .lock()
+                    .unwrap()
+                    .list_command_history(Some(environment), 100)
+                    .unwrap();
+                if rows.first().is_some_and(|newest| {
+                    newest.command_display.ends_with(&last)
+                        && newest.status != crate::CommandHistoryStatus::Running
+                }) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the bridge should process every event");
+    }
+
+    fn kept(store: &Arc<Mutex<Store>>, environment: &str) -> Vec<String> {
+        store
+            .lock()
+            .unwrap()
+            .list_command_history(Some(environment), 100)
+            .unwrap()
+            .iter()
+            .map(|row| row.command_display.rsplit(' ').next().unwrap().to_string())
+            .collect()
+    }
+
+    /// docs/SPEC.md item 7's bounded rolling history, end to end through
+    /// the real event stream, with a small limit (keep 2, prune every 5):
+    ///
+    /// - **throttled**: after four commands nothing has been pruned yet --
+    ///   pruning after *every* command (the per-command `DELETE` this
+    ///   batching exists to avoid) would already have cut it to two;
+    /// - **bounded**: after the fifth, and again after the tenth, it is cut
+    ///   back to the newest rows, newest first;
+    /// - **per environment**: another environment that has not reached its
+    ///   own interval is never touched.
+    #[tokio::test]
+    async fn history_is_pruned_in_batches_to_the_newest_rows_per_environment() {
+        let executor = Executor::new();
+        let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
+        let retention = Retention {
+            keep: 2,
+            prune_every: 5,
+        };
+        let bridge = tokio::spawn(persist_exec_events_with(
+            store.clone(),
+            executor.subscribe(),
+            retention,
+        ));
+
+        run_and_settle(&executor, &store, "mainnet", "mainnet", 0..2).await;
+        run_and_settle(&executor, &store, "regtest", "regtest", 0..4).await;
+        assert_eq!(
+            kept(&store, "regtest"),
+            ["3", "2", "1", "0"],
+            "below the interval: not pruned yet"
+        );
+
+        run_and_settle(&executor, &store, "regtest", "regtest", 4..5).await;
+        assert_eq!(kept(&store, "regtest"), ["4", "3"], "pruned at the fifth");
+
+        run_and_settle(&executor, &store, "regtest", "regtest", 5..9).await;
+        assert_eq!(
+            kept(&store, "regtest"),
+            ["8", "7", "6", "5", "4", "3"],
+            "growing again between prunes"
+        );
+
+        run_and_settle(&executor, &store, "regtest", "regtest", 9..10).await;
+        assert_eq!(kept(&store, "regtest"), ["9", "8"], "pruned at the tenth");
+
+        assert_eq!(
+            kept(&store, "mainnet").len(),
+            2,
+            "another environment is never touched"
+        );
         bridge.abort();
     }
 

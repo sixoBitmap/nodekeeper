@@ -3338,6 +3338,7 @@ dependencies = [
  "nk-scripts",
  "nk-store",
  "nk-verify",
+ "rfd",
  "serde",
  "serde_json",
  "serial_test",

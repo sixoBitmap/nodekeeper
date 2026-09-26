@@ -2073,10 +2073,28 @@ Done when (docs/SPEC.md):
         for a passphrase that doesn't exist (wallet_send, both inscribe
         commands). **STOP AND ASK** (wallet-security adjacent): skip-
         when-unencrypted vs. optional encrypt-on-create for test chains.
-  - [ ] (c) Acquire `SingleInstanceLock` in src-tauri -- spec Foundation
-        C requires it; grep shows it is never used. No owner input.
-  - [ ] (d) Call `prune_command_history` (spec item 7, ~5,000 entries per
-        environment) -- only tests call it today. No owner input.
+  - [x] (c) Acquire `SingleInstanceLock` in src-tauri (spec Foundation C;
+        it was never wired). Done 2026-09-26 -- DECISIONS.md "Single-
+        instance lock and command-history pruning": taken before the
+        settings DB opens, a second copy gets a plain-language message
+        box and exits, released explicitly on exit (Drop does not run --
+        shown), stale locks taken over, and the stale check now confirms
+        the pid is really Nodekeeper (start time, name as fallback) so a
+        reused pid after a crash/reboot cannot lock the folder forever,
+        and the takeover is race-safe (3 real copies launched at once
+        over a crashed lock: exactly one runs). Verified live with the
+        real app (6 scenarios) and by an adversarial review.
+        **Known gaps:** (i) an environment data folder pointed at a
+        shared external drive is not locked; (ii) **Safe Eject leaves the
+        app -- and its lock -- in place, so moving the drive without
+        closing Nodekeeper first trips the "in use on another computer"
+        message: owner decision needed (quit after eject vs. release the
+        lock and reword)**; (iii) hostname / Linux clock-step edge cases
+        on macOS/Linux (DECISIONS.md).
+  - [x] (d) Prune `command_history` (spec item 7, last 5,000 per
+        environment): every 100 new commands per environment, plus once
+        at startup. Done 2026-09-26, tested through the real event
+        stream and a reopened file database.
 - [ ] **Step 2 -- signet/testnet4 live smoke test.** Mostly built. Only
       `[regtest]` and `[main]` were ever run live (DECISIONS.md), yet
       `bitcoin_conf.rs` says the section names are "also live-verified"
