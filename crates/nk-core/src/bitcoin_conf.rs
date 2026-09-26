@@ -11,10 +11,16 @@
 //! `port` produced a *fatal startup error* ("Config setting for -port
 //! only applied on regtest network when in [regtest] section"), even
 //! though the network was already selected via the `-regtest` CLI flag.
-//! `Chain::conf_section_name()` has the exact (also live-verified)
-//! section name per chain, including mainnet's `[main]` (not
-//! `[mainnet]`). See DECISIONS.md for the full investigation — this
-//! would have shipped as a config that fails to start every non-mainnet
+//! `Chain::conf_section_name()` has the exact section name per chain,
+//! including mainnet's `[main]` (not `[mainnet]`). All four -- `[main]`,
+//! `[regtest]`, `[signet]`, `[testnet4]` -- have now been started live
+//! against the real `bitcoind` through this generator (regtest/mainnet
+//! earlier; signet and testnet4 in Phase 10 step 2, DECISIONS.md). Until
+//! then this comment called signet/testnet4 "also live-verified" when
+//! only the first two had been run.
+//!
+//! See DECISIONS.md for the full investigation -- this would have
+//! shipped as a config that fails to start every non-mainnet
 //! environment if the first version (settings all at top level) hadn't
 //! been tested against the real binary before committing it.
 

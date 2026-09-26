@@ -204,6 +204,38 @@ mod tests {
         }
     }
 
+    /// The exact strings the real `bitcoind` 31.1 and `ord` 0.29.0
+    /// accepted when each chain was started live through Nodekeeper's own
+    /// config generation and process manager (regtest and mainnet in Phase
+    /// 2/4, signet and testnet4 in Phase 10 step 2 -- DECISIONS.md, "Live
+    /// smoke test of signet and testnet4"). A wrong `[section]` name is a
+    /// *fatal bitcoind startup error*, so this pins them: changing one has
+    /// to be a deliberate, re-verified decision, not a tidy-up.
+    #[test]
+    fn the_conf_sections_and_flags_are_the_ones_verified_live_against_the_real_binaries() {
+        let expected = [
+            (Chain::Mainnet, "main", None, None),
+            (
+                Chain::Regtest,
+                "regtest",
+                Some("-regtest"),
+                Some("--regtest"),
+            ),
+            (Chain::Signet, "signet", Some("-signet"), Some("--signet")),
+            (
+                Chain::Testnet4,
+                "testnet4",
+                Some("-testnet4"),
+                Some("--testnet4"),
+            ),
+        ];
+        for (chain, section, bitcoin_flag, ord_flag) in expected {
+            assert_eq!(chain.conf_section_name(), section, "{chain:?}");
+            assert_eq!(chain.bitcoin_cli_flag(), bitcoin_flag, "{chain:?}");
+            assert_eq!(chain.ord_cli_flag(), ord_flag, "{chain:?}");
+        }
+    }
+
     #[test]
     fn every_chain_has_distinct_ports() {
         let mut ports = std::collections::HashSet::new();

@@ -3794,6 +3794,84 @@ construction it goes through the same stop-then-exit as tray Quit).
 - Rows are pruned by `started_at_ms`, so a very old command still marked
   "running" could in principle be pruned -- only after 5,000 newer ones.
 
+### Live smoke test of signet and testnet4 (Phase 10 step 2, 2026-09-26)
+
+**Why.** Only `[regtest]` and `[main]` had ever been started live through
+Nodekeeper's own config generation, yet `bitcoin_conf.rs` (and a comment
+in `chain.rs`) said the signet/testnet4 section names were "also live-
+verified". A wrong `[section]` name is a *fatal bitcoind startup error*
+(the Phase 2 finding), so this was worth checking rather than trusting.
+
+**How.** `crates/nk-testkit/examples/chain_smoke_test.rs` (the old
+`mainnet_smoke_test`, generalised to take a chain and optionally an ord
+binary): temp data directory, the chain's default ports, Nodekeeper's own
+`generate_bitcoin_conf` + `BitcoindProcess`; asserts `getblockchaininfo`
+reports the expected chain, waits up to 3 minutes for a real peer,
+watches the sync for 15 s, then starts `ord server` on top of the
+still-syncing node using Nodekeeper's own argument generation, and stops
+ord then bitcoind gracefully. Real internet (each chain's P2P network, the
+same category as the Phase 2 mainnet check), the cached verified binaries
+(bitcoind 31.1, ord 0.29.0), nothing left behind (temp dir deleted; the
+sync was stopped after seconds, so the download was a few MB of headers).
+Commands (PowerShell; the bitcoind/ord paths are under `target/`):
+
+```
+cargo build -p nk-testkit --example chain_smoke_test
+target\debug\examples\chain_smoke_test.exe signet   <bitcoind.exe> <ord.exe>
+target\debug\examples\chain_smoke_test.exe testnet4 <bitcoind.exe> <ord.exe>
+```
+
+**Results (both passed, exit code 0, no processes left):**
+
+```
+[signet]   generated bitcoin.conf: ... [signet] rpcbind=127.0.0.1 rpcallowip=127.0.0.1 rpcport=38332 port=38333
+[signet]   bitcoind ready after 442 ms; getblockchaininfo chain="signet" blocks=0 headers=0 initialblockdownload=true
+[signet]   CHECK OK: bitcoind reports the right chain (signet)
+[signet]   CHECK OK: connected to 1 peer(s)
+[signet]   CHECK OK: ord answered /status after 559 ms   ("chain":"signet","height":0,...)
+[signet]   CHECK OK: ord stopped gracefully in 4689 ms (exit Some(0))
+[signet]   CHECK OK: bitcoind stopped cleanly in 2391 ms
+[testnet4] generated bitcoin.conf: ... [testnet4] rpcbind=127.0.0.1 rpcallowip=127.0.0.1 rpcport=48332 port=48333
+[testnet4] bitcoind ready after 448 ms; getblockchaininfo chain="testnet4" blocks=0 headers=0 initialblockdownload=true
+[testnet4] CHECK OK: bitcoind reports the right chain (testnet4)
+[testnet4] CHECK OK: connected to 1 peer(s); headers 0 -> 43908 within 15 s
+[testnet4] CHECK OK: ord answered /status after 519 ms  ("chain":"testnet4","height":0,...)
+[testnet4] CHECK OK: ord stopped gracefully in 4562 ms (exit Some(0))
+[testnet4] CHECK OK: bitcoind stopped cleanly in 3134 ms
+```
+
+**Findings.**
+
+- The `[signet]` and `[testnet4]` sections, the network flags, the default
+  RPC/P2P ports, ord's `--signet` / `--testnet4` handling and both
+  processes' graceful stop all work as generated. The suspicion was
+  unfounded, but it was only a suspicion until now; the comments are
+  corrected, and a new unit test pins the exact section names and flags
+  (`the_conf_sections_and_flags_are_the_ones_verified_live_against_the_
+  real_binaries`) so changing one has to be a deliberate, re-verified act.
+- **ord starts and answers `/status` while bitcoind is still in initial
+  block download at height 0** (with `"chain"` correct and `"height":0`).
+  That answers the "what does ord do before the node has synced" question
+  the earlier scoping left open: it does not refuse to start. (Wallet
+  commands still refuse until ord catches up -- Phase 5.) The open Phase 4
+  task "start ord after IBD" is therefore about *usefulness*, not about ord
+  failing to start.
+- Both chains share the `tb` address prefix, so the UI must not claim it
+  prevents mixing up a signet and a testnet4 address (it makes no such
+  claim today: checked).
+- The interface already handles all four chains generically; new test:
+  the Overview shows a card with its own node and ord controls for each of
+  the four (the port-distinctness unit test that lets them run side by
+  side already existed).
+
+**Limits.** Both stops were run from a console-attached process (an
+example run from PowerShell), i.e. ord's *Shared*-console stop path;
+the release exe's hidden-console path is covered by Phase 10 step 0.
+Only bitcoind + ord were exercised here, not the wallet on those chains
+(that is Phase 10 step 1(b): an unencrypted test-chain wallet cannot send
+or inscribe today). Nothing beyond a peer connection and a few seconds of
+sync was waited for.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

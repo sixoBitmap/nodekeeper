@@ -54,6 +54,28 @@ beforeEach(() => {
   invokeMock.mockReset();
 });
 
+const ALL_FOUR_CHAINS: Environment[] = [
+  MAINNET,
+  { ...MAINNET, chain: "regtest", name: "Regtest", rpc_port: 18443, p2p_port: 18444, ord_port: 8081, data_root: "data/regtest" },
+  { ...MAINNET, chain: "signet", name: "Signet", rpc_port: 38332, p2p_port: 38333, ord_port: 8082, data_root: "data/signet" },
+  { ...MAINNET, chain: "testnet4", name: "Testnet4", rpc_port: 48332, p2p_port: 48333, ord_port: 8083, data_root: "data/testnet4" },
+];
+
+describe("Overview: all four networks", () => {
+  // docs/SPEC.md: several environments (mainnet, regtest, signet, testnet4)
+  // side by side, each with its own controls.
+  it("shows a card with its own node and ord controls for every chain", async () => {
+    mockBackend(() => Promise.resolve(undefined));
+    render(<OverviewScreen environments={ALL_FOUR_CHAINS} />);
+
+    for (const name of ["Mainnet", "Regtest", "Signet", "Testnet4"]) {
+      expect(await screen.findByText(name)).toBeInTheDocument();
+    }
+    // One Start for the node and one for ord, per chain.
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Start" })).toHaveLength(8));
+  });
+});
+
 describe("Overview: Safely shut down and eject", () => {
   it("says it's safe to unplug once every service has stopped", async () => {
     mockBackend(() => Promise.resolve(undefined));

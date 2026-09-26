@@ -395,7 +395,8 @@ Acceptance criteria (from docs/SPEC.md Phase 2 "Done when"):
       cleanly (no full sync required) — a helper now exists so this
       exercises Nodekeeper's real conf generation + process manager
       instead of ad hoc flags: `cargo run -p nk-testkit --example
-      mainnet_smoke_test -- <path-to-verified-bitcoind>` (get a verified
+      mainnet_smoke_test -- <path-to-verified-bitcoind>` (since generalised and renamed
+      `chain_smoke_test <chain> <bitcoind> [ord]`, Phase 10 step 2) (get a verified
       binary first via `cargo run -p nk-verify --example
       fetch_bitcoin_core`). Still needs you to actually run it and
       confirm it prints "Smoke test passed."
@@ -2097,15 +2098,19 @@ Done when (docs/SPEC.md):
         environment): every 100 new commands per environment, plus once
         at startup. Done 2026-09-26, tested through the real event
         stream and a reopened file database.
-- [ ] **Step 2 -- signet/testnet4 live smoke test.** Mostly built. Only
-      `[regtest]` and `[main]` were ever run live (DECISIONS.md), yet
-      `bitcoin_conf.rs` says the section names are "also live-verified"
-      -- a wrong `[signet]`/`[testnet4]` name is a fatal bitcoind startup
-      error. Generalise `mainnet_smoke_test` to a chain parameter, fix
-      the comment. Needs owner approval for a short real-P2P run. Real
-      use also needs 1(b) and the open Phase 4 "start ord after IBD"
-      task. Note signet and testnet4 share the `tb` address prefix, so
-      the UI must not claim to prevent mixing them up.
+- [x] **Step 2 -- signet/testnet4 live smoke test.** Done 2026-09-26
+      (DECISIONS.md "Live smoke test of signet and testnet4"). Both real
+      chains started through Nodekeeper's own generated config: the
+      `[signet]`/`[testnet4]` sections, network flags and ports work, a
+      real peer connected on each, **ord starts and answers on the still-
+      syncing node** (chain reported correctly, height 0), and both
+      processes stop gracefully. The "also live-verified" comments are
+      corrected and the exact names/flags are pinned by a unit test; a
+      UI test covers all four chains. (Signet and testnet4 share the `tb`
+      address prefix; the UI makes no claim about preventing mix-ups.)
+      **Still open for real use of these chains:** 1(b) (an unencrypted
+      test-chain wallet cannot send/inscribe) and the Phase 4 "start ord
+      after IBD" usefulness task.
 - [ ] **Step 3 -- diagnostics export** (redacted support bundle). No
       dependencies, fully verifiable here, no new network/deps (`zip` is
       already in nk-verify). New `nk-diagnostics` crate (ARCHITECTURE.md
