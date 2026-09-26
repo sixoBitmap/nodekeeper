@@ -7,6 +7,7 @@ import type { TypedError } from "@/bindings/TypedError";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { refusedLineLabel } from "@/lib/console-line";
 
 interface HistoryEntry {
   id: number;
@@ -69,7 +70,11 @@ export function ConsoleScreen({ environment }: { environment: Environment }) {
       try {
         preview = await invoke<ConsoleCommandPreview>("console_classify", { commandLine });
       } catch (e) {
-        appendHistory({ display: commandLine, status: "error", output: (e as TypedError).message });
+        appendHistory({
+          display: refusedLineLabel(commandLine),
+          status: "error",
+          output: (e as TypedError).message,
+        });
         return;
       }
 

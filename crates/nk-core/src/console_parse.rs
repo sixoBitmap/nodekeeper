@@ -20,8 +20,11 @@ use thiserror::Error;
 pub enum ParseCommandLineError {
     #[error("enter a command")]
     Empty,
-    #[error("unterminated quote in: {0}")]
-    UnterminatedQuote(String),
+    /// Deliberately does not carry (or print) the line that was typed: it
+    /// may contain a passphrase or a private key, and an error message is
+    /// the kind of text that gets shown, copied and logged.
+    #[error("a quote was opened but never closed -- add the closing \" or remove it")]
+    UnterminatedQuote,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,7 +70,7 @@ pub fn tokenize(line: &str) -> Result<Vec<String>, ParseCommandLineError> {
                 }
             }
             if !closed {
-                return Err(ParseCommandLineError::UnterminatedQuote(line.to_string()));
+                return Err(ParseCommandLineError::UnterminatedQuote);
             }
             tokens.push(token);
         } else {
@@ -153,10 +156,17 @@ mod tests {
     fn an_unterminated_quote_is_an_error() {
         assert_eq!(
             tokenize(r#"sendtoaddress "bcrt1q..."#),
-            Err(ParseCommandLineError::UnterminatedQuote(
-                r#"sendtoaddress "bcrt1q..."#.to_string()
-            ))
+            Err(ParseCommandLineError::UnterminatedQuote)
         );
+    }
+
+    /// The error is shown to the user and may be copied or logged, so it must
+    /// not repeat what was typed -- which can be a passphrase.
+    #[test]
+    fn the_unterminated_quote_error_does_not_echo_the_line() {
+        let error = tokenize(r#"walletpassphrase "hunter2-secret 60"#).unwrap_err();
+        assert!(!error.to_string().contains("hunter2"), "{error}");
+        assert!(!format!("{error:?}").contains("hunter2"), "{error:?}");
     }
 
     #[test]

@@ -33,6 +33,11 @@ pub enum WalletError {
     Yaml(#[from] serde_yaml::Error),
     #[error("could not parse ord's output as JSON: {0}")]
     InvalidJson(#[from] serde_json::Error),
+    /// Refused before anything ran: the command can print a recovery
+    /// phrase or private keys, which must not flow through the raw console
+    /// path (see `run_console_subcommand`).
+    #[error("{0}")]
+    Blocked(String),
 }
 
 impl WalletError {
@@ -56,7 +61,7 @@ impl WalletError {
                     None
                 }
             }
-            Self::Exec(_) | Self::InvalidJson(_) | Self::Yaml(_) => None,
+            Self::Exec(_) | Self::InvalidJson(_) | Self::Yaml(_) | Self::Blocked(_) => None,
         }
     }
 
@@ -447,21 +452,42 @@ pub async fn batch_inscribe(
 }
 
 /// The console's (docs/SPEC.md item 6) generic entry point: runs
-/// whatever `ord wallet` subcommand + arguments the user typed, once
-/// the caller has already checked `nk_core::console_safety::
-/// classify_ord_wallet_subcommand` and confirmed this isn't
-/// `OrdCommandClass::BlockedUseWalletScreen` (`create`/`restore` --
-/// both can print a mnemonic, which must never flow through this
-/// generic, Sensitivity::Normal path). Every other wrapper function in
-/// this file is a typed convenience over the same underlying call;
-/// this one exists specifically for input that isn't known ahead of
-/// time.
+/// whatever `ord wallet` subcommand + arguments the user typed.
+///
+/// **Refuses, itself, anything that can print a recovery phrase or private
+/// keys** -- `create`/`restore` (mnemonic) and `dump` (private
+/// descriptors), including when a leading option hides the subcommand
+/// (`--no-sync create`) -- however it is called. This generic path is
+/// `Sensitivity::Normal`: its output goes through the Live Command Monitor
+/// and `command_history`, which those must never reach. The console
+/// command handler checks the same classification first to give the user a
+/// proper message, but the enforcement must not depend on every caller
+/// remembering to. Every other wrapper function in this file is a typed
+/// convenience over the same underlying call; this one exists specifically
+/// for input that isn't known ahead of time.
 pub async fn run_console_subcommand(
     executor: &Executor,
     target: &WalletTarget<'_>,
     subcommand_args: Vec<String>,
     triggering_action: &str,
 ) -> Result<Value, WalletError> {
+    use nk_core::console_safety::{classify_ord_wallet_subcommand, OrdCommandClass};
+    let words: Vec<&str> = subcommand_args.iter().map(String::as_str).collect();
+    match classify_ord_wallet_subcommand(&words) {
+        OrdCommandClass::BlockedUseWalletScreen => {
+            return Err(WalletError::Blocked(
+                "This can print a recovery phrase -- use the Wallet screen's create/restore \
+                 flow instead."
+                    .to_string(),
+            ));
+        }
+        OrdCommandClass::BlockedPrivateKeys => {
+            return Err(WalletError::Blocked(
+                nk_core::console_safety::PRIVATE_KEYS_BLOCKED_MESSAGE.to_string(),
+            ));
+        }
+        _ => {}
+    }
     run_json(executor, target, subcommand_args, triggering_action).await
 }
 

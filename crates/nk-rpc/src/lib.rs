@@ -110,12 +110,36 @@ impl RpcClient {
         redact: Vec<String>,
         background: bool,
     ) -> Result<Value, RpcError> {
+        self.call_masked(method, params, triggering_action, redact, &[], background)
+            .await
+    }
+
+    /// [`call`], but the parameters at positions where `secret_params` is
+    /// `true` are shown as `[redacted]` in the command display -- by
+    /// **position**, whatever the value happens to look like. `redact`
+    /// substitutes text, and the display is rendered from the *parsed*
+    /// parameters, so the two disagree whenever a typed value is valid JSON
+    /// (a quoted numeric passphrase renders without its quotes; an object
+    /// comes out with sorted keys and no spaces) and the secret is shown
+    /// in the clear. Used by the console, where the user types arbitrary
+    /// parameters. `redact` still applies too (to the output, and as a
+    /// second net); the parameters sent to the node are unchanged.
+    pub async fn call_masked(
+        &self,
+        method: &str,
+        params: Vec<Value>,
+        triggering_action: &str,
+        redact: Vec<String>,
+        secret_params: &[bool],
+        background: bool,
+    ) -> Result<Value, RpcError> {
         self.call_at(
             self.url.clone(),
             method,
             params,
             triggering_action,
             redact,
+            secret_params,
             background,
         )
         .await
@@ -237,6 +261,7 @@ impl RpcClient {
             vec![json!(passphrase), json!(timeout_secs)],
             "unlock wallet",
             vec![passphrase.to_string()],
+            &[true, false],
             false,
         )
         .await?;
@@ -248,8 +273,16 @@ impl RpcClient {
     /// item 3: "unlocks it... for a short timeout and locks it again
     /// afterwards").
     pub async fn wallet_lock(&self, wallet: &str) -> Result<(), RpcError> {
-        self.wallet_call(wallet, "walletlock", vec![], "lock wallet", vec![], false)
-            .await?;
+        self.wallet_call(
+            wallet,
+            "walletlock",
+            vec![],
+            "lock wallet",
+            vec![],
+            &[],
+            false,
+        )
+        .await?;
         Ok(())
     }
 
@@ -272,6 +305,7 @@ impl RpcClient {
             vec![json!(txid)],
             "look up wallet transaction",
             vec![],
+            &[],
             false,
         )
         .await
@@ -287,6 +321,7 @@ impl RpcClient {
             vec![json!(passphrase)],
             "encrypt wallet",
             vec![passphrase.to_string()],
+            &[true],
             false,
         )
         .await?;
@@ -305,11 +340,20 @@ impl RpcClient {
         params: Vec<Value>,
         triggering_action: &str,
         redact: Vec<String>,
+        secret_params: &[bool],
         background: bool,
     ) -> Result<Value, RpcError> {
         let url = format!("{}/wallet/{}", self.url.trim_end_matches('/'), wallet);
-        self.call_at(url, method, params, triggering_action, redact, background)
-            .await
+        self.call_at(
+            url,
+            method,
+            params,
+            triggering_action,
+            redact,
+            secret_params,
+            background,
+        )
+        .await
     }
 
     /// Shared implementation behind `call`/`wallet_call`: only the
@@ -322,9 +366,10 @@ impl RpcClient {
         params: Vec<Value>,
         triggering_action: &str,
         redact: Vec<String>,
+        secret_params: &[bool],
         background: bool,
     ) -> Result<Value, RpcError> {
-        let display = self.equivalent_bitcoin_cli(method, &params);
+        let display = self.equivalent_bitcoin_cli(method, &params, secret_params);
         let http = self.http.clone();
         let user = self.user.clone();
         let password = self.password.clone();
@@ -346,13 +391,31 @@ impl RpcClient {
             .await
     }
 
-    fn equivalent_bitcoin_cli(&self, method: &str, params: &[Value]) -> String {
+    fn equivalent_bitcoin_cli(
+        &self,
+        method: &str,
+        params: &[Value],
+        secret_params: &[bool],
+    ) -> String {
         let mut parts = vec!["bitcoin-cli".to_string()];
         if let Some(flag) = self.chain.bitcoin_cli_flag() {
             parts.push(flag.to_string());
         }
         parts.push(method.to_string());
-        parts.extend(params.iter().map(display_json_arg));
+        // A run of hidden parameters is ONE `[redacted]`: the number of them
+        // would tell how many words a passphrase typed with spaces has.
+        let mut previous_hidden = false;
+        for (position, param) in params.iter().enumerate() {
+            let hidden = secret_params.get(position).copied().unwrap_or(false);
+            if hidden {
+                if !previous_hidden {
+                    parts.push("[redacted]".to_string());
+                }
+            } else {
+                parts.push(display_json_arg(param));
+            }
+            previous_hidden = hidden;
+        }
         parts.join(" ")
     }
 }
@@ -480,7 +543,7 @@ mod tests {
             Chain::Regtest,
         );
         assert_eq!(
-            regtest.equivalent_bitcoin_cli("generatetoaddress", &[json!(1), json!("bcrt1qx")]),
+            regtest.equivalent_bitcoin_cli("generatetoaddress", &[json!(1), json!("bcrt1qx")], &[]),
             "bitcoin-cli -regtest generatetoaddress 1 bcrt1qx"
         );
 
@@ -493,8 +556,91 @@ mod tests {
             Chain::Mainnet,
         );
         assert_eq!(
-            mainnet.equivalent_bitcoin_cli("getblockchaininfo", &[]),
+            mainnet.equivalent_bitcoin_cli("getblockchaininfo", &[], &[]),
             "bitcoin-cli getblockchaininfo"
+        );
+    }
+
+    /// The console's secret arguments are hidden by position. Each case
+    /// here is one where the previous text-substitution approach showed the
+    /// secret in the clear, because the typed token differs from how the
+    /// parsed parameter is rendered.
+    #[test]
+    fn secret_parameters_are_hidden_by_position_whatever_they_render_as() {
+        let client = RpcClient::new(
+            "http://127.0.0.1:18443".to_string(),
+            "u".to_string(),
+            "p".to_string(),
+            Executor::new(),
+            "regtest".to_string(),
+            Chain::Regtest,
+        );
+        let display = |method: &str, params: Vec<Value>, mask: &[bool]| {
+            client.equivalent_bitcoin_cli(method, &params, mask)
+        };
+
+        // A JSON-quoted numeric passphrase: the token `"12345678"` (quotes
+        // included) parses to the string 12345678, rendered bare.
+        assert_eq!(
+            display(
+                "walletpassphrase",
+                vec![json!("12345678"), json!(60)],
+                &[true, false]
+            ),
+            "bitcoin-cli -regtest walletpassphrase [redacted] 60"
+        );
+        // A number that re-serialises differently (1.50 -> 1.5, 1e3 -> 1000.0).
+        assert_eq!(
+            display(
+                "createwallet",
+                vec![json!("w"), json!(false), json!(false), json!(1.50)],
+                &[false, false, false, true]
+            ),
+            "bitcoin-cli -regtest createwallet w false false [redacted]"
+        );
+        // An object with keys out of alphabetical order (rendered sorted).
+        let requests = json!([{"timestamp": "now", "desc": "wpkh(SECRET)", "active": true}]);
+        let shown = display("importdescriptors", vec![requests], &[true]);
+        assert_eq!(shown, "bitcoin-cli -regtest importdescriptors [redacted]");
+        assert!(!shown.contains("SECRET"));
+        // Nothing hidden when nothing is masked -- the display is unchanged.
+        assert_eq!(
+            display("getblockhash", vec![json!(100)], &[]),
+            "bitcoin-cli -regtest getblockhash 100"
+        );
+        // A run of hidden parameters is one marker -- their number would tell
+        // how many words a passphrase typed with spaces has.
+        assert_eq!(
+            display(
+                "walletpassphrase",
+                vec![
+                    json!("correct"),
+                    json!("horse"),
+                    json!("battery"),
+                    json!(60)
+                ],
+                &[true, true, true, true]
+            ),
+            "bitcoin-cli -regtest walletpassphrase [redacted]"
+        );
+        assert_eq!(
+            display(
+                "createwallet",
+                vec![
+                    json!("w"),
+                    json!(false),
+                    json!(false),
+                    json!("a"),
+                    json!("b")
+                ],
+                &[false, false, false, true, true]
+            ),
+            "bitcoin-cli -regtest createwallet w false false [redacted]"
+        );
+        // A mask shorter than the parameter list hides only what it covers.
+        assert_eq!(
+            display("walletpassphrase", vec![json!("pw"), json!(60)], &[true]),
+            "bitcoin-cli -regtest walletpassphrase [redacted] 60"
         );
     }
 

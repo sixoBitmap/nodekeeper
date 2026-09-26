@@ -2058,13 +2058,33 @@ Done when (docs/SPEC.md):
         even if a stop failed (pre-existing best-effort design).
 - [ ] **Step 1 -- foundation fixes to shipped code** (small, separate
       commits; verifiable here against real regtest bitcoind/ord)
-  - [ ] (a) Block private-material console commands: `ord wallet dump`,
-        `listdescriptors`, `gethdkeys` are classed ReadOnly and
-        `RpcClient::call_at` hardcodes `Sensitivity::Normal`, so
-        `listdescriptors true` would put xprvs in the monitor and
-        `command_history`. **STOP AND ASK** (departs from spec item 6's
-        "read-only runs instantly"); also decide whether to scrub
-        existing history rows.
+  - [x] (a) Console private-key output and secret arguments. Done
+        2026-09-26 -- DECISIONS.md "Console private-key output and secret
+        arguments". `ord wallet dump`, `listdescriptors true` and
+        `gethdkeys` with `private` were classed read-only and printed real
+        private descriptors into the monitor and `command_history`. Owner
+        delegated the choice ("Do what you believe better"); the recommended
+        option was taken: **refuse** them in the console (per call,
+        strictly), enforce that in the backend, **scrub extended private keys
+        (and descriptor WIF keys) from everything the executor emits**, and
+        **erase old history rows** that revealed a secret at startup -- from
+        the database *file* too (`secure_delete` + `VACUUM`). Also fixed:
+        `ord wallet --no-sync create` (a leading option) was not blocked;
+        `createwallet`/`migratewallet` passphrases were shown and stored;
+        secret arguments are now hidden **by position, and only shown for a
+        known Bitcoin Core method** (the first, text-matching version leaked
+        JSON-valid ones such as a numeric passphrase; the second, position-
+        only version leaked the words of an unquoted passphrase after the
+        first, `bitcoin-cli.exe ...` lines, named arguments, and a key that
+        Core echoes back in an error). Everything from a secret method's
+        first secret argument on is hidden as one `[redacted]`; an unknown
+        method hides all its arguments; a first word that is not a plain
+        word is refused. Old history: erased from the database **file** too
+        (`secure_delete`, `VACUUM` once ever), failure quarantines the
+        history. **Two adversarial reviews** (19 findings upheld in the
+        second), all fixed, each with a test. Verified against a real
+        Bitcoin Core (6 live tests, negative controls for each new rule) and
+        with the real app (real IPC, real database file).
   - [ ] (b) One shared `with_wallet_unlocked` helper: skip
         `walletpassphrase` only for an unencrypted wallet on a
         non-mainnet chain (checked via `getwalletinfo`; VERIFY that

@@ -26,7 +26,9 @@ supports_dry_run: boolean,
 /**
  * `Some(reason)` when this must be refused outright and
  * `console_run` will error rather than execute -- a fund-moving
- * bitcoin-cli command against the wallet ord uses, or an ord
- * `create`/`restore` that could print a recovery phrase.
+ * bitcoin-cli command against the wallet ord uses, an ord
+ * `create`/`restore` that could print a recovery phrase, or a command
+ * that can print private keys (`listdescriptors true`, `gethdkeys`
+ * with `private`, `ord wallet dump`).
  */
 blocked_reason: string | null, };

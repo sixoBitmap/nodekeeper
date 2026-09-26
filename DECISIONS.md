@@ -3794,6 +3794,347 @@ construction it goes through the same stop-then-exit as tray Quit).
 - Rows are pruned by `started_at_ms`, so a very old command still marked
   "running" could in principle be pruned -- only after 5,000 newer ones.
 
+### Console private-key output and secret arguments (Phase 10 step 1a, 2026-09-26)
+
+**The problem** (found by the Phase 10 scoping critic, confirmed here).
+The raw console runs whatever the user types after a safety classification,
+and shows/stores the output: in the Live Command Monitor and in
+`command_history` (SQLite, and so in exports). Three ways to make it print
+private keys were classed **read-only, "runs instantly, no confirmation"**:
+`ord wallet dump`, `listdescriptors true` and `gethdkeys` with `private`.
+That breaks the secrets rule (CLAUDE.md: never logged, stored or exported),
+whose "logs, database, exports" clause had never been tested for this path.
+Scanning for it turned up more holes on the *input* side (passphrases typed
+as arguments), and two adversarial reviews of the fix found more (below).
+
+**Decision.** The question (block the commands, or route them through the
+sensitive channel; and what to do about old rows) went to the project
+owner, who answered "Do what you believe better"; the recommended option
+was taken: **refuse** them in the console and **erase** old rows, with a
+scrubber behind it. A backup feature (Phase 10 step 4) is where private
+descriptors legitimately get read, through a dedicated sensitive path.
+
+**The design rule, after two review rounds.** The first versions tried to
+*recognise the dangerous spellings* (this method's 4th argument, that
+prefix) and every review found another spelling. The rule now runs the other
+way: **an argument is shown or stored only when the method is a known
+Bitcoin Core method and the argument is before that method's first secret
+position; everything else is hidden.** Unknown, mistyped, decorated or
+future methods, unquoted passphrases with spaces, named arguments and JSON
+forms all fall on the hidden side without anyone having to anticipate them.
+
+**VERIFY (real binaries, not memory).** Script and exact invocation:
+`crates/nk-testkit/scripts/scan_help_for_secrets.ps1 -BinDir <bitcoin-31.1\bin>`
+(starts a throwaway regtest `bitcoind`, runs `bitcoin-cli help` and
+`bitcoin-cli help <method>` for every method, stops and deletes it; with
+`-ListOnly` it prints only the method names and probes for hidden ones).
+Output of the run recorded here (Bitcoin Core `/Satoshi:31.1.0/`, 151
+methods):
+
+```text
+=== (1) methods whose help text mentions private-key language ===
+abortrescan                  private key
+createwallet                 private key
+createwalletdescriptor       private key
+deriveaddresses              xprv
+encryptwallet                private key, seed
+getaddressinfo               private key, seed
+getdescriptorinfo            private key
+gethdkeys                    "private", private key, xprv
+listdescriptors              private descriptor
+scantxoutset                 xprv
+signmessage                  private key
+signmessagewithprivkey       private key, privkey
+signrawtransactionwithkey    private key, privkey
+walletpassphrase             private key
+
+=== (2) positional parameters that look like a secret (the Arguments section) ===
+createwallet:              4. passphrase   (string, optional) Encrypt the wallet with this passphrase.
+encryptwallet:             1. passphrase   (string, required)
+listdescriptors:           1. private      (boolean, optional, default=false) Show private descriptors.
+migratewallet:             2. passphrase   (string, optional) The wallet passphrase
+signmessagewithprivkey:    1. privkey      (string, required)
+signrawtransactionwithkey: 2. privkeys     (json array, required) The base58-encoded private keys
+walletpassphrase:          1. passphrase   (string, required)
+walletpassphrasechange:    1. oldpassphrase, 2. newpassphrase
+(the other hits -- abortprivatebroadcast, createwallet's disable_private_keys,
+ avoid_reuse and external_signer, signmessage's address -- are not secrets)
+```
+
+(Shortened: the script prints the full parameter lines.) `help` does not list
+the "hidden" RPCs, but `help <name>` answers for one that exists; probing a
+list of candidate names against the node (the `-ListOnly` mode) found 18 that
+exist in 31.1: `addconnection addpeeraddress echo echoipc echojson
+estimaterawfee generate generateblock generatetoaddress generatetodescriptor
+getorphantxs getrawaddrman invalidateblock mockscheduler reconsiderblock
+sendmsgtopeer setmocktime syncwithvalidationinterfacequeue` (regtest tooling
+and test hooks; candidates that did not exist, e.g. `getaddressbylabel`, were
+discarded). Together with the 151: **169 known methods**
+(`KNOWN_BITCOIN_RPC_METHODS`). Reading the lists:
+
+- Only **`listdescriptors ( private )`** and **`gethdkeys ( {"active_only",
+  "private"} )`** *print* private keys (`gethdkeys help`: named argument
+  `private`, "Show private keys"; the result carries `xprv`).
+- `createwallet "wallet_name" ( disable_private_keys blank "passphrase" ... )`
+  -- the passphrase is the **4th** positional argument -- and
+  `migratewallet ( "wallet_name" "passphrase" )` -- the **2nd** -- take a
+  wallet passphrase as *input*; `encryptwallet`, `walletpassphrase`,
+  `walletpassphrasechange`, `signmessagewithprivkey` and
+  `signrawtransactionwithkey` were already known. `importdescriptors` takes
+  descriptors that may be private. `deriveaddresses`, `getdescriptorinfo`,
+  `scantxoutset`, `createwalletdescriptor` take a descriptor that *may*
+  carry a key; there is no fixed position to hide, so what protects them is
+  the backstop below, not the positional rule.
+- **Bitcoin Core echoes a bad key back in its error message.** A live test
+  (below) sends `getdescriptorinfo wpkh(<key-shaped string>)` to the real
+  node and gets an RPC error whose text contains the key -- the shape
+  `key '<what you typed>' is not valid` (the template string is also in
+  `bitcoind.exe`). That error line reaches the event stream and the history.
+- `ord 0.29.0`, verbatim: `ord wallet --help` lists `dump  Dump wallet
+  descriptors`, `create  Create new wallet`, `restore  Restore wallet`,
+  `sweep  Sweep assets from private key`, with options `--name <NAME>`,
+  `--no-sync` and `--server-url <SERVER_URL>` before the subcommand. `ord
+  wallet dump --help`: "Dump wallet descriptors" (no options). Run on a
+  throwaway regtest wallet it prints `{"descriptors": [...], "wallet_name":
+  ...}` whose descriptors contain **`tprv...`** (`xprv...` on mainnet); no
+  mnemonic. `ord wallet restore --help`: "Restore wallet from <SOURCE> on
+  stdin" (`--from descriptor|mnemonic`), plus an optional `--passphrase`;
+  `ord wallet sweep --help` lists only `--address-type`, `--dry-run` and
+  `--fee-rate` -- no option carries the key. `create`/`restore` stay
+  blocked because they *print* or take a recovery phrase.
+- `listdescriptors true` against a real Bitcoin Core: eight descriptors,
+  each with a `tprv`.
+
+**What changed.**
+
+1. **Refuse, per call** (`nk-core/console_safety`). New
+   `classify_bitcoin_rpc_call(method, args)` -> `BlockedPrivateKeys`, and
+   `OrdCommandClass::BlockedPrivateKeys`. Deliberately **strict**: the
+   private form is refused unless the call is *provably* the public one --
+   `listdescriptors` only with no argument or exactly `false`; `gethdkeys`
+   only with none or one JSON object whose `private` is absent/`false`
+   (parsed, so a JSON escape like `"private"` cannot spell it past a
+   substring check); anything odd is refused too, because a refused
+   oddity costs a retype and an allowed one leaks a key. `dumpprivkey` /
+   `dumpwallet` refused outright (not in 31.1; a different node may have
+   them). `ord ... dump` refused **in any position** (`--no-sync dump`).
+   Plain `listdescriptors`, `gethdkeys`, `ord balance` etc. still run
+   instantly. Departs from spec item 6's "read-only runs instantly" only
+   for these calls, on purpose.
+2. **Enforced in the backend, not only the dialog.** `console_run` (the
+   Tauri command) applies it whatever the frontend did, and
+   `nk_ord::wallet::run_console_subcommand` -- the one function the ord
+   half of the console goes through -- refuses `dump`/`create`/`restore` with
+   `WalletError::Blocked` before spawning anything. (That is the ord console
+   entry point only: `RpcClient::call` is the general RPC client and is
+   used by features that legitimately call any method, so the bitcoin-cli
+   side is enforced in `console_run`.)
+3. **Backstop** (`nk-exec/redact`, `scrub_private_keys`). `redact` -- applied
+   to every command display and every output line the executor emits, for
+   spawned commands and RPC calls alike -- also removes, **leniently** (a
+   key that is a little wrong is exactly what Core rejects and echoes): (a)
+   an extended private key (`xprv/yprv/zprv/Yprv/Zprv/tprv/uprv/vprv/Uprv/
+   Vprv` followed by at least **60** letters/digits -- the whole run, so a
+   `0`/`O`/`I`/`l` typo does not save it; a real key has 107), found anywhere
+   (a key after `\n`, an ANSI code or `%28` included); and (b) a **WIF** key:
+   one alphanumeric token of 50-53 characters starting `5 9 K L c`, with at
+   most one non-base58 character, bounded by anything that is not a letter
+   or digit (or a JSON `\n`-style escape) -- bare, in a descriptor, or inside
+   the quotes of Core's error text. Replaced with `[private key removed]`.
+   The value returned to the *caller* is untouched. Secrets passed to
+   `redact` are replaced **longest first**. The 60-character minimum came
+   from a test: with 20, one random bech32 address in ~4,000 contains
+   `tprv`/`xprv`/... (all those letters are in the bech32 alphabet) and was
+   turned into `[private key removed]`; the test now runs 200,000 random
+   txids and addresses through the scrubber. Not caught, stated plainly: a
+   key split by whitespace (the tail survives), a truncated paste shorter
+   than the minimum, and -- rarely -- a 50-53 character run inside a base64
+   PSBT is mistaken for a key in the *stored copy* (the caller's copy is
+   never touched).
+4. **Hide secret arguments** (`bitcoin_rpc_secret_arg_mask`,
+   `RpcClient::call_masked`, `console_secrets`). By *position*, never by
+   matching the typed text (the first version replaced the raw token in the
+   rendered command, which fails whenever the token is valid JSON -- a
+   quoted numeric passphrase renders without its quotes). The rules:
+   (i) a method **not on the list of 169 known Bitcoin Core methods** hides
+   all its arguments (typos, `importprivkey`, `sethdseed`, `sudo ...`);
+   (ii) a method that takes a secret hides **everything from its first secret
+   argument to the end** -- the tokenizer splits on spaces and knows only
+   double quotes, so an unquoted passphrase with spaces arrives as several
+   tokens and every word of it is part of the secret; (iii) a `name=value`
+   or JSON-object argument before that position hides *everything* (the
+   passphrase is not where it usually is); (iv) the method name is matched
+   case-insensitively; (v) a run of hidden arguments is displayed as **one**
+   `[redacted]` (their number would tell how many words the phrase has).
+   The secret positions: `walletpassphrase`, `walletpassphrasechange`,
+   `encryptwallet`, `signmessagewithprivkey`, `importdescriptors` from the
+   1st argument, `signrawtransactionwithkey` and `migratewallet` from the
+   2nd, `createwallet` from the 4th. The app's own unlock/encrypt calls use
+   the same mechanism (`walletpassphrase [redacted] 60`). A console line
+   whose **first word is not a plain word** of letters and digits
+   (`bitcoin-cli ...`, `bitcoin-cli.exe`, `./bitcoin-cli`, a path, `-regtest`,
+   a BOM) is **refused before anything is shown or run**, with a message that
+   does not repeat it. The tokenizer's "unterminated quote" error no longer
+   prints the line; the on-screen scrollback shows only the leading plain
+   word of a refused line (computed with a character class, not by splitting
+   on whitespace, because the browser and the Rust tokenizer disagree on what
+   whitespace is); a refused **ord** line shows only its subcommand
+   (`ord wallet create [redacted]`); and what the console hands back to the
+   screen -- error text and result -- is scrubbed of private keys like what
+   the executor records.
+5. **Erase old history** (`Store::scrub_private_keys_from_command_history`,
+   run by `open_store` at every launch, idempotent, one transaction).
+   A stored row is **deleted whole** when `history_row_reveals_secrets(display,
+   output)` says so: output with a `"mnemonic"` field; a stored `bitcoin-cli`
+   call that prints private keys (the same check as the live one), whose
+   argument at its method's first secret position is not `[redacted]` (or
+   with words after a hidden one -- the rest of an unquoted passphrase), or
+   whose method is not a known one and has arguments other than a single
+   `[redacted]`; a stored `ord ... wallet ... dump`. What it must **not**
+   delete is tested: the Wallet screen's own `create`/`restore` rows (output
+   is only the sensitive placeholder), `offer create`, and
+   `walletpassphrase [redacted] 60`. Every other row has extended keys and
+   WIF keys scrubbed from its display and output in place. "Erase" means gone
+   from the **file**: the connection runs with `secure_delete=ON`, a non-empty
+   scrub is followed by `VACUUM`, and `VACUUM` also runs **once, ever** (a
+   settings marker, set only after it succeeds) whether or not the scrub found
+   anything -- bytes freed by an earlier build, which did not zero what it
+   deleted, stay in free pages otherwise. If the scrub **fails** (full disk,
+   locked file), the history is not left visible: `open_store` quarantines it
+   (hidden for the run, and deleted if that can be done) and the next launch
+   retries. There is no banner for this yet.
+
+**Found by the adversarial reviews of this change, and fixed.** Round 1:
+positional redaction failing for JSON-valid secrets; `redact` order; deleted
+rows staying in the SQLite file; the scrubber's alphanumeric guard; a typo, a
+wrong-case name or a pasted `bitcoin-cli` prefix recording the passphrase; old
+rows from the `--no-sync create` hole and clear `createwallet` passphrases.
+Round 2 (19 findings upheld): unquoted or single-quoted multi-word
+passphrases (only the first word was hidden); `bitcoin-cli.exe`,
+`./bitcoin-cli`, `sudo`, `ord.exe` prefixes (a two-string blocklist);
+`name=value` and JSON forms; a bare WIF or `importprivkey`/`sethdseed`/
+`importmulti` at an unlisted position; Core echoing a bad key in quotes, and
+mistyped keys (`0`/`O`/`I`/`l`), not scrubbed; a stored-row predicate that
+deleted the app's own rows (`offer create`, the Wallet screen's create) and
+missed other secret methods; bytes freed by earlier builds never vacuumed
+when the scrub found nothing; a failed scrub failing open; the label and ord
+display echoing arguments on screen; comments and this file overstating the
+backstop. Each has a test; several have a live one.
+
+**A second hole found on the way and fixed.** Classification used
+`args.first()`, so any leading `ord wallet` option hid the subcommand:
+`ord wallet --no-sync create` (or `--name x restore`) was treated as an
+unrecognised command (a confirmation dialog) instead of the blocked
+`create`/`restore` -- which prints a **recovery phrase** into the monitor
+and history. The classifier now skips options (and the values of
+`--name`/`--server-url`) to find the real subcommand.
+
+**Verification.**
+
+- Unit: key prefix table, descriptors, WIF positions and echo shapes,
+  mistyped keys, look-alikes untouched, a key after `\n`/ANSI/`%28`,
+  200,000 random ids/addresses never matched, a 16 MB line scrubbed in
+  linear time, contained-secret ordering (`nk-exec`); the full
+  `listdescriptors`/`gethdkeys` argument matrix, the mask (secret positions,
+  unquoted phrases, named/JSON forms, unknown methods, case), the known-method
+  list (sorted, complete for our own lists), the plain-word check, refused ord
+  display, stored-row recognition and preservation (`nk-core`); delete/scrub/
+  keep/idempotence, the raw database file bytes, `vacuum_once` on a file an
+  "old build" left bytes in, and quarantine (`nk-store`); the console's own
+  display and refusals, `open_store` on a real file database, what the console
+  hands back (`nodekeeper`); the on-screen label (Vitest).
+- **Live, real Bitcoin Core** (`nk-testkit/tests/private_keys.rs`, six tests):
+  (1) `listdescriptors true` through the RPC client wired to a watched
+  executor and the real history bridge -- the caller *does* receive `tprv`
+  (positive control), events and history contain none. (2) A real
+  `createwallet` with the numeric passphrase `48213907` typed the JSON-quoted
+  way, then `walletpassphrase` -- the wallet really is encrypted
+  (`unlocked_until` present) and the passphrase really unlocks it, while no
+  event or history row contains it. (3) The same for a passphrase with
+  **spaces** (four distinctive words): the unquoted form (rejected by the
+  node) and the quoted form (accepted) both display `... [redacted]`, no word
+  appears anywhere, the quoted form really encrypts and unlocks. (4) A key
+  that Core rejects: the caller's error **does** contain it (positive
+  control -- Core echoes it), events and history do not. (5)
+  `dump`/`create`/`restore` (also with leading options) are refused
+  **before anything is launched**. (6) Every method the real node lists is in
+  `KNOWN_BITCOIN_RPC_METHODS` (fails, on purpose, when a newer Core adds one).
+- **Live, the real app** (a debug build in an isolated portable folder, its
+  web view driven over a DevTools port, real IPC), re-run after the round-2
+  redesign: `console_classify` shows `walletpassphrase [redacted]` for
+  `hunter2`, for four unquoted words, for a single-quoted phrase, for
+  `WalletPassphrase` and for the JSON-quoted numeric form;
+  `createwallet w false false [redacted]` for one word and for several;
+  `createwallet [redacted]` for `wallet_name=w passphrase=hunter2`;
+  `walletpasspharse [redacted]`, `importprivkey [redacted]`, `sudo [redacted]`
+  and a fully redacted `importdescriptors` blob; refuses (with a message
+  that does not repeat the line) `bitcoin-cli ...`, `bitcoin-cli.exe ...`,
+  `./bitcoin-cli ...` and `-regtest ...`, and an unterminated quote; shows a
+  refused ord line as `ord wallet create [redacted]` / `ord wallet restore
+  [redacted]`; still runs `ord balance`, `getblockcount` and the hidden
+  regtest method `generatetoaddress 1 <address>` with their arguments
+  visible; blocks `listdescriptors true`; `console_run` refuses a pasted line
+  and the blocked command. After seeding the app's real database with 74
+  rows -- a key-printing row, `ord wallet dump`, a stray key, a `createwallet`
+  with the passphrase in clear and one with it hidden, `ord ... create` and a
+  row with only a `"mnemonic"` output, a numeric passphrase, an unquoted
+  multi-word one, a decorated `bitcoin-cli.exe` line, the app's own unlock /
+  Wallet-screen create / `offer create` rows, a clean row, and 60 filler rows
+  so deleted rows sit mid-file -- and relaunching: 66 rows remain (the hidden
+  `createwallet`, the app's own three rows, the clean row and the stray key
+  with the placeholder), and the raw database file **no longer contains** the
+  key, the passphrase, the numeric passphrase, the words or the mnemonic
+  marker (all five were in it before).
+- **Negative controls** (each run, shown to fail, and reverted): hide only the
+  first secret position instead of everything from it (4 unit tests fail, and
+  the live spaces test fails on the mask assertion); treat every method as
+  known (3 fail); never refuse a pasted line (1 fails); disable the WIF
+  token rule (4 unit tests fail, and the live echoed-key test fails with the
+  key in the event stream); make `vacuum_once` skip the `VACUUM` (the
+  old-build-bytes test fails). Earlier: with the backstop disabled the
+  private-descriptor test fails; with the positional mask disabled the numeric
+  passphrase test fails; with `secure_delete` and `VACUUM` both removed the
+  raw-file test fails.
+- **The gate**, on the final tree: `cargo fmt --check` and the exact clippy
+  recipe clean; `cargo test --workspace` with the real binaries set: every
+  test binary passes. `nk-testkit`'s live tests showed an **intermittent
+  `Bitcoind(StartupTimeout)`** in 2 of 5 full runs (a different test each
+  time; each passes alone and 3 of 5 runs were 12/12) -- the 60-second
+  readiness cap under concurrent load (five live tests start bitcoind at
+  once on a 5.9 GB machine), already known and part of the lifecycle work in
+  PROGRESS.md "Phase 10M", G1. Not caused by this change; not weakened.
+
+
+**Limits, stated plainly.**
+
+- A secret typed as an argument to a **known** method that is not on the
+  list of secret-taking ones is shown (there is no way to know it is a
+  secret): only extended keys and WIF-shaped tokens are scrubbed from such
+  arguments. Nothing pattern-matches a **mnemonic** (ordinary words);
+  `create`/`restore` are blocked, the Wallet screen uses the sensitive
+  channel, and old rows with a `"mnemonic"` output are deleted.
+- The known-method list is Bitcoin Core **31.1**. On another version a
+  method that is new is treated as unknown (its arguments are hidden; the
+  live test says so), which costs readability, not safety.
+- The typed line exists in the UI's memory until it is sent; what is shown
+  and stored is the masked form.
+- The classification guards the *console*. User **scripts** run through the
+  executor with the node's cookie can still call `listdescriptors true`
+  themselves; their output is covered by the backstop for extended and WIF
+  keys, but whether scripts should be allowed that at all is the still-open
+  Phase 7 policy question.
+- `secure_delete` + `VACUUM` remove the old rows from the database file.
+  They cannot remove what SQLite does not control: a rollback-journal or
+  filesystem remnant, SSD wear-levelling copies, and any **copy, backup or
+  export of the file made earlier** -- a wallet whose private descriptors
+  were ever printed should be treated as exposed if such copies exist.
+- A failed startup scrub hides the history but does not tell the user.
+- `backupwallet` (a file copy that contains keys) prints nothing and is
+  unchanged (a state-changing command with a confirmation).
+- `RpcClient::call_at` still always records with the normal (visible)
+  sensitivity; the encrypted-backup feature needs a sensitivity-aware
+  call and will add one.
+
 ### Live smoke test of signet and testnet4 (Phase 10 step 2, 2026-09-26)
 
 **Why.** Only `[regtest]` and `[main]` had ever been started live through

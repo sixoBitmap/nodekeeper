@@ -19,6 +19,7 @@ use rusqlite::{params, Connection};
 use rusqlite_migration::{Migrations, M};
 use serde::Serialize;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use thiserror::Error;
 use ts_rs::TS;
 
@@ -71,6 +72,21 @@ fn migrations() -> Migrations<'static> {
     ])
 }
 
+/// What `Store::scrub_private_keys_from_command_history` did.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ScrubReport {
+    /// Rows deleted outright because they reveal a secret.
+    pub rows_deleted: usize,
+    /// Rows kept, with an extended private key scrubbed out of them.
+    pub rows_scrubbed: usize,
+}
+
+impl ScrubReport {
+    pub fn is_empty(&self) -> bool {
+        self.rows_deleted == 0 && self.rows_scrubbed == 0
+    }
+}
+
 /// One row of `command_history`, as read back for the Live Command
 /// Monitor UI.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
@@ -118,6 +134,9 @@ impl CommandHistoryStatus {
 
 pub struct Store {
     conn: Connection,
+    /// Set by [`Store::quarantine_command_history`]: the command history is
+    /// not handed out for the rest of this run.
+    history_quarantined: AtomicBool,
 }
 
 impl Store {
@@ -125,15 +144,34 @@ impl Store {
     /// any pending migrations.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         let mut conn = Connection::open(path)?;
+        Self::configure(&conn)?;
         migrations().to_latest(&mut conn)?;
-        Ok(Self { conn })
+        Ok(Self::from_connection(conn))
+    }
+
+    fn from_connection(conn: Connection) -> Self {
+        Self {
+            conn,
+            history_quarantined: AtomicBool::new(false),
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn open_in_memory() -> Result<Self, StoreError> {
         let mut conn = Connection::open_in_memory()?;
+        Self::configure(&conn)?;
         migrations().to_latest(&mut conn)?;
-        Ok(Self { conn })
+        Ok(Self::from_connection(conn))
+    }
+
+    /// `secure_delete`: a deleted or overwritten row's bytes are zeroed in
+    /// the file instead of left in a free page. Without it, deleting a
+    /// history row (pruning, or erasing one that revealed a secret) removes
+    /// it from the table but not from the database file, where it can still
+    /// be read. Set on every connection -- it is a per-connection setting.
+    fn configure(conn: &Connection) -> Result<(), StoreError> {
+        conn.pragma_update(None, "secure_delete", "ON")?;
+        Ok(())
     }
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
@@ -230,6 +268,9 @@ impl Store {
         environment: Option<&str>,
         limit: u32,
     ) -> Result<Vec<CommandHistoryEntry>, StoreError> {
+        if self.history_quarantined.load(Ordering::Relaxed) {
+            return Ok(Vec::new());
+        }
         let map_row = |row: &rusqlite::Row| -> rusqlite::Result<CommandHistoryEntry> {
             Ok(CommandHistoryEntry {
                 id: row.get("id")?,
@@ -281,6 +322,97 @@ impl Store {
             params![environment, keep],
         )?;
         Ok(deleted)
+    }
+
+    /// Erases private key material from the stored command history, for
+    /// rows recorded **before** the console refused the commands that print
+    /// it (`listdescriptors true`, `gethdkeys` with `private`, `ord wallet
+    /// dump`) and before the executor scrubbed extended private keys from
+    /// what it emits -- the "logs, database, exports" clause of the
+    /// secrets rule (CLAUDE.md), which until then held only for newly
+    /// recorded rows.
+    ///
+    /// - A row that `reveals_secrets(command_display, output)` says reveals
+    ///   one (a command that prints keys or a recovery phrase, a passphrase
+    ///   recorded in the clear) is **deleted**, whole: its output is the
+    ///   thing to remove, and its display may itself carry a key (a pasted
+    ///   private descriptor).
+    /// - Any other row has extended private keys scrubbed from its display
+    ///   and output in place (the same scrub the executor applies to new
+    ///   output), and is left as it is otherwise.
+    ///
+    /// Idempotent (a second run finds nothing), and cheap enough to run at
+    /// every launch: the table holds at most a few thousand rows per
+    /// environment. Runs in one transaction. The predicate is a parameter
+    /// so this crate doesn't need to know *which* commands are the
+    /// dangerous ones; that lives with the console's safety layer.
+    ///
+    /// Deleting a row does not remove its bytes from the file by itself: the
+    /// connection has `secure_delete` on (they are zeroed, not left in a
+    /// free page), and when anything was changed the file is then
+    /// `VACUUM`ed, which rewrites it without the free pages and the old
+    /// copies of updated rows.
+    pub fn scrub_private_keys_from_command_history(
+        &self,
+        reveals_secrets: impl Fn(&str, &str) -> bool,
+    ) -> Result<ScrubReport, StoreError> {
+        let tx = self.conn.unchecked_transaction()?;
+        let rows: Vec<(String, String, String)> = {
+            let mut stmt = tx.prepare("SELECT id, command_display, output FROM command_history")?;
+            let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+            mapped.collect::<Result<_, _>>()?
+        };
+
+        let mut report = ScrubReport::default();
+        for (id, display, output) in rows {
+            if reveals_secrets(&display, &output) {
+                tx.execute("DELETE FROM command_history WHERE id = ?1", params![id])?;
+                report.rows_deleted += 1;
+                continue;
+            }
+            let clean_display = nk_exec::redact::scrub_private_keys(&display);
+            let clean_output = nk_exec::redact::scrub_private_keys(&output);
+            if clean_display != display.as_str() || clean_output != output.as_str() {
+                tx.execute(
+                    "UPDATE command_history SET command_display = ?2, output = ?3 WHERE id = ?1",
+                    params![id, clean_display.as_ref(), clean_output.as_ref()],
+                )?;
+                report.rows_scrubbed += 1;
+            }
+        }
+        tx.commit()?;
+        if !report.is_empty() {
+            self.conn.execute_batch("VACUUM")?;
+        }
+        Ok(report)
+    }
+
+    /// Runs `VACUUM` **once** (per `marker_key`, remembered in the settings
+    /// table once it has succeeded, so a failure is retried on the next
+    /// launch). `secure_delete` only zeroes what is deleted *from now on*; the
+    /// free pages that an earlier build left behind -- rows its pruning had
+    /// already deleted, the old copies of rows it appended output to -- still
+    /// hold their bytes, and that includes any secret the history ever
+    /// contained. `VACUUM` rewrites the file without them, whether or not the
+    /// scrub found anything to change. Returns whether it ran.
+    pub fn vacuum_once(&self, marker_key: &str) -> Result<bool, StoreError> {
+        if self.get_setting(marker_key)?.as_deref() == Some("1") {
+            return Ok(false);
+        }
+        self.conn.execute_batch("VACUUM")?;
+        self.set_setting(marker_key, "1")?;
+        Ok(true)
+    }
+
+    /// The fallback when erasing old history **failed** (a full disk, a locked
+    /// or unreadable file): a history that may still hold a secret must not
+    /// stay visible in the Live Command Monitor or an export. Hides it for the
+    /// rest of this run, and tries to delete it (best effort: whatever made
+    /// the scrub fail may fail this too). The next launch tries the scrub
+    /// again.
+    pub fn quarantine_command_history(&self) {
+        self.history_quarantined.store(true, Ordering::Relaxed);
+        let _ = self.conn.execute("DELETE FROM command_history", []);
     }
 
     /// `prune_command_history` for every environment that has any
@@ -534,6 +666,270 @@ mod tests {
 
         // Nothing over the limit any more: a second pass deletes nothing.
         assert_eq!(store.prune_all_command_history(5).unwrap(), 0);
+    }
+
+    /// A synthetic key-shaped string (prefix + 107 base58 characters). Never
+    /// a real key.
+    fn fake_key(prefix: &str) -> String {
+        format!("{prefix}{}", "A".repeat(107))
+    }
+
+    fn record_row(store: &Store, id: &str, display: &str, output: &str) {
+        store
+            .record_command_started(id, "regtest", "bitcoincli", "t", display, 0, false)
+            .unwrap();
+        store.append_command_output(id, output).unwrap();
+    }
+
+    fn row(store: &Store, id: &str) -> Option<CommandHistoryEntry> {
+        store
+            .list_command_history(None, 100)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.id == id)
+    }
+
+    /// The old-history half of "private keys never reach the database":
+    /// rows recorded before the console refused key-printing commands.
+    #[test]
+    fn scrubbing_old_history_deletes_key_printing_commands_and_scrubs_stray_keys() {
+        let store = Store::open_in_memory().unwrap();
+        let descriptor = format!("wpkh({}/84h/1h/0h/0/*)", fake_key("tprv"));
+
+        // 1. A command that printed private keys: the whole row must go.
+        record_row(
+            &store,
+            "dump",
+            "bitcoin-cli listdescriptors true",
+            &format!("{{\"desc\":\"{descriptor}\"}}"),
+        );
+        // 2. An innocent command whose output happens to carry a key (a
+        //    script, a pasted descriptor): kept, key removed.
+        record_row(
+            &store,
+            "stray",
+            "bitcoin-cli getdescriptorinfo",
+            &format!("saw {}", fake_key("xprv")),
+        );
+        // 3. Innocent and clean: untouched.
+        record_row(&store, "clean", "bitcoin-cli getblockcount", "812345");
+
+        let report = store
+            .scrub_private_keys_from_command_history(|display, _| {
+                display.contains("listdescriptors true")
+            })
+            .unwrap();
+        assert_eq!(
+            report,
+            ScrubReport {
+                rows_deleted: 1,
+                rows_scrubbed: 1
+            }
+        );
+
+        assert!(
+            row(&store, "dump").is_none(),
+            "the key-printing row is gone"
+        );
+        let stray = row(&store, "stray").expect("kept");
+        assert!(!stray.output.contains("prv"), "{}", stray.output);
+        assert!(stray
+            .output
+            .contains(nk_exec::redact::PRIVATE_KEY_PLACEHOLDER));
+        assert_eq!(row(&store, "clean").unwrap().output, "812345");
+
+        // Nothing anywhere in the table still looks like a private key.
+        for entry in store.list_command_history(None, 100).unwrap() {
+            assert!(!entry.output.contains("tprv") && !entry.output.contains("xprv"));
+            assert!(!entry.command_display.contains("tprv"));
+        }
+    }
+
+    #[test]
+    fn a_display_carrying_a_key_is_scrubbed_in_place() {
+        let store = Store::open_in_memory().unwrap();
+        record_row(
+            &store,
+            "pasted",
+            &format!("bitcoin-cli deriveaddresses wpkh({}/0/*)", fake_key("tprv")),
+            "[]",
+        );
+        let report = store
+            .scrub_private_keys_from_command_history(|_, _| false)
+            .unwrap();
+        assert_eq!(report.rows_scrubbed, 1);
+        assert!(!row(&store, "pasted")
+            .unwrap()
+            .command_display
+            .contains("prv"));
+    }
+
+    #[test]
+    fn scrubbing_is_idempotent_and_a_clean_history_is_untouched() {
+        let store = Store::open_in_memory().unwrap();
+        record_row(&store, "clean", "bitcoin-cli getblockcount", "812345");
+        assert!(store
+            .scrub_private_keys_from_command_history(|_, _| false)
+            .unwrap()
+            .is_empty());
+
+        record_row(&store, "dump", "bitcoin-cli listdescriptors true", "x");
+        let first = store
+            .scrub_private_keys_from_command_history(|d, _| d.contains("listdescriptors true"))
+            .unwrap();
+        assert_eq!(first.rows_deleted, 1);
+        let second = store
+            .scrub_private_keys_from_command_history(|d, _| d.contains("listdescriptors true"))
+            .unwrap();
+        assert!(second.is_empty(), "a second pass finds nothing: {second:?}");
+    }
+
+    /// "Erased" has to mean gone from the *file*: a deleted row's bytes used
+    /// to survive in a free page, readable with any hex viewer. This reads
+    /// the database file's raw bytes.
+    #[test]
+    fn erased_history_is_gone_from_the_database_file_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nodekeeper.sqlite3");
+        let marker = "MARKER-recovery-phrase-abandon-ability-able";
+
+        {
+            let store = Store::open(&path).unwrap();
+            // Enough other rows that the deleted one lands in the middle of
+            // the file, not in a page that is simply truncated away.
+            for i in 0..50 {
+                record_row(
+                    &store,
+                    &format!("keep-{i}"),
+                    "bitcoin-cli getblockcount",
+                    "812345",
+                );
+            }
+            record_row(
+                &store,
+                "secret",
+                "bitcoin-cli listdescriptors true",
+                &format!("{{\"note\":\"{marker}\"}}"),
+            );
+            // A row that is kept but scrubbed in place: the old text of an
+            // updated row is the other place a stale copy could live.
+            record_row(
+                &store,
+                "stray",
+                "bitcoin-cli getdescriptorinfo",
+                &format!("{marker} {}", fake_key("xprv")),
+            );
+            let before = std::fs::read(&path).unwrap();
+            assert!(
+                before.windows(marker.len()).any(|w| w == marker.as_bytes()),
+                "the test needs the marker to be in the file to begin with"
+            );
+
+            let report = store
+                .scrub_private_keys_from_command_history(|display, _| {
+                    display.contains("listdescriptors true")
+                })
+                .unwrap();
+            assert_eq!(report.rows_deleted, 1);
+            assert_eq!(report.rows_scrubbed, 1);
+        }
+
+        let after = std::fs::read(&path).unwrap();
+        // The deleted row's marker is gone. (The scrubbed row keeps its
+        // marker text -- only the key is removed from it -- so look for the
+        // one thing that must not survive anywhere: the key.)
+        assert!(
+            !after.windows(4).any(|w| w == b"xprv"),
+            "the scrubbed key must not survive in the file"
+        );
+        let markers = after
+            .windows(marker.len())
+            .filter(|w| *w == marker.as_bytes())
+            .count();
+        assert_eq!(
+            markers, 1,
+            "only the kept row's marker remains, not the deleted row's copy"
+        );
+    }
+
+    /// What an **earlier build** left behind: it ran without `secure_delete`,
+    /// so a row its pruning had deleted still sits, bytes and all, in a free
+    /// page. The scrub finds no row to change (there is none any more), so
+    /// only `vacuum_once` gets the bytes out of the file.
+    #[test]
+    fn vacuum_once_removes_what_an_earlier_build_left_in_free_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nodekeeper.sqlite3");
+        let marker = "MARKER-old-build-secret-abandon-ability";
+        {
+            let store = Store::open(&path).unwrap();
+            // Behave like the old build.
+            store
+                .conn
+                .pragma_update(None, "secure_delete", "OFF")
+                .unwrap();
+            for i in 0..30 {
+                record_row(
+                    &store,
+                    &format!("keep-{i}"),
+                    "bitcoin-cli getblockcount",
+                    "812345",
+                );
+            }
+            // Larger than a page, so it lives in overflow pages.
+            let big = format!("{marker} {}", "x".repeat(6000));
+            record_row(&store, "old", "bitcoin-cli listdescriptors true", &big);
+            store
+                .conn
+                .execute("DELETE FROM command_history WHERE id = 'old'", [])
+                .unwrap();
+        }
+        let count = |path: &std::path::Path| {
+            let raw = std::fs::read(path).unwrap();
+            raw.windows(marker.len())
+                .filter(|w| *w == marker.as_bytes())
+                .count()
+        };
+        assert!(
+            count(&path) > 0,
+            "positive control: the deleted row's bytes are still in the file"
+        );
+
+        let store = Store::open(&path).unwrap();
+        // The scrub has nothing to do -- and so does not vacuum.
+        let report = store
+            .scrub_private_keys_from_command_history(|_, _| false)
+            .unwrap();
+        assert!(report.is_empty());
+        assert!(count(&path) > 0, "a no-op scrub does not remove them");
+
+        assert!(store.vacuum_once("history_vacuumed_test").unwrap());
+        drop(store);
+        assert_eq!(count(&path), 0, "vacuum_once removed the old bytes");
+
+        // Once done, it is remembered (and not repeated).
+        let store = Store::open(&path).unwrap();
+        assert!(!store.vacuum_once("history_vacuumed_test").unwrap());
+        // A different marker key runs again.
+        assert!(store.vacuum_once("history_vacuumed_other").unwrap());
+    }
+
+    #[test]
+    fn a_quarantined_history_is_hidden_and_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nodekeeper.sqlite3");
+        {
+            let store = Store::open(&path).unwrap();
+            record_row(&store, "a", "bitcoin-cli listdescriptors true", "secret");
+            assert_eq!(store.list_command_history(None, 10).unwrap().len(), 1);
+            store.quarantine_command_history();
+            assert!(store.list_command_history(None, 10).unwrap().is_empty());
+        }
+        let store = Store::open(&path).unwrap();
+        assert!(
+            store.list_command_history(None, 10).unwrap().is_empty(),
+            "the rows were deleted, not just hidden"
+        );
     }
 
     #[test]

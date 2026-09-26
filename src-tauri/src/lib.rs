@@ -959,19 +959,88 @@ pub struct ConsoleCommandPreview {
     pub supports_dry_run: bool,
     /// `Some(reason)` when this must be refused outright and
     /// `console_run` will error rather than execute -- a fund-moving
-    /// bitcoin-cli command against the wallet ord uses, or an ord
-    /// `create`/`restore` that could print a recovery phrase.
+    /// bitcoin-cli command against the wallet ord uses, an ord
+    /// `create`/`restore` that could print a recovery phrase, or a command
+    /// that can print private keys (`listdescriptors true`, `gethdkeys`
+    /// with `private`, `ord wallet dump`).
     pub blocked_reason: Option<String>,
 }
 
-/// Positional-argument values (bitcoin-cli side only) that must be
-/// redacted before `method`'s command line is shown or logged anywhere
-/// -- see `nk_core::console_safety::secret_bitcoin_rpc_arg_indices`.
-fn console_secret_values(method: &str, args: &[String]) -> Vec<String> {
-    nk_core::console_safety::secret_bitcoin_rpc_arg_indices(method)
+/// The arguments of a bitcoin-cli console call that are secret, hidden **by
+/// position** (see `nk_core::console_safety::bitcoin_rpc_secret_arg_mask`:
+/// everything from a secret method's first secret argument on, and every
+/// argument of a method Bitcoin Core does not have): the mask itself, the
+/// secret values (a second net for text substitution -- the output and the
+/// recorded command), and the command line as it may be shown or stored, with
+/// each run of secret arguments replaced by ONE `[redacted]` (how many there
+/// are would tell how many words a passphrase has).
+struct ConsoleSecrets {
+    mask: Vec<bool>,
+    values: Vec<String>,
+    display: String,
+}
+
+fn console_secrets(method: &str, args: &[String]) -> ConsoleSecrets {
+    let mask = nk_core::console_safety::bitcoin_rpc_secret_arg_mask(method, args);
+    let values: Vec<String> = args
         .iter()
-        .filter_map(|&i| args.get(i).cloned())
-        .collect()
+        .zip(&mask)
+        .filter(|(_, hidden)| **hidden)
+        .map(|(arg, _)| arg.clone())
+        .collect();
+    let mut parts = vec![method.to_string()];
+    let mut previous_hidden = false;
+    for (arg, hidden) in args.iter().zip(&mask) {
+        if *hidden {
+            if !previous_hidden {
+                parts.push("[redacted]".to_string());
+            }
+        } else {
+            parts.push(arg.clone());
+        }
+        previous_hidden = *hidden;
+    }
+    // An extended private key or a WIF key inside a descriptor that is not at
+    // a secret position (`deriveaddresses wpkh(...)`, `getdescriptorinfo`) is
+    // removed from the display too -- the same backstop the executor applies.
+    let display = nk_exec::redact::scrub_private_keys(&parts.join(" ")).into_owned();
+    ConsoleSecrets {
+        mask,
+        values,
+        display,
+    }
+}
+
+/// What the console hands back to the screen is scrubbed of private keys the
+/// way the executor scrubs what it records: an error message can quote what
+/// was typed (`key '<WIF>' is not valid`).
+fn scrub_for_screen(text: String) -> String {
+    nk_exec::redact::scrub_private_keys(&text).into_owned()
+}
+
+fn scrub_value_for_screen(value: serde_json::Value) -> serde_json::Value {
+    match nk_exec::redact::scrub_private_keys(&value.to_string()) {
+        std::borrow::Cow::Borrowed(_) => value,
+        std::borrow::Cow::Owned(scrubbed) => {
+            serde_json::from_str(&scrubbed).unwrap_or(serde_json::Value::String(scrubbed))
+        }
+    }
+}
+
+fn scrub_error_for_screen(mut error: TypedError) -> TypedError {
+    error.message = scrub_for_screen(error.message);
+    error
+}
+
+/// Refuses a console line whose first word is not a plain command name -- a
+/// pasted `bitcoin-cli ...`, `bitcoin-cli.exe`, a path, an option. Whatever
+/// follows would sit at positions nothing knows to hide. The error text never
+/// echoes the pasted line.
+fn refuse_pasted_command_prefix(method: &str) -> Result<(), TypedError> {
+    match nk_core::console_safety::pasted_command_prefix_problem(method) {
+        Some(message) => Err(TypedError::from(message.to_string())),
+        None => Ok(()),
+    }
 }
 
 /// Classifies a raw console command line (docs/SPEC.md item 6) without
@@ -987,7 +1056,9 @@ fn console_classify(command_line: String) -> Result<ConsoleCommandPreview, Typed
     if parsed.command == "ord" {
         let sub_args: Vec<&str> = parsed.args.iter().map(String::as_str).collect();
         let class = nk_core::console_safety::classify_ord_wallet_subcommand(&sub_args);
-        let display = format!("ord wallet {}", parsed.args.join(" "));
+        let display = scrub_for_screen(nk_core::console_safety::ord_console_display(
+            &sub_args, class,
+        ));
         use nk_core::console_safety::OrdCommandClass;
         let (read_only, supports_dry_run, blocked_reason) = match class {
             OrdCommandClass::ReadOnly => (true, false, None),
@@ -1002,6 +1073,11 @@ fn console_classify(command_line: String) -> Result<ConsoleCommandPreview, Typed
                         .to_string(),
                 ),
             ),
+            OrdCommandClass::BlockedPrivateKeys => (
+                false,
+                false,
+                Some(nk_core::console_safety::PRIVATE_KEYS_BLOCKED_MESSAGE.to_string()),
+            ),
         };
         return Ok(ConsoleCommandPreview {
             source: nk_exec::CommandSource::OrdCli,
@@ -1012,14 +1088,11 @@ fn console_classify(command_line: String) -> Result<ConsoleCommandPreview, Typed
         });
     }
 
-    let class = nk_core::console_safety::classify_bitcoin_rpc(&parsed.command);
-    let raw_display = if parsed.args.is_empty() {
-        parsed.command.clone()
-    } else {
-        format!("{} {}", parsed.command, parsed.args.join(" "))
-    };
-    let secrets = console_secret_values(&parsed.command, &parsed.args);
-    let display = nk_exec::redact::redact(&raw_display, &secrets);
+    refuse_pasted_command_prefix(&parsed.command)?;
+    // Per *call* (method and arguments): `listdescriptors true` is not the
+    // same command as `listdescriptors`.
+    let class = nk_core::console_safety::classify_bitcoin_rpc_call(&parsed.command, &parsed.args);
+    let display = console_secrets(&parsed.command, &parsed.args).display;
     use nk_core::console_safety::RpcCommandClass;
     let (read_only, blocked_reason) = match class {
         RpcCommandClass::ReadOnly => (true, None),
@@ -1031,6 +1104,10 @@ fn console_classify(command_line: String) -> Result<ConsoleCommandPreview, Typed
                  screen instead."
                     .to_string(),
             ),
+        ),
+        RpcCommandClass::BlockedPrivateKeys => (
+            false,
+            Some(nk_core::console_safety::PRIVATE_KEYS_BLOCKED_MESSAGE.to_string()),
         ),
     };
     Ok(ConsoleCommandPreview {
@@ -1066,15 +1143,20 @@ async fn console_run(
     if parsed.command == "ord" {
         let sub_args: Vec<&str> = parsed.args.iter().map(String::as_str).collect();
         let class = nk_core::console_safety::classify_ord_wallet_subcommand(&sub_args);
-        if matches!(
-            class,
-            nk_core::console_safety::OrdCommandClass::BlockedUseWalletScreen
-        ) {
-            return Err(TypedError::from(
-                "This can print a recovery phrase -- use the Wallet screen's create/restore \
-                 flow instead."
-                    .to_string(),
-            ));
+        match class {
+            nk_core::console_safety::OrdCommandClass::BlockedUseWalletScreen => {
+                return Err(TypedError::from(
+                    "This can print a recovery phrase -- use the Wallet screen's create/restore \
+                     flow instead."
+                        .to_string(),
+                ));
+            }
+            nk_core::console_safety::OrdCommandClass::BlockedPrivateKeys => {
+                return Err(TypedError::from(
+                    nk_core::console_safety::PRIVATE_KEYS_BLOCKED_MESSAGE.to_string(),
+                ));
+            }
+            _ => {}
         }
         let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
         let mut args = parsed.args;
@@ -1088,23 +1170,41 @@ async fn console_run(
         }
         return nk_ord::wallet::run_console_subcommand(&executor, &ctx.target(), args, "console")
             .await
-            .map_err(TypedError::from);
+            .map(scrub_value_for_screen)
+            .map_err(|e| scrub_error_for_screen(TypedError::from(e)));
     }
 
-    let class = nk_core::console_safety::classify_bitcoin_rpc(&parsed.command);
-    if matches!(class, nk_core::console_safety::RpcCommandClass::FundMoving) {
-        return Err(TypedError::from(
-            "This can move funds and is blocked for the wallet ord uses -- use the Send screen \
-             instead."
-                .to_string(),
-        ));
+    refuse_pasted_command_prefix(&parsed.command)?;
+    let class = nk_core::console_safety::classify_bitcoin_rpc_call(&parsed.command, &parsed.args);
+    match class {
+        nk_core::console_safety::RpcCommandClass::FundMoving => {
+            return Err(TypedError::from(
+                "This can move funds and is blocked for the wallet ord uses -- use the Send \
+                 screen instead."
+                    .to_string(),
+            ));
+        }
+        nk_core::console_safety::RpcCommandClass::BlockedPrivateKeys => {
+            return Err(TypedError::from(
+                nk_core::console_safety::PRIVATE_KEYS_BLOCKED_MESSAGE.to_string(),
+            ));
+        }
+        _ => {}
     }
     let (_, rpc) = bitcoin_rpc_context(chain, &node_manager, &store, &executor)?;
-    let secrets = console_secret_values(&parsed.command, &parsed.args);
+    let secrets = console_secrets(&parsed.command, &parsed.args);
     let json_args = nk_core::console_parse::coerce_json_args(&parsed.args);
-    rpc.call(&parsed.command, json_args, "console", secrets, false)
-        .await
-        .map_err(|e| TypedError::from(e.to_string()))
+    rpc.call_masked(
+        &parsed.command,
+        json_args,
+        "console",
+        secrets.values,
+        &secrets.mask,
+        false,
+    )
+    .await
+    .map(scrub_value_for_screen)
+    .map_err(|e| scrub_error_for_screen(TypedError::from(e.to_string())))
 }
 
 /// One script offered by the script runner (docs/SPEC.md item 6).
@@ -2270,8 +2370,39 @@ fn open_store(db_path: &std::path::Path, keep: u32) -> Store {
     if let Err(e) = store.prune_all_command_history(keep) {
         eprintln!("could not prune the command history at startup: {e}");
     }
+    // Erase private key material that an earlier version let into the
+    // history (the console used to run `listdescriptors true` and `ord
+    // wallet dump` and record what they printed). Idempotent.
+    match store.scrub_private_keys_from_command_history(
+        nk_core::console_safety::history_row_reveals_secrets,
+    ) {
+        Ok(report) if !report.is_empty() => eprintln!(
+            "removed private key material from the command history: {} row(s) deleted, {} \
+             row(s) scrubbed",
+            report.rows_deleted, report.rows_scrubbed
+        ),
+        Ok(_) => {}
+        Err(e) => {
+            // Fail closed: a history that may still hold a secret is not
+            // shown (and is deleted if that can be done); the next launch
+            // tries the scrub again.
+            eprintln!("could not scrub the command history at startup: {e}");
+            store.quarantine_command_history();
+        }
+    }
+    // Once, ever: bytes freed by an earlier build (which did not zero what it
+    // deleted) stay in the file's free pages until the file is rewritten,
+    // whether or not the scrub above found anything. Retried at the next
+    // launch if it fails.
+    if let Err(e) = store.vacuum_once(HISTORY_VACUUMED_MARKER) {
+        eprintln!("could not compact the settings database at startup: {e}");
+    }
     store
 }
+
+/// The settings key that records that the database file was rewritten once
+/// after `secure_delete` was turned on -- see `open_store`.
+const HISTORY_VACUUMED_MARKER: &str = "history_vacuumed_v1";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -2561,6 +2692,266 @@ mod tests {
         };
         assert_eq!(count("regtest"), 5);
         assert_eq!(count("mainnet"), 3);
+    }
+
+    /// The private-key half of opening the store: history recorded by an
+    /// older version (which ran `listdescriptors true`) is cleaned on
+    /// launch, on a real file database reopened the way a launch does.
+    #[test]
+    fn opening_the_store_erases_private_key_material_from_old_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nodekeeper.sqlite3");
+        let key = format!("tprv{}", "A".repeat(107));
+        {
+            let store = Store::open(&path).unwrap();
+            for (id, display, output) in [
+                (
+                    "dump",
+                    "bitcoin-cli listdescriptors true",
+                    format!("desc {key}"),
+                ),
+                (
+                    "ord-dump",
+                    "ord.exe --regtest wallet --name ord dump",
+                    format!("desc {key}"),
+                ),
+                (
+                    "stray",
+                    "bitcoin-cli getdescriptorinfo",
+                    format!("saw {key}"),
+                ),
+                ("clean", "bitcoin-cli getblockcount", "7".to_string()),
+                // A passphrase recorded in the clear by an older version.
+                (
+                    "createwallet-clear",
+                    "bitcoin-cli createwallet w false false hunter2",
+                    "{}".to_string(),
+                ),
+                (
+                    "createwallet-hidden",
+                    "bitcoin-cli createwallet w false false [redacted]",
+                    "{}".to_string(),
+                ),
+                // A recovery phrase in the output of a command that is not
+                // itself on any list.
+                (
+                    "mnemonic",
+                    "ord.exe --regtest wallet --name ord something",
+                    "{\"mnemonic\": \"abandon ability able\"}".to_string(),
+                ),
+                // The hole the leading-option fix closed: it printed a recovery
+                // phrase into the history.
+                (
+                    "ord-create",
+                    "ord.exe --regtest wallet --name ord --no-sync create",
+                    "{\"mnemonic\": \"abandon ability able\"}".to_string(),
+                ),
+                // Passphrases recorded in the clear in the shapes a review
+                // found: a numeric one, one with spaces, a decorated line.
+                (
+                    "unlock-numeric",
+                    "bitcoin-cli -regtest walletpassphrase 48213907 60",
+                    "null".to_string(),
+                ),
+                (
+                    "unlock-words",
+                    "bitcoin-cli -regtest walletpassphrase [redacted] horse battery staple 60",
+                    "null".to_string(),
+                ),
+                (
+                    "decorated",
+                    "bitcoin-cli -regtest bitcoin-cli.exe walletpassphrase hunter2 60",
+                    "null".to_string(),
+                ),
+                // The rows the app itself writes must survive: the Wallet
+                // screen's create (placeholder output), the unlock call, an
+                // offer.
+                (
+                    "wallet-screen-create",
+                    "ord.exe --regtest wallet --name ord create",
+                    "[sensitive output hidden]".to_string(),
+                ),
+                (
+                    "unlock",
+                    "bitcoin-cli -regtest walletpassphrase [redacted] 60",
+                    "null".to_string(),
+                ),
+                (
+                    "offer",
+                    "ord.exe --regtest wallet --name ord offer create --inscription abc",
+                    "{}".to_string(),
+                ),
+            ] {
+                store
+                    .record_command_started(id, "regtest", "bitcoincli", "t", display, 0, false)
+                    .unwrap();
+                store.append_command_output(id, &output).unwrap();
+            }
+        }
+
+        let store = open_store(&path, 5_000);
+        let rows = store.list_command_history(None, 100).unwrap();
+        let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        let mut kept = ids.clone();
+        kept.sort_unstable();
+        assert_eq!(
+            kept,
+            [
+                "clean",
+                "createwallet-hidden",
+                "offer",
+                "stray",
+                "unlock",
+                "wallet-screen-create"
+            ],
+            "every row that revealed a secret is gone, and the app's own rows are kept"
+        );
+        assert!(rows.iter().all(|r| !r.output.contains("prv")));
+    }
+
+    fn args(line: &str) -> Vec<String> {
+        nk_core::console_parse::tokenize(line).unwrap()
+    }
+
+    /// What the console shows and records for a bitcoin-cli call: a secret
+    /// argument is hidden by its **position**, whatever the typed text
+    /// looks like -- each case is one where hiding by matching the text
+    /// used to show the secret.
+    #[test]
+    fn the_console_hides_secret_arguments_by_position() {
+        let display = |line: &str| {
+            let tokens = args(line);
+            let (method, rest) = tokens.split_first().unwrap();
+            console_secrets(method, rest).display
+        };
+        // From the secret to the END: the timeout is part of the hidden run
+        // (what follows a passphrase may be the rest of it), and the run is
+        // ONE marker -- how many words it has is not shown either.
+        assert_eq!(
+            display("walletpassphrase hunter2 60"),
+            "walletpassphrase [redacted]"
+        );
+        assert_eq!(
+            display("walletpassphrase correct horse battery staple 60"),
+            "walletpassphrase [redacted]"
+        );
+        assert_eq!(
+            display("walletpassphrase 'correct horse battery staple' 60"),
+            "walletpassphrase [redacted]"
+        );
+        // The method name in another case still hides it (the node rejects
+        // the call, but it was already recorded).
+        assert_eq!(
+            display("WalletPassphrase hunter2 60"),
+            "WalletPassphrase [redacted]"
+        );
+        // createwallet's passphrase is its 4th argument; what is typed after
+        // it (more words of it) is hidden with it.
+        assert_eq!(
+            display("createwallet w false false hunter2"),
+            "createwallet w false false [redacted]"
+        );
+        assert_eq!(
+            display("createwallet w false false correct horse battery"),
+            "createwallet w false false [redacted]"
+        );
+        // A JSON blob that the tokenizer splits over several tokens (a
+        // space, then a quote): every piece of it is hidden.
+        assert_eq!(
+            display(r#"importdescriptors [{"desc":"wpkh(SECRET)", "timestamp":"now"}]"#),
+            "importdescriptors [redacted]"
+        );
+        // Named arguments: the passphrase is not where it usually is.
+        assert_eq!(
+            display("createwallet wallet_name=w passphrase=hunter2"),
+            "createwallet [redacted]"
+        );
+        // A method Bitcoin Core does not have: nothing about its arguments
+        // is known, so none is shown -- a typo, a legacy key import, a word
+        // that only looks like a command.
+        for line in [
+            "walletpasspharse hunter2 60",
+            "importprivkey KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn",
+            "sudo bitcoin-cli walletpassphrase hunter2 60",
+        ] {
+            let shown = display(line);
+            assert_eq!(shown.split(' ').count(), 2, "{shown}");
+            assert!(shown.ends_with(" [redacted]"), "{shown}");
+        }
+        // An ordinary command is shown as typed.
+        assert_eq!(display("getblockhash 100"), "getblockhash 100");
+        // A private key in a descriptor argument (a position no method is
+        // known to treat as secret) is scrubbed from the display as well.
+        let key = format!("tprv{}", "A".repeat(107));
+        let shown = display(&format!("getdescriptorinfo wpkh({key}/0/*)"));
+        assert!(!shown.contains("tprv"), "{shown}");
+        assert!(
+            shown.contains(nk_exec::redact::PRIVATE_KEY_PLACEHOLDER),
+            "{shown}"
+        );
+    }
+
+    /// A pasted `bitcoin-cli ...` line is refused before anything is shown
+    /// or run, and the refusal does not repeat what was pasted.
+    #[test]
+    fn a_pasted_bitcoin_cli_line_is_refused_without_echoing_it() {
+        for line in [
+            "bitcoin-cli walletpassphrase hunter2 60",
+            "BITCOIN-CLI -regtest walletpassphrase hunter2 60",
+            "-regtest walletpassphrase hunter2 60",
+            "bitcoin-cli.exe walletpassphrase hunter2 60",
+            "./bitcoin-cli walletpassphrase hunter2 60",
+            "C:\\tools\\bitcoin-cli.exe walletpassphrase hunter2 60",
+            "\u{feff}bitcoin-cli walletpassphrase hunter2 60",
+        ] {
+            let error = console_classify(line.to_string()).unwrap_err();
+            assert!(!error.message.contains("hunter2"), "{}", error.message);
+            assert!(error.message.contains("without"), "{}", error.message);
+        }
+        assert!(console_classify("getblockchaininfo".to_string()).is_ok());
+    }
+
+    /// Bitcoin Core answers a descriptor with a bad key by quoting it back
+    /// (`key '<key>' is not valid`); the console's error text and result are
+    /// scrubbed like what the executor records.
+    #[test]
+    fn what_the_console_hands_back_is_scrubbed_of_keys() {
+        let wif = format!("c{}", "B".repeat(51));
+        let error = scrub_error_for_screen(TypedError::from(format!(
+            "rpc error -5: key '{wif}' is not valid"
+        )));
+        assert!(!error.message.contains("BBBB"), "{}", error.message);
+        assert!(error.message.contains("is not valid"));
+
+        let value =
+            scrub_value_for_screen(serde_json::json!({"note": format!("saw {wif}"), "n": 1}));
+        assert!(!value.to_string().contains("BBBB"), "{value}");
+        assert_eq!(value["n"], 1, "the rest of the value is intact");
+        let untouched = serde_json::json!({"blocks": 812345});
+        assert_eq!(scrub_value_for_screen(untouched.clone()), untouched);
+    }
+
+    /// A refused ord line is shown without its arguments (`--passphrase`, a
+    /// recovery phrase after `restore`).
+    #[test]
+    fn a_refused_ord_line_is_shown_without_its_arguments() {
+        let preview = console_classify("ord create --passphrase hunter2".to_string()).unwrap();
+        assert_eq!(preview.display, "ord wallet create [redacted]");
+        assert!(preview.blocked_reason.is_some());
+        let preview =
+            console_classify("ord restore --from mnemonic abandon ability able".to_string())
+                .unwrap();
+        assert!(!preview.display.contains("abandon"), "{}", preview.display);
+        // An ordinary ord command is shown as typed.
+        let preview = console_classify("ord balance".to_string()).unwrap();
+        assert_eq!(preview.display, "ord wallet balance");
+    }
+
+    #[test]
+    fn classifying_a_walletpassphrase_never_shows_the_passphrase() {
+        let preview = console_classify("walletpassphrase hunter2 60".to_string()).unwrap();
+        assert_eq!(preview.display, "walletpassphrase [redacted]");
+        assert!(!preview.display.contains("hunter2"));
     }
 
     #[test]
