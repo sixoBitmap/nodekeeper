@@ -2977,7 +2977,7 @@ mod tests {
         use nk_core::console_safety::OrdCommandClass;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let Some(bitcoind_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+        let Some(bitcoind_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
             eprintln!("skipping: NK_TEST_BITCOIND not set");
             return;
         };

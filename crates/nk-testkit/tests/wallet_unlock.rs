@@ -66,7 +66,7 @@ async fn unlocked_until(
 #[tokio::test]
 #[serial(real_bitcoind)]
 async fn a_wallet_is_ready_to_sign_according_to_its_encryption_and_the_chain() {
-    let Some(bitcoind_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+    let Some(bitcoind_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
         eprintln!("skipping: NK_TEST_BITCOIND not set");
         return;
     };
@@ -253,8 +253,8 @@ async fn a_wallet_is_ready_to_sign_according_to_its_encryption_and_the_chain() {
 #[serial(real_bitcoind)]
 async fn an_unencrypted_test_chain_wallet_can_send_and_an_encrypted_one_needs_its_passphrase() {
     let (Some(bitcoind_path), Some(ord_path)) = (
-        std::env::var_os("NK_TEST_BITCOIND"),
-        std::env::var_os("NK_TEST_ORD"),
+        nk_core::live_tests::live_binary("NK_TEST_BITCOIND"),
+        nk_core::live_tests::live_binary("NK_TEST_ORD"),
     ) else {
         eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
         return;

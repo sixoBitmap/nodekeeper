@@ -84,7 +84,7 @@ async fn the_console_refuses_ord_commands_that_print_secrets_before_running_anyt
 #[tokio::test]
 #[serial(real_bitcoind)]
 async fn private_descriptors_never_reach_the_event_stream_or_the_history() {
-    let Some(bitcoind_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+    let Some(bitcoind_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
         eprintln!("skipping: NK_TEST_BITCOIND not set");
         return;
     };
@@ -208,7 +208,7 @@ async fn private_descriptors_never_reach_the_event_stream_or_the_history() {
 #[tokio::test]
 #[serial(real_bitcoind)]
 async fn a_numeric_passphrase_is_hidden_by_position_and_really_works() {
-    let Some(bitcoind_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+    let Some(bitcoind_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
         eprintln!("skipping: NK_TEST_BITCOIND not set");
         return;
     };
@@ -365,7 +365,7 @@ async fn a_numeric_passphrase_is_hidden_by_position_and_really_works() {
 #[tokio::test]
 #[serial(real_bitcoind)]
 async fn a_passphrase_with_spaces_is_hidden_word_by_word_and_really_works() {
-    let Some(bitcoind_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+    let Some(bitcoind_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
         eprintln!("skipping: NK_TEST_BITCOIND not set");
         return;
     };
@@ -553,7 +553,7 @@ async fn a_passphrase_with_spaces_is_hidden_word_by_word_and_really_works() {
 #[tokio::test]
 #[serial(real_bitcoind)]
 async fn a_key_that_core_echoes_back_in_an_error_is_not_recorded() {
-    let Some(bitcoind_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+    let Some(bitcoind_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
         eprintln!("skipping: NK_TEST_BITCOIND not set");
         return;
     };
@@ -645,7 +645,7 @@ async fn a_key_that_core_echoes_back_in_an_error_is_not_recorded() {
 #[tokio::test]
 #[serial(real_bitcoind)]
 async fn the_known_method_list_covers_every_method_of_the_real_node() {
-    let Some(bitcoind_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+    let Some(bitcoind_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
         eprintln!("skipping: NK_TEST_BITCOIND not set");
         return;
     };

@@ -10,6 +10,7 @@ pub mod console_safety;
 pub mod disk;
 pub mod environment;
 pub mod error_code;
+pub mod live_tests;
 pub mod log_tail;
 pub mod ord_conf;
 pub mod paths;

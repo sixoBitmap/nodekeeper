@@ -4292,6 +4292,39 @@ anywhere, without a node).
   re-lock (G3); the live tests skipping silently when the real binaries are not
   configured, which `just check` does today (G0).
 
+### The quality gate runs the live tests (Phase 10M, G0, 2026-09-26)
+
+**The problem** (found by the mainnet readiness audit, confirmed here). About 28
+tests need the real Bitcoin Core / ord binaries and returned early -- passing --
+when `NK_TEST_BITCOIND` / `NK_TEST_ORD` were unset. The `Justfile` exported
+neither, so `just check` (the gate CLAUDE.md requires before claiming a task
+done) could be green while every wallet, restore, inscribe and process test did
+nothing. Shown directly: with the variables unset, the two new wallet-unlock
+tests "pass" in 0.04 s.
+
+**Decision.** `nk_core::live_tests::live_binary(var)` replaces the 35 direct
+reads of those variables (in `nk-proc`, `nk-testkit`, the app crate). Set: the
+path. Not set and `NK_REQUIRE_LIVE=1`: **panic** -- a failure, not a skip. Not
+set otherwise: the old skip message. The `Justfile` now exports
+`NK_REQUIRE_LIVE=1` and defaults the two variables to the verified copies the
+verification tests cache under `target/` (either can be overridden), so
+`just check` runs -- or fails -- the live tests; `just test-rust-quick` is the
+old skip-quietly run and says it is not the gate.
+
+**Verified.** Variables unset, `NK_REQUIRE_LIVE=0`: the tests skip and "pass"
+(the problem, reproduced). Variables unset, `NK_REQUIRE_LIVE=1`: both fail with
+"NK_REQUIRE_LIVE=1 but NK_TEST_BITCOIND is not set: this test would silently
+skip". Variables set and required: the live tests run and pass. `fmt`, clippy
+clean.
+
+**Not verified / not done.** `just` is not installed on this machine, so the
+new `Justfile` lines (`os_family()`, `env_var_or_default()`,
+`justfile_directory()`) were written to just's documented syntax but not run
+through it; the gate has been run by hand with the same variables all along. The
+`nk-scripts` test that skips when no Python interpreter is found is not covered
+by this. The examples that read the variable (`nk-verify`'s fetch example) are
+not tests.
+
 ### Live smoke test of signet and testnet4 (Phase 10 step 2, 2026-09-26)
 
 **Why.** Only `[regtest]` and `[main]` had ever been started live through

@@ -376,7 +376,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(real_bitcoind)]
     async fn bitcoind_removes_its_own_pid_file_on_a_clean_stop() {
-        let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+        let Some(binary_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
             eprintln!("skipping: NK_TEST_BITCOIND not set");
             return;
         };

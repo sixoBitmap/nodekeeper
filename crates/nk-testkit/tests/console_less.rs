@@ -104,8 +104,8 @@ async fn wait_for_done(log_path: &Path, timeout: Duration) -> String {
 #[serial(real_bitcoind)]
 async fn a_console_less_parent_gracefully_stops_ord_and_can_still_spawn_afterwards() {
     let (Some(bitcoind_path), Some(ord_path)) = (
-        std::env::var_os("NK_TEST_BITCOIND"),
-        std::env::var_os("NK_TEST_ORD"),
+        nk_core::live_tests::live_binary("NK_TEST_BITCOIND"),
+        nk_core::live_tests::live_binary("NK_TEST_ORD"),
     ) else {
         eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
         return;

@@ -257,7 +257,7 @@ mod tests {
     #[tokio::test]
     #[serial(real_bitcoind)]
     async fn starts_mines_101_blocks_and_stops_cleanly() {
-        let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+        let Some(binary_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
             eprintln!("skipping: NK_TEST_BITCOIND not set");
             return;
         };
@@ -292,7 +292,7 @@ mod tests {
     #[tokio::test]
     #[serial(real_bitcoind)]
     async fn wallet_unlock_and_lock_gate_a_real_signing_rpc() {
-        let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+        let Some(binary_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
             eprintln!("skipping: NK_TEST_BITCOIND not set");
             return;
         };
@@ -417,8 +417,8 @@ mod tests {
     #[serial(real_bitcoind)]
     async fn wallet_cli_create_fund_send_and_restore() {
         let (Some(bitcoind_path), Some(ord_path)) = (
-            std::env::var_os("NK_TEST_BITCOIND"),
-            std::env::var_os("NK_TEST_ORD"),
+            nk_core::live_tests::live_binary("NK_TEST_BITCOIND"),
+            nk_core::live_tests::live_binary("NK_TEST_ORD"),
         ) else {
             eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
             return;
@@ -590,8 +590,8 @@ mod tests {
     #[serial(real_bitcoind)]
     async fn encrypting_a_wallet_immediately_after_create_still_restores_correctly() {
         let (Some(bitcoind_path), Some(ord_path)) = (
-            std::env::var_os("NK_TEST_BITCOIND"),
-            std::env::var_os("NK_TEST_ORD"),
+            nk_core::live_tests::live_binary("NK_TEST_BITCOIND"),
+            nk_core::live_tests::live_binary("NK_TEST_ORD"),
         ) else {
             eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
             return;
@@ -717,8 +717,8 @@ mod tests {
     #[serial(real_bitcoind)]
     async fn inscribe_batch_and_reinscribe_all_work_and_the_sat_shows_both_in_order() {
         let (Some(bitcoind_path), Some(ord_path)) = (
-            std::env::var_os("NK_TEST_BITCOIND"),
-            std::env::var_os("NK_TEST_ORD"),
+            nk_core::live_tests::live_binary("NK_TEST_BITCOIND"),
+            nk_core::live_tests::live_binary("NK_TEST_ORD"),
         ) else {
             eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
             return;
@@ -935,8 +935,8 @@ mod tests {
     #[serial(real_bitcoind)]
     async fn wallet_exists_reflects_whether_create_has_run() {
         let (Some(bitcoind_path), Some(ord_path)) = (
-            std::env::var_os("NK_TEST_BITCOIND"),
-            std::env::var_os("NK_TEST_ORD"),
+            nk_core::live_tests::live_binary("NK_TEST_BITCOIND"),
+            nk_core::live_tests::live_binary("NK_TEST_ORD"),
         ) else {
             eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
             return;
@@ -1002,8 +1002,8 @@ mod tests {
     #[serial(real_bitcoind)]
     async fn create_and_restore_wallet_never_leak_the_mnemonic_to_the_broadcast_stream() {
         let (Some(bitcoind_path), Some(ord_path)) = (
-            std::env::var_os("NK_TEST_BITCOIND"),
-            std::env::var_os("NK_TEST_ORD"),
+            nk_core::live_tests::live_binary("NK_TEST_BITCOIND"),
+            nk_core::live_tests::live_binary("NK_TEST_ORD"),
         ) else {
             eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
             return;
@@ -1099,7 +1099,7 @@ mod tests {
     #[tokio::test]
     #[serial(real_bitcoind)]
     async fn dashboard_rpc_methods_return_the_expected_fields() {
-        let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+        let Some(binary_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
             eprintln!("skipping: NK_TEST_BITCOIND not set");
             return;
         };
@@ -1133,7 +1133,7 @@ mod tests {
     #[tokio::test]
     #[serial(real_bitcoind)]
     async fn a_fixture_dropped_without_stop_does_not_leave_an_orphan() {
-        let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+        let Some(binary_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
             eprintln!("skipping: NK_TEST_BITCOIND not set");
             return;
         };
@@ -1169,8 +1169,8 @@ mod tests {
     #[serial(real_bitcoind)]
     async fn ord_starts_indexes_regtest_and_stops_gracefully() {
         let (Some(bitcoind_path), Some(ord_path)) = (
-            std::env::var_os("NK_TEST_BITCOIND"),
-            std::env::var_os("NK_TEST_ORD"),
+            nk_core::live_tests::live_binary("NK_TEST_BITCOIND"),
+            nk_core::live_tests::live_binary("NK_TEST_ORD"),
         ) else {
             eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
             return;
@@ -1255,8 +1255,8 @@ mod tests {
     #[serial(real_bitcoind)]
     async fn ord_restarts_from_its_persisted_index_without_reindexing() {
         let (Some(bitcoind_path), Some(ord_path)) = (
-            std::env::var_os("NK_TEST_BITCOIND"),
-            std::env::var_os("NK_TEST_ORD"),
+            nk_core::live_tests::live_binary("NK_TEST_BITCOIND"),
+            nk_core::live_tests::live_binary("NK_TEST_ORD"),
         ) else {
             eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
             return;
@@ -1335,8 +1335,8 @@ mod tests {
     #[serial(real_bitcoind)]
     async fn an_ord_process_dropped_without_stop_does_not_leave_an_orphan() {
         let (Some(bitcoind_path), Some(ord_path)) = (
-            std::env::var_os("NK_TEST_BITCOIND"),
-            std::env::var_os("NK_TEST_ORD"),
+            nk_core::live_tests::live_binary("NK_TEST_BITCOIND"),
+            nk_core::live_tests::live_binary("NK_TEST_ORD"),
         ) else {
             eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
             return;

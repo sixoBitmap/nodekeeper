@@ -783,7 +783,7 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial(real_bitcoind)]
     async fn starts_reports_status_and_stops_a_real_node() {
-        let Some(binary_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+        let Some(binary_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
             eprintln!("skipping: NK_TEST_BITCOIND not set");
             return;
         };
@@ -851,8 +851,8 @@ mod tests {
     #[serial_test::serial(real_bitcoind)]
     async fn starts_ord_reports_status_and_stops_it() {
         let (Some(bitcoind_path), Some(ord_path)) = (
-            std::env::var_os("NK_TEST_BITCOIND"),
-            std::env::var_os("NK_TEST_ORD"),
+            nk_core::live_tests::live_binary("NK_TEST_BITCOIND"),
+            nk_core::live_tests::live_binary("NK_TEST_ORD"),
         ) else {
             eprintln!("skipping: NK_TEST_BITCOIND and/or NK_TEST_ORD not set");
             return;

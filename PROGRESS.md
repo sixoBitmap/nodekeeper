@@ -2168,10 +2168,11 @@ bottleneck)
       arguments hidden by position and by known-method list) after the
       full gate **with the real binaries** (see next item), and tag `RC0`.
       `[security/commit-console-secret-fix]`
-- [ ] Make the real-binary tests mandatory: `just check` (and the gate in
-      CLAUDE.md) sets `NK_TEST_BITCOIND` / `NK_TEST_ORD` from the verified
-      cache, and fails -- not skips -- when they are missing
-      (`NK_REQUIRE_LIVE=1`); print executed-vs-skipped counts.
+- [x] Make the real-binary tests mandatory (done 2026-09-26, DECISIONS.md
+      "The quality gate runs the live tests"): `just check` sets
+      `NK_TEST_BITCOIND` / `NK_TEST_ORD` from the verified cache and
+      `NK_REQUIRE_LIVE=1`, so a missing binary fails instead of skipping.
+      `just` itself is not installed here (not run through it).
       `[verification/ci-and-silent-skips]`
 - [ ] Re-baseline: every audit claim citing a line number or compile state
       is re-checked on the committed tree before work starts on it.
