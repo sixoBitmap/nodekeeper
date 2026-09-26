@@ -4403,6 +4403,42 @@ Only bitcoind + ord were exercised here, not the wallet on those chains
 or inscribe today). Nothing beyond a peer connection and a few seconds of
 sync was waited for.
 
+### Public preview release: owner decisions (2026-09-27)
+
+The owner asked to "make a release ... so anyone can use it". Because that
+puts a wallet-adjacent app in strangers' hands while the mainnet readiness audit
+(PROGRESS.md, Phase 10M) still lists blockers that could lose someone's
+bitcoin, the question was put as choices, with recommendations. Answers:
+
+- **What it is:** a **public preview**, clearly labelled not for real money yet
+  (recommended option taken). Regtest, signet and testnet4 are the intended
+  use; the full release for real bitcoin follows the Phase 10M gates.
+- **Mainnet in the preview:** the mainnet **node and read-only Explorer work**;
+  **creating or restoring a mainnet wallet, and every signing or fund-moving
+  action on mainnet, is blocked in the preview build** -- enforced in Rust, with
+  a plain explanation in the UI -- plus a strong warning and a required
+  acknowledgement (recommended option taken over "warn only"). Lifted in the
+  full release.
+- **Packaging:** an **MSI installer and a portable zip** (the exe with an empty
+  `config` folder). Unsigned at first (Windows will show an "unknown publisher"
+  warning); signing needs a certificate only the owner can obtain and is a later
+  step. The MSI tool (WiX) is downloaded by the build, on GitHub's runner; the
+  owner's OK to download it locally is taken as given by choosing the MSI.
+- **Built on GitHub Actions**, not on the owner's PC (a release build with
+  `lto` and `codegen-units = 1` needs more memory than that PC has free). This
+  needs the Actions billing block (since 2026-09-24) fixed **or the repository
+  made public**, which gives free build minutes.
+- **Repository:** private until the release is ready, then made **public by the
+  owner** (an action only they can take).
+- **License:** MIT, "Copyright (c) 2026 sixoBitmap" (the owner's GitHub name).
+- **Security reports:** GitHub private vulnerability reporting (a repository
+  setting the owner switches on when the repo is public).
+
+Claude's own choice, recorded because it is reversible and was recommended
+earlier without an answer: the release profile moves from `panic = "abort"` to
+`"unwind"`, with a panic hook and an application log file, so that a crash is
+recorded and cannot skip the app's cleanup (PROGRESS.md, Phase 10R).
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:

@@ -2425,6 +2425,135 @@ backup; the rest of the diagnostics export; Tor (unless D4 makes it a
 prerequisite); macOS/Linux verification. They are needed to hand the app
 to other people, not to run it safely on one PC.
 
+## Phase 10R — Public preview release (owner goal: "anyone can use it")
+
+Added 2026-09-27. The owner asked to publish a release so that anyone can use the
+app. Because Phase 10M still lists blockers that could lose someone's bitcoin,
+the answer is a **public preview**, not the full release: an MSI installer and a
+portable zip, built on GitHub, unsigned, **not for real money**, with mainnet
+wallets blocked. Owner decisions: DECISIONS.md, "Public preview release: owner
+decisions". Facts below come from a sourced scoping pass (official Tauri, GitHub,
+WiX and legal sources; the raw findings are in this session's workflow output) --
+they are **leads to reproduce**, and the first real release build and run happen
+on GitHub, so several items can only be proven there.
+
+### Choices taken from the scoping pass (reversible; tell the owner)
+
+- **The MSI is per-machine** (Program Files, an admin prompt): Tauri's stock MSI
+  cannot be per-user. The earlier "MSI, per-user" wording in this file is
+  superseded; the release notes say so.
+- **Numeric version, `preview` by other means.** The MSI build hard-fails on
+  `0.1.0-preview.1`, so the app version stays `0.1.0`, `0.1.1`, ... and "preview"
+  is the GitHub pre-release flag, the release title, the in-app banner and the
+  build flavor. Each release bumps the first three fields (Windows Installer
+  ignores the fourth). A test keeps `tauri.conf.json`, `Cargo.toml` and
+  `ui/package.json` in step, and the workflow checks tag == version.
+- **The preview flavor is a compile-time Cargo feature**, `mainnet-wallets`, **off
+  by default**, so a plain `tauri build` *is* the preview and only a deliberate
+  `--features mainnet-wallets` (the owner's own full build) unlocks mainnet
+  wallets. Nothing the webview or a setting can change. The block is enforced in
+  **Rust**; the UI panel only explains it.
+- **The mainnet console in the preview is read-only commands only** (which also
+  refuses `stop`/`addnode` there): a deny-list of wallet methods would miss
+  `walletprocesspsbt`, `sendrawtransaction`, `submitpackage`, future RPCs.
+- **WebView2: Tauri's default `downloadBootstrapper`** (Windows 11 already has the
+  runtime; the download from Microsoft only happens where it is missing) -- and
+  the portable zip needs the runtime installed. Both go in the README's network
+  section.
+- **Data location:** installed mode moves from Roaming to **Local AppData** (a
+  Roaming profile can sync; this is hundreds of GB) *before* the first release,
+  because moving it later strands users.
+- **The Tauri logo is replaced** (a trademark-policy problem, not only cosmetic)
+  by an original placeholder mark; the owner can supply artwork later.
+- **Third-party notices are generated in CI** (`cargo-about`/`cargo-deny`, the
+  npm runtime closure) and shipped in the MSI and the zip, so nothing has to be
+  installed on the owner's PC.
+
+### Tasks, in order
+
+- [ ] **R1 -- Preview safeguards** (the reason it is safe to publish). Feature
+      flag and a read-only `get_build_info`; one Rust gate called first in
+      `create_wallet`, `restore_wallet`, `wallet_send`, `wallet_inscribe`,
+      `wallet_inscribe_batch`, `wallet_receive_address` and both branches of
+      `console_run` (`console_classify` gains the chain, so the UI refuses up
+      front, dry-run included); new error code `PREVIEW_MAINNET_BLOCKED`; a
+      **manifest test that fails when a new command is added without being
+      classified or without the gate**; defense in depth `disablewallet=1` for the
+      preview's mainnet `bitcoind` (VERIFY live that `ord server` still indexes);
+      persistent banner + a re-appearing acknowledgement (stored as the running
+      version, written only by its own command); explanation panels so blocked is
+      never a dead end; the preview lands on Regtest, not on a live Mainnet
+      Dashboard; a confirmation and a free-space check before a mainnet **Start**
+      (multi-day, 1 TB+). Also from the audit's G4, because the mainnet Explorer
+      stays open to hostile inscription content: a **`get_setting`/`set_setting`
+      allowlist** (today one call sets `bitcoind_path` to any exe), a
+      `binaries_status` command instead of the UI reading the paths, `opener:default`
+      removed, `inscribe_file_preview` limited to dialog-chosen paths.
+- [ ] **R2 -- Crash handling and a log** (D11, taken): `panic = "unwind"`, a panic
+      hook that shows a message box and writes a log/crash file, the startup
+      `.expect(...)`s routed through it, `eprintln!`s that vanish in a GUI exe
+      replaced by a small application log (no secrets in it). A release-only
+      failure must not be silent.
+- [ ] **R3 -- First-run and branding**: Local AppData default; a one-time notice
+      when closing to the tray leaves `bitcoind`/`ord` running; copy fixes
+      (`walletNotEncrypted` sends users to the Console, a mainnet dead end in
+      the preview; `scripts.warning`; the "preview" collision in the inscribe
+      hint); original icons, favicon, remove the template SVGs and the Vite
+      README; the version shown in the UI.
+- [ ] **R4 -- Legal and user docs**: `LICENSE` (MIT, "Copyright (c) 2026
+      sixoBitmap"); `README.md` for users (what it is, PREVIEW, intended networks,
+      install, where data lives, the unsigned-build warnings, the exact network
+      destinations, how to verify a download); `SECURITY.md` (private
+      vulnerability reporting); notices generation and the "not affiliated with
+      Bitcoin Core / ord" line; release-notes template.
+- [ ] **R5 -- Packaging config**: `bundle` block (MSI only, publisher, copyright,
+      license file, pinned WiX `upgradeCode`, `allowDowngrades: false`,
+      `createUpdaterArtifacts: false`); version-sync test; a guard that keeps the
+      updater off; the portable-zip assembly (exe + an empty `config` folder that
+      survives zipping, with a placeholder file) and its test.
+- [ ] **R6 -- Release workflow** (`release.yml`): trigger on a `v*` tag plus a
+      manual dry run; three jobs with least-privilege tokens (gate: read-only;
+      build: contents read, attestations; publish: contents write only, `gh release
+      create --draft --prerelease`); every third-party action pinned to a commit
+      SHA (re-verified by API, annotated tags dereferenced); `--locked`/`npm ci`;
+      no `--all-features` and a marker check that the built exe is the preview
+      flavor; SHA256SUMS; build-provenance attestation; the portable zip is
+      extracted and the exe started in CI as the **first ever release-exe run**;
+      the quality gate runs first. `ci.yml` gets `NK_REQUIRE_LIVE`, read-only
+      permissions and `--locked`. ⛔ the fetch examples' cache short-circuit
+      (they return early without re-verifying) touches the verification path:
+      ask before changing.
+- [ ] **R7 -- What can be checked on this PC**: unit and live tests for everything
+      above; the debug build in a real portable folder; the MSI's contents
+      (`msiexec /a` extraction, no system change) if a debug MSI can be built
+      (WiX is fetched by the bundler). A real install/uninstall needs the
+      owner's OK; the release exe and the MSI on a clean machine are proven only
+      by the GitHub run and the owner's test.
+
+### Owner actions before and at publication
+
+Only the owner can do these; the plan lists them so nothing is a surprise.
+
+- [ ] **Decide what the public sees in the history.** Every commit (113) carries
+      `gperan6@gmail.com`; the tree includes `docs/MAINNET_AUDIT_2026-09-26.md`
+      (114 items, 43 "blocker") and the build prompt `nodekeeper-prompt.txt`.
+      Options: keep everything (honest), turn on GitHub's "keep my email private"
+      for future commits, or rewrite history (destructive; only with the owner's
+      explicit go). A real secret scanner (gitleaks/trufflehog) should be run
+      over the history first -- a regex scan found nothing, which is not the same.
+- [ ] Make the repository **public**, then: confirm a trivial workflow runs
+      (billing); enable **private vulnerability reporting**; set the default
+      workflow token to read-only; add a `v*` tag ruleset; enable **release
+      immutability before the first publish** (not retroactive).
+- [ ] Run the release workflow as a manual dry run; download the artifacts; test
+      the MSI and the zip on a clean Windows 11 profile; inspect the **draft**
+      pre-release; publish it; verify the published download as a user would
+      (checksum and `gh attestation verify`).
+- [ ] Name/trademark search for "Nodekeeper", the icon artwork, and the export-
+      control question -- counsel-type items; nothing here is legal advice.
+- Later, not for the preview: a code-signing certificate (SmartScreen "unknown
+  publisher" and Windows Smart App Control can still block an unsigned build).
+
 ## Phase 10 — Extras and release
 
 > **Order changed 2026-09-26 -- see "Phase 10M -- Mainnet readiness"
