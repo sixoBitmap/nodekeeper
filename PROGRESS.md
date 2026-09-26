@@ -1775,7 +1775,12 @@ on-disk deletion in this project.
 
 ## Phase 9 — Portable mode
 
-In progress. See docs/SPEC.md Phase 9 and item 12 for full scope.
+Paused (2026-09-26). Every item that could be built and verified on
+this Windows machine is done; what's left is the packaging/build-
+pipeline work below (portable layout, WebView2, native dialogs, drive-
+prep wizard), deferred by the project owner, plus deferred/unverifiable
+items each noted in place (macOS/Linux detection, USB speed, master-
+password unlock). See docs/SPEC.md Phase 9 and item 12 for full scope.
 **Cross-platform testing limit, stated up front**: this phase's own
 [CI]/[MANUAL] criteria need real builds and manual runs on Windows,
 macOS, and Linux -- this session runs on a single Windows machine, with
@@ -1816,8 +1821,24 @@ Tasks (one at a time: implement -> test -> quality gate -> commit -> tick):
       real launches, both cleaned up afterward.
 - [ ] Portable launchers and full folder layout (`/bin/<os>`,
       `/runtime/windows`, launcher naming) -- packaging/build-config
-      work (`tauri.conf.json` bundle targets), not yet started
-- [ ] Bundled WebView2 fixed-version runtime (Windows) -- packaging work
+      work (`tauri.conf.json` bundle targets), not yet started.
+      **Deferred by the project owner, 2026-09-26** ("leave it for
+      now"), together with the WebView2, native-dialog, and drive-prep
+      items below -- all four are one packaging effort. Context for
+      whoever picks this up: Nodekeeper will ship as two distributions
+      (a small installer, and a portable folder/zip for the drive), so
+      they need separate build configs; `tauri.conf.json` today is one
+      shared config with no portable-specific profile.
+- [ ] Bundled WebView2 fixed-version runtime (Windows) -- packaging work.
+      Checked against Tauri's docs: `bundle.windows.webviewInstallMode`
+      `{ "type": "fixedRuntime", "path": "<extracted runtime dir>" }` is
+      the only mode with no install step, but it needs Microsoft's
+      WebView2 Fixed Version Runtime `.cab` (~180MB) downloaded from
+      Microsoft and extracted locally before building. That download was
+      not made (needs explicit permission), and setting it in the shared
+      config would bloat the installed-mode build, which should keep the
+      small bootstrapper -- so it belongs in a separate portable build
+      profile, not yet created.
 - [ ] Native prerequisite dialogs (a missing webview can't be reported
       via the webview itself) -- needs VERIFY of how Tauri surfaces a
       pre-webview-load failure natively per OS
