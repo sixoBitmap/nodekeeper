@@ -2085,12 +2085,14 @@ Done when (docs/SPEC.md):
         over a crashed lock: exactly one runs). Verified live with the
         real app (6 scenarios) and by an adversarial review.
         **Known gaps:** (i) an environment data folder pointed at a
-        shared external drive is not locked; (ii) **Safe Eject leaves the
-        app -- and its lock -- in place, so moving the drive without
-        closing Nodekeeper first trips the "in use on another computer"
-        message: owner decision needed (quit after eject vs. release the
-        lock and reword)**; (iii) hostname / Linux clock-step edge cases
-        on macOS/Linux (DECISIONS.md).
+        shared external drive is not locked; (ii) hostname / Linux
+        clock-step edge cases on macOS/Linux (DECISIONS.md). Review also
+        found that Safe Eject left the app -- and so the lock -- running;
+        **Safe Eject now closes Nodekeeper after a successful eject** (4 s
+        after the message; owner replied "Continue" to the question, so
+        the recommended option was taken -- one spawned task in
+        `safe_eject` if it should be reversed). Verified end to end with
+        the real app and a real regtest node.
   - [x] (d) Prune `command_history` (spec item 7, last 5,000 per
         environment): every 100 new commands per environment, plus once
         at startup. Done 2026-09-26, tested through the real event

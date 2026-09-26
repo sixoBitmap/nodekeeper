@@ -63,6 +63,9 @@ describe("Overview: Safely shut down and eject", () => {
     await user.click(await screen.findByRole("button", { name: "Safely shut down and eject" }));
 
     expect(await screen.findByText(/safe to unplug this drive now/)).toBeInTheDocument();
+    // The app closes itself after a successful eject (it is still running
+    // from, and holding a lock file on, the drive), and says so.
+    expect(screen.getByText(/Nodekeeper is closing/)).toBeInTheDocument();
     expect(screen.queryByText("Not everything stopped")).not.toBeInTheDocument();
   });
 

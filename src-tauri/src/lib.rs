@@ -2176,17 +2176,37 @@ async fn stop_everything_and_exit(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// How long after a successful Safe Eject the app closes itself: long
+/// enough to read "safe to unplug -- Nodekeeper is closing".
+const SAFE_EJECT_CLOSE_DELAY: std::time::Duration = std::time::Duration::from_secs(4);
+
 /// docs/SPEC.md item 12: "Safely shut down and eject." Unlike the tray
 /// Quit path above, a failed stop here must be reported, not
 /// swallowed -- telling the user it's safe to unplug the drive when
 /// something didn't actually stop would risk real data corruption.
+///
+/// On success **Nodekeeper then closes itself** (after a few seconds, so
+/// the message can be read). Stopping the services is not enough to make a
+/// drive safe to unplug: the app is still running *from* that drive in
+/// portable mode, with its settings database open and its single-instance
+/// lock file (`config/.nodekeeper.lock`) on it -- which, left in place, also
+/// makes the next computer that opens the drive refuse with "in use on
+/// another computer". Quitting releases all of that (the lock on the exit
+/// event). The close goes through `stop_everything_and_exit`, so anything
+/// started again in the meantime is stopped first rather than orphaned.
 #[tauri::command]
 async fn safe_eject(
+    app: tauri::AppHandle,
     node_manager: tauri::State<'_, NodeManager>,
     store: tauri::State<'_, Arc<Mutex<Store>>>,
 ) -> Result<(), TypedError> {
     let environments = all_environments(&store);
-    stop_every_running_environment(&node_manager, &environments).await
+    stop_every_running_environment(&node_manager, &environments).await?;
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(SAFE_EJECT_CLOSE_DELAY).await;
+        stop_everything_and_exit(app).await;
+    });
+    Ok(())
 }
 
 /// Shows and focuses the main window -- shared by the tray icon's left

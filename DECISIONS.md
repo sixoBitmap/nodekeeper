@@ -3711,18 +3711,8 @@ was never acquired by the app, and `Store::prune_command_history` (item 7,
   not see this computer's bitcoind. Locking it too needs a decision on what
   a refusal *there* should do (the user must still be able to reach the app
   to change the folder), so it is left as a follow-up rather than guessed.
-  **Safe Eject leaves the app -- and so the lock -- in place** (found by
-  review; an owner decision is needed, not made here): "Safely shut down
-  and eject" stops the services and says it is safe to unplug, but
-  Nodekeeper keeps running on that computer holding `config/.nodekeeper.
-  lock` (and the settings database open) on the drive. Moving the drive to
-  a second computer without also closing Nodekeeper first therefore gets
-  the "in use on another computer" message there (recoverable: it names
-  the file to delete). Options: quit the app after a successful eject
-  (like the portable close-and-stop path already does), or release the
-  lock and close the database and change the wording -- the same
-  question as whether "safe to unplug" is true while the exe itself runs
-  from the drive. **Host identity is the OS hostname**, which macOS can
+  **Safe Eject now closes the app** (found by review as a gap, then
+  decided -- see the next section). **Host identity is the OS hostname**, which macOS can
   change with the network, and on Linux the process start time is derived
   from the boot time, which moves if the wall clock is stepped: either can
   make a same-computer lock read as foreign or a live holder as stale on
@@ -3750,6 +3740,35 @@ Refuted by their skeptics: the startup prune being synchronous work before
 any window (5,000 rows x a few environments is milliseconds), a running
 command's row being prunable (only after 5,000 newer ones), and "a failed
 prune only logs" (true of every store write in this app).
+
+**Safe Eject closes Nodekeeper after a successful eject (2026-09-26).**
+The review of the lock found that "Safely shut down and eject" stopped the
+services and said "safe to unplug" while Nodekeeper itself kept running --
+from the drive, in portable mode, with its settings database open and
+`config/.nodekeeper.lock` on it. Unplugging then left the lock behind, and
+the next computer to open the drive refused with "in use on another
+computer". The question (quit the app, or release the lock and reword) went
+to the project owner, whose reply was a bare "Continue"; that has been how
+this project's owner delegates judgment, so the recommended option was
+taken -- **easy to reverse: it is one spawned task in `safe_eject`**. After
+the stops succeed and are verified, `safe_eject` spawns a task that waits
+4 s (`SAFE_EJECT_CLOSE_DELAY`, so the message can be read) and then calls
+`stop_everything_and_exit`, so anything started again in the meantime is
+stopped first, and the exit event releases the lock. The UI says so
+("...safe to unplug this drive now. Nodekeeper is closing.", and the
+panel's hint says the app will be closed). A *failed* eject changes
+nothing: the app stays open with the "Not everything stopped" panel. Only
+reachable in portable mode (the panel is portable-only). Verified end to
+end with the real app (a debug build in an isolated portable folder, its
+web view driven over a DevTools port, calling the real IPC commands):
+start a real regtest bitcoind through `start_node` (pid file present) ->
+`safe_eject` returned Ok in 1 s with bitcoind gone and its pid file
+removed -> the app still open just after it returned -> it closed itself
+within the 4 s (exit code 0) -> `.nodekeeper.lock` removed -> no processes
+left. The rendered message is covered by Vitest (the click-through of the
+real UI would need the setup wizard's binary downloads). Not covered: the
+exit path when the user restarts a node during the 4 s window (by
+construction it goes through the same stop-then-exit as tray Quit).
 
 **Command-history pruning.**
 
