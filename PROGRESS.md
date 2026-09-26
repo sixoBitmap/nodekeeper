@@ -1989,7 +1989,441 @@ phase (CLAUDE.md calls out Phases 2/5/7 explicitly, but portable mode's
 master-password/secrets-file unlock is exactly the kind of seed/key-
 adjacent surface the same discipline should apply to).
 
+## Phase 10M — Mainnet readiness (owner goal: real use on mainnet)
+
+Added 2026-09-26 at the owner's request ("start those steps to implement
+what it needs to start using the app on mainnet, put it on plan"). This
+phase **comes before the rest of Phase 10**: the installer, signing,
+updater, remote mode, services and scheduling are how the app reaches
+*other* people; none of them is needed for the owner to run a self-built
+portable release exe on their own PC, and none of them makes real funds
+safer.
+
+Source: a read-only audit in six domains (wallet & funds, node
+lifecycle, install & supply chain, security & privacy, ordinals on
+mainnet, verification & rehearsal), one skeptic per domain re-checking
+every "done" claim, and a completeness critic. The full ledger -- ~110
+items with evidence, gaps, proposed tasks and owner questions -- is
+**[docs/MAINNET_AUDIT_2026-09-26.md](docs/MAINNET_AUDIT_2026-09-26.md)**;
+ids like `[wallet/encryption-state-checked-at-use]` below refer to it.
+**The audit was read-only, so every finding is a lead until reproduced**
+(CLAUDE.md VERIFY rule): each task begins by reproducing the finding
+against the real binaries, and one that turns out false is recorded as
+false in DECISIONS.md, not silently dropped. Several claims came from web
+summaries of third-party source (ord's CSP on `/preview`, rune
+locking, Core standardness) -- those in particular.
+
+### Where things stand (2026-09-26)
+
+- Only a **debug** build has ever run. No release exe, no installer, no
+  signing, no updater. **Mainnet has never been started** through the
+  app; signet/testnet4 were only started, given a peer, and stopped (no
+  wallet was ever created or funded on either).
+- What is solid: the executor/redaction/sensitive-channel machinery, the
+  fail-closed verification of the two third-party binaries, the Windows
+  child-process handling (proven with a probe and a debug exe), wallet
+  create/encrypt/send/inscribe/restore *at library level on tiny regtest
+  chains* against real bitcoind 31.1 and ord 0.29.0.
+- What the audit says is not: several safety properties **exist only in
+  React** (the mainnet confirmation, the preview, the fee guard); a
+  failed `encryptwallet` after `ord wallet create` **loses the mnemonic
+  and leaves an unencrypted mainnet wallet**; encryption is never checked
+  at use; a startup timeout or crash **orphans a running bitcoind** that
+  the app can neither stop nor re-attach to; the 60 s / 120 s / 30 s
+  budgets were sized on empty chains; inscription previews run scripts
+  with no per-inscription opt-in and the sandbox-vs-IPC property was never
+  tested in the real webview; the index options the wizard saves may
+  never reach `ord server`; rune-bearing outputs are treated as spendable
+  when the rune index is off (the mainnet default); nothing is
+  documented for the day the app itself is broken.
+- **`just check` is not a real-binary gate.** The recipe exports no
+  `NK_TEST_BITCOIND` / `NK_TEST_ORD`, and ~19 live tests return early when
+  they are unset, so it can be green while the wallet, restore and
+  inscribe tests did nothing. (Confirmed: the `Justfile` recipe.) GitHub CI
+  has been billing-blocked since 2026-09-24.
+- **This PC** (Windows 11, 5.9 GB RAM, one 237 GB volume) had 1.5-4 GB
+  free on C: throughout this work and cannot host mainnet; builds fail
+  with "no space" at that level. Attach/free a large NTFS drive first.
+
+### Staged definition of "using mainnet"
+
+"Mainnet use" is not one thing; the gates differ. Each stage opens only
+when its gates are closed **with recorded evidence** (below), and stops at
+any unexplained observation.
+
+- **Stage A -- a mainnet node, no wallet.** bitcoind syncs, ord indexes
+  read-only, the Explorer is browsable. Needs G0, G1, G2 and G4.
+- **Stage B -- a wallet that only receives** (disposable wallet W-A, a
+  tiny amount, seed written down). Needs Stage A + G3, G5.
+- **Stage C -- spending**: a tiny self-send, the restore drill, a sweep
+  to the long-term wallet W-B. Needs Stage B + G7.
+- **Stage D -- inscriptions and runes**: a tiny inscription; then raise
+  the cap in steps. Needs Stage C + G9.
+
+Value caps, abort rules and who holds which seed are owner decisions
+(D12). Claude never sees a mainnet seed or passphrase.
+
+### Rules for this phase
+
+- **A box is ticked only with evidence**: the commit hash it was done in,
+  the test names, *executed vs skipped* counts for live tests, and -- for
+  anything that runs in the app -- the hash of the exe it ran in. A
+  checkbox is not proof (the audit found ticks that were wrong).
+- The exe the owner runs must be the exe that was tested: build from a
+  clean, tagged commit (`RC<n>`), record its SHA-256.
+- ⛔ marks a STOP AND ASK task (touches seeds, wallet encryption,
+  graceful ord shutdown, fund movement, or is beyond the spec): stop, put
+  the options and trade-offs to the owner, wait.
+- Claude's coding work is serial (one task -> gate -> commit); the real
+  parallelism is Claude's work vs the owner's actions and wall-clock time
+  (the sync). Start the sync as early as G1/G2 allow.
+- Do not add a generic timeout/kill to signing or rescan commands: a kill
+  between ord's commit and reveal, or during a restore rescan, is the worst
+  state. Timeouts are per operation class (D7-related).
+
+### Owner decisions and actions (batched -- re-ask per gate, not all at once)
+
+Recommendations are Claude's; none is taken until the owner answers.
+
+- **D1 -- Step 1(b).** *Already answered* ("do what you believe better"):
+  skip the unlock for an **unencrypted wallet on a non-mainnet chain**,
+  fail closed on mainnet. Plan detail from the audit, not a new question:
+  the *rehearsal* wallets on signet/testnet4 are created **with a
+  passphrase**, so the rehearsal exercises the real mainnet
+  unlock -> sign -> relock path.
+- **D2 -- Scripts in inscription previews.** Spec (Foundation D): off by
+  default, per-inscription "Render interactive content". Today they run
+  automatically. Recommend: implement the spec.
+- **D3 -- Trust in the pinned binaries.** The builder-key bundle and the
+  four ord hashes were fetched by Claude, once, over one channel. Owner
+  action: verify the fingerprints (bitcoin-core/guix.sigs) and the ord
+  SHA-256 values **from a second device**. Also: is hash-only trust in ord
+  enough for real funds (ord has no maintainer signature), or does mainnet
+  wait for a source review / build-from-source?
+- **D4 -- Network exposure.** Core defaults to listening on all interfaces
+  and mapping the port on the router (NAT-PMP); every transaction is
+  broadcast from the owner's IP. Recommend for the first mainnet run:
+  outbound-only (`listen=0`, `natpmp=0`), clearnet accepted, Tor later.
+  Or require Tor first (Phase 10 step 5 moves up).
+- **D5 -- ord index options on mainnet** (permanent per environment; a
+  wrong choice is a multi-day reindex). Recommend `--index-runes` **on**
+  (so rune-bearing outputs are protected), sats and addresses off unless
+  needed. Decide **before ord's first mainnet start**.
+- **D6 -- Where mainnet lives.** An external NTFS SSD in portable layout
+  (a `config` folder next to the exe), size chosen after the G2 smoke
+  run's measurements (the audit's estimate: about 1 TB or more with
+  txindex and the ord index). Is there an existing synced Core datadir to
+  reuse? Is another Bitcoin Core running on this PC (ports 8332/8333)?
+- **D7 -- Stop policy.** ⛔ (graceful ord shutdown): ord stop timeout 120 s
+  per spec (today 30 s), bitcoind stop budget from the G2 measurement,
+  never a force-kill, and after a failed stop the app says so loudly
+  instead of "Stopped".
+- **D8 -- Create/restore semantics.** ⛔ (seeds, encryption): (a) if
+  `encryptwallet` fails after create, show the mnemonic anyway with a hard
+  "not encrypted, do not fund" state and offer retry; (b) restore
+  ordering -- restore with `--timestamp now`, encrypt immediately, then
+  rescan, instead of encrypting only after a multi-hour rescan; (c)
+  minimum passphrase length (recommend 12) and "the passphrase is not
+  stored" copy; (d) gate the receive address on a persisted
+  "seed confirmed" marker.
+- **D9 -- Spending guards.** Hard fee ceilings (sat/vB and absolute sats);
+  whether a remembered passphrase is allowed on mainnet (recommend off or
+  5 minutes); whether the mainnet console may build/broadcast a spend at
+  all (recommend: not on the ord wallet) and whether `--no-sync` is
+  refused on fund-moving commands (recommend: yes).
+- **D10 -- Inscription transfers and stuck transactions.** Build the GUI
+  "send this inscription" before Stage D, or hold inscriptions until it
+  exists (recommend: hold). Stuck/low-fee transactions: documentation
+  only, or an in-app "accelerate" (scope beyond the spec -- ask first).
+- **D11 -- Release build.** A plain unsigned portable exe is enough for the
+  owner's own PC. `panic = "abort"` kills the app with no stop and no log
+  (bitcoind/ord keep running): recommend `unwind` + a panic hook + an
+  application log file until crash recovery exists. GitHub Actions
+  billing: fix it, or accept local-only gating explicitly.
+- **D12 -- Caps and people.** The value cap per stage, the abort rule, who
+  independently reviews the money path (Claude reviewing its own code is
+  not independence), and a disposable seed (W-A) for the drills.
+- **Owner actions (nobody else can do these):** attach/free a large NTFS
+  SSD and free space on C: (G0); approve real P2P traffic on signet/
+  testnet4 and then mainnet; Windows Defender exclusion for the data
+  folder and power/Windows-Update settings for the days-long sync; hold the
+  seed and passphrase; the independent pin check (D3); go/no-go at each
+  stage.
+
+### Gates
+
+**G0 -- Baseline, hardware, decisions** (start now; the owner is the
+bottleneck)
+- [x] Disk: the owner attached a **1.86 TB NTFS disk (D:)** on 2026-09-26
+      and told Claude to use it for builds and tests. Claude builds under
+      `D:\_claude-dev\` only (`CARGO_TARGET_DIR`; removable) and does
+      **not** install Core/ord there: **the owner runs the app themself to
+      install Core and ord onto D:** -- the first real run of the wizard's
+      download + verify path (record what they see). C: is still nearly
+      full (about 5 GB free).
+- [ ] D3, D4, D5 and D11 answered (they gate G1, G2); D6 is partly answered
+      (mainnet lives on D:; portable layout or a data root on D:, and how big
+      an index, still to say).
+- [ ] Commit Step 1(a) (finished: refuse/scrub/erase; console secret
+      arguments hidden by position and by known-method list) after the
+      full gate **with the real binaries** (see next item), and tag `RC0`.
+      `[security/commit-console-secret-fix]`
+- [ ] Make the real-binary tests mandatory: `just check` (and the gate in
+      CLAUDE.md) sets `NK_TEST_BITCOIND` / `NK_TEST_ORD` from the verified
+      cache, and fails -- not skips -- when they are missing
+      (`NK_REQUIRE_LIVE=1`); print executed-vs-skipped counts.
+      `[verification/ci-and-silent-skips]`
+- [ ] Re-baseline: every audit claim citing a line number or compile state
+      is re-checked on the committed tree before work starts on it.
+- [ ] Defer Phase 10 steps 6-11 (see below); record in this file.
+
+**G1 -- Node lifecycle hardening** (before any long sync; no wallet
+dependency; regtest first, then the release exe)
+- [ ] Startup: readiness wait aware of warm-up ("Loading block index...",
+      -28) instead of a hard 60 s; a timeout must not orphan a running
+      bitcoind. Evidence already in hand: the live tests in `nk-testkit`
+      hit `Bitcoind(StartupTimeout)` intermittently when several start
+      bitcoind at once (2 of 5 full runs on 2026-09-26, a different test
+      each time, each passes alone). `[node/startup-warmup-budget-and-orphaned-child]`
+- [ ] Stale `.cookie` / `bitcoind.pid` after a crash or reboot: re-read
+      the cookie after the new process writes it; verify a pid file names
+      *our* process. Real test: kill -9, restart on the same datadir.
+      `[node/restart-after-crash-stale-cookie-pid]`
+- [ ] **Attach / adopt / "shut down safely"** for a running or orphaned
+      bitcoind (spec Foundation C, still unbuilt) with a clear ownership
+      rule: never stop a node the app did not start unless the owner says
+      so. ⛔ the ord half (it cannot be signalled without its original
+      console -- graceful shutdown rule). `[node/attach-adopt-orphan-processes]`
+- [ ] Stop path: retry the stop RPC (warm-up -28, full RPC queue), "Stopped"
+      only when the process is gone, loud failure text that does not say
+      "Task Manager"; Quit/close paths that verify or say "not stopped".
+      ⛔ D7. `[node/stop-path-at-mainnet-scale]`, skeptic items on
+      portable close.
+- [ ] Child-death detection; ord stdout/stderr captured to a log (with a
+      viewer); corruption/reindex guidance (⛔ exposing `-reindex`).
+      `[node/child-death-detection-and-ord-logs]`,
+      `[node/corruption-recovery-reindex]`
+- [ ] Status polling that cannot hurt an IBD: RPC timeout, in-flight guard,
+      no recursive walk of a 500 GB tree every 3 s; history rows of
+      background polls do not evict the real commands.
+      `[node/polling-load-vs-ibd]`
+- [ ] Disk gating: capacity verdict before a mainnet start, warning with
+      real headroom, `DiskFull` produced; refuse a mainnet start on the OS
+      drive. `[node/disk-space-gating]`, `[install/mainnet-storage]`,
+      `[verification/disk-space-and-data-root]`
+- [ ] Config that the owner can control: dbcache (concurrent-environment
+      accounting), listen/natpmp per D4, ports; record the 31.1 defaults
+      (VERIFY: `bitcoind -help-debug`). `[node/dbcache-ram-limits]`,
+      `[node/firewall-defender-p2p-policy]`
+- [ ] ord sequencing: not started during IBD / before txindex is caught up
+      (spec default: auto-start when ready); ord launch config actually
+      receives the saved index options, an explicit chain flag on mainnet,
+      `ORD_*` environment scrubbed. **Blocker candidate:**
+      `[ordinals/ord-launch-config-not-controlled]` (reproduce first),
+      `[node/ord-start-after-ibd]`
+- [ ] Release exe: build from the tagged tree; run it once through the
+      whole node lifecycle (Start/Stop/Restart/Safe Eject, kill -9 and
+      restart, the console-less child handling); D11 (`unwind`, panic hook,
+      log file). `[install/release-build-unproven]`,
+      `[verification/release-candidate-freeze]`
+- [ ] Binary integrity at run time: re-hash `bitcoind`/`ord` before spawn
+      (cache by size+mtime), refuse on mismatch; truncated extraction is
+      not "verified". `[install/post-verify-integrity]`
+
+**G2 -- Bounded mainnet smoke, then the owner's IBD** (Stage A)
+- [ ] With the release exe, owner present, real P2P approved: start
+      mainnet from the app's own config, watch headers/peers, graceful
+      stop, kill -9 + restart, stop + start over the same datadir; record
+      RAM/disk and what the stop/startup budgets really are (D7).
+      `[node/mainnet-never-run-rehearsal]`, `[install/mainnet-first-start-smoke]`
+- [ ] Live sockets: RPC and ord listen on loopback only (netstat), P2P
+      exposure as decided in D4. `[node/rpc-ord-bind-localhost-cookie]`
+- [ ] **[MANUAL]** Owner starts the full IBD on the SSD (days). Sleep and
+      Windows Update off for the duration; Defender exclusion; do not run
+      heavy live tests meanwhile unless G2 measured the headroom.
+- [ ] ord on mainnet only after Core is out of IBD and txindex caught up;
+      D5 applied; first ord start reproduces "ord has never indexed a real
+      chain" findings (index size/time/RAM, stop time under load).
+      `[verification/real-chain-ord-indexing]`
+
+**G4 -- Hostile content and integrity** (before the Explorer/gallery is
+first opened on mainnet -- anyone can send an inscription to any address)
+- [ ] D2: scripts off by default, per-inscription opt-in; same for the
+      Explorer iframe. `[ordinals/hostile-inscription-preview-and-ipc-isolation]`
+- [ ] **Live test in the real webview** (release exe) with a hostile
+      HTML+SVG inscription: parent/top access, `__TAURI_INTERNALS__.invoke`,
+      fetch to 127.0.0.1 RPC/ord ports and to an external host, navigation.
+      VERIFY ord's real `/preview` and `/content` response headers
+      (`curl -I`) -- the recorded CSP rationale may be wrong.
+      `[security/webview-boundary-real-build]`, `[verification/webview-sandbox-real-test]`
+- [ ] `set_setting`: an allowlist of keys; binary and data-root paths only
+      through validated commands (a compromised webview can otherwise point
+      `bitcoind_path`/`ord_path` at any exe). `[install/settings-ipc-binary-hole]`
+- [ ] IPC surface: no arbitrary-file / URL-open / process primitives
+      reachable with one `invoke` (`inscribe_file_preview`, opener, script
+      args). `[security/ipc-primitives-hardening]`
+- [ ] Loopback RPC/ord clients ignore proxy environment variables
+      (`no_proxy` / builder `.no_proxy()`), so a passphrase can never be
+      sent to a proxy (VERIFY for the pinned reqwest).
+- [ ] Dependency hygiene: `cargo audit` / `cargo deny` / `npm audit`,
+      locked builds from a clean tag. `[security/dependency-and-build-hygiene]`
+- [ ] **[MANUAL]** D3: owner's independent check of the builder keys and ord
+      hashes; Claude adds negative tests proving verification failure
+      refuses to run (wiring, not just helpers).
+      `[install/core-keys-provenance]`, `[install/ord-hash-provenance]`
+
+**G3 -- Custody: wallet creation and recovery** (Stage B; regtest, then a
+public test chain with an **encrypted** wallet)
+- [ ] Step 1(b): shared `with_wallet_unlocked` -- encryption from
+      `getwalletinfo` (`unlocked_until`; VERIFY live), unencrypted mainnet
+      wallet **refused on every signing path** (typed error) with an
+      "encrypt this wallet" path, skip-unlock only for unencrypted
+      non-mainnet (D1); also the console's `ord wallet` fund-moving
+      commands; wallet header shows encryption state.
+      `[wallet/encryption-state-checked-at-use]`,
+      `[security/mainnet-encrypted-wallet-invariant]`
+- [ ] ⛔ D8: atomic create/restore as one testable function; encryption
+      failure never drops the mnemonic; restore ordering; minimum passphrase
+      + immediate unlock/lock self-test; an "encryption pending" state that
+      blocks every signing command; tests for the mainnet gate
+      (`require_encryption_passphrase_on_mainnet` has none).
+      `[wallet/mainnet-encrypt-create-restore]`,
+      `[verification/mainnet-encryption-gate-and-atomicity]`
+- [ ] ⛔ Seed view: "show my words again" from the confirm step; persisted
+      non-secret `seed_confirmed:<chain>` marker; receive address gated on
+      it (D8); content protection while the seed is on screen; redacting
+      `Debug` for the mnemonic result. `[wallet/seed-display-and-backup-confirmation]`
+- [ ] Prove recoverability: create -> encrypt -> receive/change addresses
+      **after** encryption -> fund -> inscribe on the encrypted wallet ->
+      restore into a fresh datadir; compare descriptors, balance,
+      **inscriptions and the cardinal/ordinal split**; record commands in
+      DECISIONS.md. `[wallet/encryption-vs-seed-recoverability-proof]`,
+      `[verification/restore-from-seed-fresh-environment]`
+- [ ] Restore form copy: no BIP39-passphrase support, ord's derivation, what
+      "has history" does; a "rescan" action after a "now" restore; progress
+      and cancel for a long rescan. `[wallet/seed-restore-drill-and-mainnet-scale]`
+- [ ] Passphrase lifecycle: "Lock now", visible unlock state, surface
+      `walletlock` failures, setting for the remember default (D9).
+      `[wallet/passphrase-lifecycle]`
+- [ ] Encrypted-wallet inscribe/batch/reinscribe run live (all existing
+      live inscribe tests use an unencrypted wallet), and a Tauri-command
+      level test of unlock -> run -> relock including failure paths.
+- [ ] Public-test-chain rehearsal in the release exe through the GUI, with
+      an **encrypted** wallet on signet or testnet4: create -> confirm ->
+      faucet -> receive -> restore into a second environment. Needs the
+      chain synced (start early; real P2P approval) and test coins.
+      `[wallet/mainnet-rehearsal-and-release-exe-run]`
+- [ ] Documentation: an emergency runbook rehearsed on regtest **with
+      Nodekeeper closed** (wallet location, running bundled `bitcoin-cli`/
+      `ord` by hand, restoring the seed with stock ord, stuck transaction,
+      what never to delete) and the owner's operating notes (sleep, power,
+      Defender, safe unplug). `[wallet/emergency-runbook-and-user-docs]`,
+      `[install/end-user-docs]`
+- [ ] Backups, first half of Phase 10 step 4: a **public-descriptor** backup
+      with a no-private-material guard and a positive-control test (the
+      encrypted private backup and restore stay in the deferred list).
+
+**G5 -- Independent review and canary scan** (before Stage B)
+- [ ] Secret canary harness (first half of Phase 10 step 3): fake
+      mnemonic/passphrase/cookie/xprv scanned across the event stream, the
+      raw SQLite file, Core `debug.log`, the ord data dir, the WebView2
+      profile and `%TEMP%` after create/restore/unlock flows on a test
+      chain, with a negative control. `[security/secret-leak-canary-scan]`
+- [ ] Pre-mainnet security self-review over the **whole IPC surface** (a
+      compromised-frontend threat model), Phases 8-10M included.
+      `[security/security-self-review-pre-mainnet]`
+- [ ] **[MANUAL]** D12: someone other than the author reviews the money
+      path (wallet commands, confirm flow, fee guard) -- Claude reviewing
+      Claude's code is not independence.
+
+**Stage B (owner-run)** -- create disposable wallet W-A in the GUI, write
+the seed down, receive one tiny amount, confirm on a block explorer. Claude
+never sees the seed or passphrase. **[MANUAL]**
+
+**G7 -- Spending safety** (before Stage C)
+- [ ] Single-flight signing: a per-chain in-flight guard (typed
+      `WALLET_BUSY`), `ConfirmDialog` busy state, exactly one broadcast on a
+      double click; refresh balance/history after a send; "outcome unknown"
+      guidance; quit/Safe Eject/stop blocked or warned while a signing
+      command is running. `[wallet/sign-action-single-flight-and-stale-view]`
+- [ ] `ConfirmDialog`: the mainnet acknowledgement resets on every open;
+      fee, rate, total and any fee warning shown *inside* the dialog;
+      environment name genuinely large. `[wallet/shared-confirm-dialog-mainnet-step]`
+- [ ] Backend enforcement: `wallet_send`/inscribe/batch require a
+      `preview_id` bound to (chain, address, asset, rate, dry-run fee) and,
+      on mainnet, an acknowledgement token from the confirmed dialog; the
+      dry-run is repeated just before signing and aborts if the fee moved.
+      The preview shows what ord actually built (decoded PSBT: recipient,
+      amount, change, fee), not only the fee.
+      `[wallet/backend-enforcement-of-preview-and-mainnet-confirm]`,
+      `[security/backend-enforced-fund-confirmation]`
+- [ ] Fee guard and address guards: one module (TS + Rust mirror) with the
+      unit tests the spec requires, D9 ceilings enforced in Rust, estimate-
+      relative warnings, wrong-network tests in both directions, grouped
+      address display on mainnet. `[wallet/fee-guard-and-address-guards]`,
+      `[ordinals/fee-rate-source-and-guard-mainnet]`
+- [ ] Console spend policy (D9): fund-affecting RPCs
+      (`walletprocesspsbt`, `signrawtransactionwithwallet`,
+      `sendrawtransaction`, `submitpackage`, `lockunspent`,
+      `abandontransaction`) blocked or acknowledgement-gated on the ord
+      wallet; `--no-sync` refused on fund-moving commands; real-bitcoind
+      test that the console refuses `sendtoaddress`/`psbtbumpfee`.
+      `[wallet/console-and-raw-command-fund-safety]`, `[security/console-spend-and-unlock-policy]`
+- [ ] Stuck-transaction procedure (D10): VERIFY whether ord's transactions
+      signal RBF and whether `bumpfee` is safe for plain sends but not
+      commit/reveal; write the procedure; fee rate and age of pending
+      transactions shown. `[wallet/stuck-transaction-bump-rbf]`
+- [ ] Regtest delta tests: no fee estimates, a block after every action,
+      all index options on, no relay-policy rejections, no rune outputs,
+      no hostile content -- each difference from mainnet gets a test or a
+      named rung. `[verification/mainnet-only-code-paths-unexercised]`
+
+**Stage C (owner-run)** -- tiny self-send with the PSBT decoded and
+checked with a second tool; restore W-A's seed into a second environment
+(the drill on the real chain; a full rescan takes hours: observe progress and
+timeouts); sweep to the long-term wallet W-B. **[MANUAL]**
+
+**G9 -- Ordinals safety** (before Stage D)
+- [ ] D5 applied and verified: rune-bearing outputs are protected (rune
+      index on) or fund-moving actions are hard-blocked with a clear
+      message; `wallet_balance` accounts for `runic`.
+      `[ordinals/rune-utxo-protection-needs-rune-index]`
+- [ ] **Inscription-safety drill on regtest:** inscribe, then send
+      all-but-dust BTC and assert the inscription's location is unchanged;
+      also with the reveal unmined and after a bitcoind restart; a plain
+      BTC send never moves an inscribed sat. VERIFY ord 0.29.0's behaviour
+      rather than assuming. `[verification/inscription-safety-drill]`,
+      `[wallet/inscription-and-rune-utxo-protection]`
+- [ ] D10: GUI "send this inscription" (with the non-Taproot / exchange
+      warning) **or** an explicit "no inscription moves until it exists"
+      rule. `[wallet/send-inscription-gui]`
+- [ ] Inscribe: cost preview includes postage, size warning that fires,
+      "commit sent but reveal failed" guidance, reinscribe correct with the
+      sat index off. `[ordinals/inscribe-cost-breakdown-postage-size-warning]`,
+      `[ordinals/inscribe-partial-failure-commit-reveal]`,
+      `[ordinals/reinscribe-mainnet-default-sat-index-off]`
+
+**Stage D (owner-run)** -- one tiny inscription, then raise the cap in
+steps (D12). **[MANUAL]**
+
+### Not on the mainnet critical path (deferred until after Stage C)
+
+Phase 10 steps **6** (script scheduling), **7** (update checker), **8**
+(MSI/installer -- the owner runs a portable release exe; keep the
+"user docs skeleton" only), **9** (signed self-updates), **10** (remote
+mode) and **11** (OS services); code signing; the encrypted *private*
+backup; the rest of the diagnostics export; Tor (unless D4 makes it a
+prerequisite); macOS/Linux verification. They are needed to hand the app
+to other people, not to run it safely on one PC.
+
 ## Phase 10 — Extras and release
+
+> **Order changed 2026-09-26 -- see "Phase 10M -- Mainnet readiness"
+> above.** The owner's goal is real use on mainnet on their own PC, so
+> Phase 10M comes first. Of the steps below: Step 1(b) is task G3, step
+> 3's canary harness is G5, step 4's public-descriptor backup is G3, and
+> steps 6-11 are **deferred** until after Stage C. Steps 3, 4 and 5 keep
+> their remaining parts here.
 
 Scoped 2026-09-26 by a read-only analysis: one analyst per spec feature,
 then a cross-cutting critic that re-checked claims against the repo and
