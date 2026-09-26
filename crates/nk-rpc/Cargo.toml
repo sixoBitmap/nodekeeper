@@ -14,5 +14,5 @@ nk-core = { workspace = true }
 nk-exec = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
 tempfile = "3"

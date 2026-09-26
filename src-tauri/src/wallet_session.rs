@@ -80,10 +80,9 @@ impl WalletSession {
     /// SPEC.md: "cleared on lock" -- an explicit "lock now" action,
     /// distinct from the automatic unlock/lock cycle around every
     /// individual signing action, which never remembers anything on
-    /// its own unless the caller opted in). Not yet wired to a UI
-    /// control; exists so that control has something to call once
-    /// built.
-    #[allow(dead_code)]
+    /// its own unless the caller opted in). Called when Core rejects the
+    /// remembered passphrase (`with_wallet_unlocked`); the "lock now" UI
+    /// control is not built yet.
     pub fn forget(&self, chain: Chain) {
         self.remembered
             .lock()

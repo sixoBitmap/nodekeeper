@@ -2183,8 +2183,13 @@ dependency; regtest first, then the release exe)
       -28) instead of a hard 60 s; a timeout must not orphan a running
       bitcoind. Evidence already in hand: the live tests in `nk-testkit`
       hit `Bitcoind(StartupTimeout)` intermittently when several start
-      bitcoind at once (2 of 5 full runs on 2026-09-26, a different test
-      each time, each passes alone). `[node/startup-warmup-budget-and-orphaned-child]`
+      bitcoind at once (3 of 6 full workspace runs on 2026-09-26, a
+      different test each time, each passes alone). **Each such failure
+      also left a running `bitcoind` behind** (four were found after the
+      gate, killed by hand): `RegtestFixture` must kill what it started
+      when the readiness wait fails, or the orphans pile up and make the
+      next run flakier -- the same bug the app itself has.
+      `[node/startup-warmup-budget-and-orphaned-child]`
 - [ ] Stale `.cookie` / `bitcoind.pid` after a crash or reboot: re-read
       the cookie after the new process writes it; verify a pid file names
       *our* process. Real test: kill -9, restart on the same datadir.
@@ -2274,13 +2279,16 @@ first opened on mainnet -- anyone can send an inscription to any address)
 
 **G3 -- Custody: wallet creation and recovery** (Stage B; regtest, then a
 public test chain with an **encrypted** wallet)
-- [ ] Step 1(b): shared `with_wallet_unlocked` -- encryption from
-      `getwalletinfo` (`unlocked_until`; VERIFY live), unencrypted mainnet
-      wallet **refused on every signing path** (typed error) with an
-      "encrypt this wallet" path, skip-unlock only for unencrypted
-      non-mainnet (D1); also the console's `ord wallet` fund-moving
-      commands; wallet header shows encryption state.
-      `[wallet/encryption-state-checked-at-use]`,
+- [x] Step 1(b) (done 2026-09-26, Phase 10 step 1(b)): shared
+      `with_wallet_unlocked`, encryption asked of Core, an unencrypted
+      mainnet wallet refused on the guided screens **and the console's**
+      `ord wallet` signing commands, `WALLET_NOT_ENCRYPTED`, skip-unlock only for
+      an unencrypted non-mainnet wallet (D1).
+- [ ] What 1(b) left for here: a **guided "encrypt this wallet" action** (the
+      text points at the Console's `encryptwallet` today) and the wallet's
+      encryption state shown on the Wallet screen, so a refusal appears
+      before a form is filled in; surfacing a failed re-lock; the live
+      tests that skip silently. `[wallet/encryption-state-checked-at-use]`,
       `[security/mainnet-encrypted-wallet-invariant]`
 - [ ] ⛔ D8: atomic create/restore as one testable function; encryption
       failure never drops the mnemonic; restore ordering; minimum passphrase
@@ -2519,15 +2527,23 @@ Done when (docs/SPEC.md):
         second), all fixed, each with a test. Verified against a real
         Bitcoin Core (6 live tests, negative controls for each new rule) and
         with the real app (real IPC, real database file).
-  - [ ] (b) One shared `with_wallet_unlocked` helper: skip
-        `walletpassphrase` only for an unencrypted wallet on a
-        non-mainnet chain (checked via `getwalletinfo`; VERIFY that
-        `unlocked_until` is absent when unencrypted), fail-closed on
-        mainnet. Fixes the "Observed, not yet addressed" dead end where
-        Send/Inscribe/Reinscribe on an unencrypted regtest wallet asks
-        for a passphrase that doesn't exist (wallet_send, both inscribe
-        commands). **STOP AND ASK** (wallet-security adjacent): skip-
-        when-unencrypted vs. optional encrypt-on-create for test chains.
+  - [x] (b) One shared `with_wallet_unlocked` helper. Done 2026-09-26 --
+        DECISIONS.md "Making the wallet ready to sign". Owner delegated the
+        choice ("Do what you believe better"); the recommended option was
+        taken: an unencrypted wallet on a **non-mainnet** chain is ready to
+        sign with no passphrase (the dead end where Send/Inscribe/Batch/
+        Reinscribe asked for a passphrase that does not exist is gone);
+        an unencrypted wallet on **mainnet is refused** (fail closed), also
+        for the console's `ord wallet` signing commands; whether a wallet
+        is encrypted is asked of Core (`getwalletinfo`'s `unlocked_until`,
+        VERIFIED live and pinned to Core's help text). New error code
+        `WALLET_NOT_ENCRYPTED` (an addition to the spec's list); a stale
+        remembered passphrase is forgotten. Verified against a real Bitcoin
+        Core and ord, with negative controls, and in the real app; one
+        adversarial review (10 findings upheld), fixed. **Not closed here**
+        (tracked in Phase 10M): the create/restore window, a guided
+        "encrypt this wallet" action, single-flight signing, the console's
+        raw `bitcoin-cli` signing RPCs, and live tests that skip silently.
   - [x] (c) Acquire `SingleInstanceLock` in src-tauri (spec Foundation C;
         it was never wired). Done 2026-09-26 -- DECISIONS.md "Single-
         instance lock and command-history pruning": taken before the

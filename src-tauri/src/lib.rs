@@ -861,6 +861,156 @@ fn parse_wallet_send_result(response: serde_json::Value) -> Result<WalletSendRes
     Ok(WalletSendResult { txid, fee })
 }
 
+/// What the app tells the user for each way the unlock before a signing
+/// action can be refused.
+fn unlock_error_to_typed(error: nk_rpc::UnlockError) -> TypedError {
+    match error {
+        // The frontend prompts for the passphrase on this code.
+        nk_rpc::UnlockError::PassphraseRequired => TypedError {
+            code: Some(AppErrorCode::WalletLocked),
+            message: error.to_string(),
+        },
+        // A message and a "what to do" the user can act on (the Console's
+        // `encryptwallet`); a passphrase prompt cannot fix it.
+        nk_rpc::UnlockError::MainnetWalletNotEncrypted => TypedError {
+            code: Some(AppErrorCode::WalletNotEncrypted),
+            message: error.to_string(),
+        },
+        other => TypedError::from(other.to_string()),
+    }
+}
+
+/// Whether Bitcoin Core rejected a passphrase (`-14`, "The wallet passphrase
+/// entered was incorrect").
+fn is_wrong_passphrase(error: &nk_rpc::UnlockError) -> bool {
+    matches!(
+        error,
+        nk_rpc::UnlockError::Rpc(nk_rpc::RpcError::Rpc { code: -14, .. })
+    )
+}
+
+/// Runs `action` -- an `ord` command that signs -- with the wallet ready to
+/// sign, and puts it back the way it was (docs/SPEC.md item 3, Foundation D).
+///
+/// The one place that decides *how* a wallet is unlocked, shared by
+/// `wallet_send` and both inscribe commands (each used to carry its own copy,
+/// which asked for a passphrase on a wallet that has none):
+///
+/// - an **encrypted** wallet is unlocked with `walletpassphrase` for a short
+///   timeout (the passphrase comes from the caller, or from what the user chose
+///   to have remembered), and **re-locked afterwards whatever the action's
+///   outcome**;
+/// - an **unencrypted wallet on a test chain** (regtest, signet, testnet4) needs
+///   no unlock: nothing is unlocked, so nothing is re-locked;
+/// - an **unencrypted wallet on mainnet is refused** -- every mainnet wallet is
+///   encrypted (CLAUDE.md, Mainnet safety), and one that is not is not
+///   something to sign with.
+///
+/// Whether a wallet is encrypted is asked of Bitcoin Core (`getwalletinfo`),
+/// never assumed -- see `nk_rpc::RpcClient::unlock_for_signing`. A dry-run
+/// needs none of this (confirmed live, DECISIONS.md Phase 5 VERIFY) and does
+/// not come through here.
+///
+/// A **remembered** passphrase that Core now rejects (the wallet's passphrase
+/// was changed, or the data folder now holds another wallet) is forgotten and
+/// reported as `WALLET_LOCKED`, so the frontend asks for the passphrase again
+/// instead of retrying the stale one for the rest of the remember window.
+async fn with_wallet_unlocked<T, Fut>(
+    chain: Chain,
+    rpc: &nk_rpc::RpcClient,
+    wallet_session: &WalletSession,
+    passphrase: Option<String>,
+    remember: bool,
+    action: impl FnOnce() -> Fut,
+) -> Result<T, TypedError>
+where
+    Fut: std::future::Future<Output = Result<T, TypedError>>,
+{
+    // Wrapped in `Zeroizing` immediately -- Phase 5 security self-review
+    // (DECISIONS.md): neither this plain-text `String` from IPC nor
+    // `WalletSession`'s own copy should linger unzeroized past its use.
+    let explicit = passphrase.map(zeroize::Zeroizing::new);
+    let came_from_the_session = explicit.is_none();
+    let passphrase: Option<zeroize::Zeroizing<String>> =
+        explicit.or_else(|| wallet_session.get(chain));
+
+    let unlock = match rpc
+        .unlock_for_signing(
+            DEFAULT_WALLET_NAME,
+            passphrase.as_ref().map(|p| p.as_str()),
+            WALLET_UNLOCK_TIMEOUT_SECS,
+        )
+        .await
+    {
+        Ok(unlock) => unlock,
+        Err(error) if came_from_the_session && is_wrong_passphrase(&error) => {
+            wallet_session.forget(chain);
+            return Err(TypedError {
+                code: Some(AppErrorCode::WalletLocked),
+                message: "The passphrase Nodekeeper remembered no longer unlocks this wallet -- \
+                          enter the passphrase again."
+                    .to_string(),
+            });
+        }
+        Err(error) => return Err(unlock_error_to_typed(error)),
+    };
+    if unlock == nk_rpc::SigningUnlock::Unlocked && remember {
+        if let Some(passphrase) = passphrase {
+            wallet_session.remember(chain, passphrase);
+        }
+    }
+
+    let result = action().await;
+    if unlock == nk_rpc::SigningUnlock::Unlocked {
+        // Best-effort: a lock failure here shouldn't hide the action's own
+        // result (success or failure) from the caller.
+        let _ = rpc.wallet_lock(DEFAULT_WALLET_NAME).await;
+    }
+    result
+}
+
+/// The mainnet rule for the **console's** `ord wallet ...` commands, which sign
+/// on their own (the console has no unlock step; the user unlocks by hand): on
+/// mainnet, a command that can sign and broadcast is refused unless the wallet
+/// is encrypted -- the same rule `with_wallet_unlocked` applies to the guided
+/// screens. Read-only commands and a dry-run (which signs nothing) are not
+/// gated, and other chains are not either. Also refuses `--name`: the app has
+/// one wallet per environment, and a different name would sign with a wallet
+/// this check never looked at. Fails closed: if Core cannot say whether the
+/// wallet is encrypted, the command does not run.
+async fn require_encrypted_wallet_for_console_signing(
+    chain: Chain,
+    rpc: &nk_rpc::RpcClient,
+    args: &[String],
+    class: nk_core::console_safety::OrdCommandClass,
+    dry_run: bool,
+) -> Result<(), TypedError> {
+    use nk_core::console_safety::OrdCommandClass;
+    if chain != Chain::Mainnet || class == OrdCommandClass::ReadOnly {
+        return Ok(());
+    }
+    if dry_run && class == OrdCommandClass::StateChangingWithDryRun {
+        return Ok(());
+    }
+    if args
+        .iter()
+        .any(|arg| arg == "--name" || arg.starts_with("--name="))
+    {
+        return Err(TypedError::from(
+            "Nodekeeper uses one wallet per environment, so a mainnet command that signs cannot \
+             pick another with --name -- remove it."
+                .to_string(),
+        ));
+    }
+    match rpc.wallet_protection(DEFAULT_WALLET_NAME).await {
+        Ok(nk_rpc::WalletProtection::Encrypted) => Ok(()),
+        Ok(nk_rpc::WalletProtection::Unencrypted) => Err(unlock_error_to_typed(
+            nk_rpc::UnlockError::MainnetWalletNotEncrypted,
+        )),
+        Err(error) => Err(TypedError::from(error.to_string())),
+    }
+}
+
 /// Preview only -- confirmed live (DECISIONS.md Phase 5 VERIFY) that
 /// `--dry-run` needs no wallet unlock at all, even against a locked
 /// encrypted wallet, so this never touches `WalletSession` or calls
@@ -907,38 +1057,21 @@ async fn wallet_send(
 ) -> Result<WalletSendResult, TypedError> {
     let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
 
-    // Wrapped in `Zeroizing` immediately -- Phase 5 security self-review
-    // (DECISIONS.md): neither this plain-text `String` from IPC nor
-    // `WalletSession`'s own copy should linger unzeroized past its use.
-    let passphrase: zeroize::Zeroizing<String> = match passphrase
-        .map(zeroize::Zeroizing::new)
-        .or_else(|| wallet_session.get(chain))
-    {
-        Some(p) => p,
-        None => {
-            return Err(TypedError {
-                code: Some(AppErrorCode::WalletLocked),
-                message: "This wallet is locked; enter its passphrase to continue.".to_string(),
-            })
-        }
-    };
+    let response = with_wallet_unlocked(
+        chain,
+        &ctx.rpc,
+        &wallet_session,
+        passphrase,
+        remember,
+        || async {
+            nk_ord::wallet::wallet_send(&executor, &ctx.target(), &address, &asset, fee_rate, false)
+                .await
+                .map_err(TypedError::from)
+        },
+    )
+    .await?;
 
-    ctx.rpc
-        .wallet_passphrase(DEFAULT_WALLET_NAME, &passphrase, WALLET_UNLOCK_TIMEOUT_SECS)
-        .await
-        .map_err(|e| TypedError::from(e.to_string()))?;
-    if remember {
-        wallet_session.remember(chain, passphrase.clone());
-    }
-
-    let response =
-        nk_ord::wallet::wallet_send(&executor, &ctx.target(), &address, &asset, fee_rate, false)
-            .await;
-    // Best-effort: a lock failure here shouldn't hide the send's own
-    // result (success or failure) from the caller.
-    let _ = ctx.rpc.wallet_lock(DEFAULT_WALLET_NAME).await;
-
-    parse_wallet_send_result(response.map_err(TypedError::from)?)
+    parse_wallet_send_result(response)
 }
 
 /// The confirm dialog / "Learn mode" (docs/SPEC.md item 6) view of what
@@ -1159,6 +1292,8 @@ async fn console_run(
             _ => {}
         }
         let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
+        require_encrypted_wallet_for_console_signing(chain, &ctx.rpc, &parsed.args, class, dry_run)
+            .await?;
         let mut args = parsed.args;
         if dry_run
             && matches!(
@@ -1530,41 +1665,30 @@ async fn wallet_inscribe(
 ) -> Result<InscribeResult, TypedError> {
     let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
 
-    let passphrase: zeroize::Zeroizing<String> = match passphrase
-        .map(zeroize::Zeroizing::new)
-        .or_else(|| wallet_session.get(chain))
-    {
-        Some(p) => p,
-        None => {
-            return Err(TypedError {
-                code: Some(AppErrorCode::WalletLocked),
-                message: "This wallet is locked; enter its passphrase to continue.".to_string(),
-            })
-        }
-    };
-
-    ctx.rpc
-        .wallet_passphrase(DEFAULT_WALLET_NAME, &passphrase, WALLET_UNLOCK_TIMEOUT_SECS)
-        .await
-        .map_err(|e| TypedError::from(e.to_string()))?;
-    if remember {
-        wallet_session.remember(chain, passphrase.clone());
-    }
-
-    let response = nk_ord::wallet::inscribe(
-        &executor,
-        &ctx.target(),
-        std::path::Path::new(&file_path),
-        fee_rate,
-        postage,
-        parent.as_deref(),
-        reinscribe_satpoint.as_deref(),
-        false,
+    let response = with_wallet_unlocked(
+        chain,
+        &ctx.rpc,
+        &wallet_session,
+        passphrase,
+        remember,
+        || async {
+            nk_ord::wallet::inscribe(
+                &executor,
+                &ctx.target(),
+                std::path::Path::new(&file_path),
+                fee_rate,
+                postage,
+                parent.as_deref(),
+                reinscribe_satpoint.as_deref(),
+                false,
+            )
+            .await
+            .map_err(TypedError::from)
+        },
     )
-    .await;
-    let _ = ctx.rpc.wallet_lock(DEFAULT_WALLET_NAME).await;
+    .await?;
 
-    parse_single_inscribe_result(response.map_err(TypedError::from)?)
+    parse_single_inscribe_result(response)
 }
 
 /// docs/SPEC.md item 4's "Visual batch-YAML builder." No `passphrase`-
@@ -1611,38 +1735,27 @@ async fn wallet_inscribe_batch(
 ) -> Result<Vec<InscribeResult>, TypedError> {
     let ctx = wallet_context(chain, &node_manager, &store, &executor)?;
 
-    let passphrase: zeroize::Zeroizing<String> = match passphrase
-        .map(zeroize::Zeroizing::new)
-        .or_else(|| wallet_session.get(chain))
-    {
-        Some(p) => p,
-        None => {
-            return Err(TypedError {
-                code: Some(AppErrorCode::WalletLocked),
-                message: "This wallet is locked; enter its passphrase to continue.".to_string(),
-            })
-        }
-    };
-
-    ctx.rpc
-        .wallet_passphrase(DEFAULT_WALLET_NAME, &passphrase, WALLET_UNLOCK_TIMEOUT_SECS)
-        .await
-        .map_err(|e| TypedError::from(e.to_string()))?;
-    if remember {
-        wallet_session.remember(chain, passphrase.clone());
-    }
-
     let entries: Vec<_> = file_paths
         .into_iter()
         .map(|p| nk_ord::wallet::BatchInscriptionEntry {
             file_path: std::path::PathBuf::from(p),
         })
         .collect();
-    let response =
-        nk_ord::wallet::batch_inscribe(&executor, &ctx.target(), &entries, fee_rate, false).await;
-    let _ = ctx.rpc.wallet_lock(DEFAULT_WALLET_NAME).await;
+    let response = with_wallet_unlocked(
+        chain,
+        &ctx.rpc,
+        &wallet_session,
+        passphrase,
+        remember,
+        || async {
+            nk_ord::wallet::batch_inscribe(&executor, &ctx.target(), &entries, fee_rate, false)
+                .await
+                .map_err(TypedError::from)
+        },
+    )
+    .await?;
 
-    parse_inscribe_results(&response.map_err(TypedError::from)?)
+    parse_inscribe_results(&response)
 }
 
 /// docs/SPEC.md item 4: "Drag-and-drop file, preview... content-type
@@ -2807,6 +2920,362 @@ mod tests {
             "every row that revealed a secret is gone, and the app's own rows are kept"
         );
         assert!(rows.iter().all(|r| !r.output.contains("prv")));
+    }
+
+    // ---- the unlock glue, against a real Bitcoin Core ---------------------------
+
+    const GLUE_PASSPHRASE: &str = "glue-test-passphrase-5150";
+    const GLUE_NEW_PASSPHRASE: &str = "glue-test-passphrase-8842";
+
+    fn glue_client(
+        fixture: &nk_testkit::RegtestFixture,
+        executor: &Executor,
+        wallet_path: &str,
+        chain: Chain,
+    ) -> nk_rpc::RpcClient {
+        nk_rpc::RpcClient::from_cookie_file(
+            format!(
+                "http://127.0.0.1:{}{wallet_path}",
+                fixture.environment.rpc_port
+            ),
+            &fixture.environment.bitcoin_cookie_path(),
+            executor.clone(),
+            "regtest".to_string(),
+            chain,
+        )
+        .unwrap()
+    }
+
+    /// `unlocked_until` of the wallet, through a client of its own (independent
+    /// of the code under test).
+    async fn glue_unlocked_until(
+        fixture: &nk_testkit::RegtestFixture,
+        executor: &Executor,
+    ) -> Option<i64> {
+        let client = glue_client(
+            fixture,
+            executor,
+            &format!("/wallet/{DEFAULT_WALLET_NAME}"),
+            Chain::Regtest,
+        );
+        client
+            .call("getwalletinfo", vec![], "test", vec![], true)
+            .await
+            .expect("getwalletinfo")
+            .get("unlocked_until")
+            .and_then(|v| v.as_i64())
+    }
+
+    /// `with_wallet_unlocked` and the console's mainnet gate against a real
+    /// node -- the parts the live tests of the RPC primitives do not reach: that
+    /// the action runs only when the wallet is ready, that it is re-locked after
+    /// it whatever it returns, that a passphrase is remembered only when it really
+    /// unlocked something, and that a stale remembered passphrase is dropped.
+    #[tokio::test]
+    #[serial_test::serial(real_bitcoind)]
+    async fn the_unlock_glue_runs_the_action_only_when_ready_and_relocks_after_it() {
+        use nk_core::console_safety::OrdCommandClass;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let Some(bitcoind_path) = std::env::var_os("NK_TEST_BITCOIND") else {
+            eprintln!("skipping: NK_TEST_BITCOIND not set");
+            return;
+        };
+        let fixture = nk_testkit::RegtestFixture::start(&std::path::PathBuf::from(bitcoind_path))
+            .await
+            .expect("bitcoind should start");
+        let executor = Executor::new();
+        let regtest = glue_client(&fixture, &executor, "", Chain::Regtest);
+        let mainnet_label = glue_client(&fixture, &executor, "", Chain::Mainnet);
+        let session = WalletSession::new();
+        let ran = AtomicBool::new(false);
+        let typed = |args: &[&str]| -> Vec<String> { args.iter().map(|a| a.to_string()).collect() };
+
+        regtest
+            .call(
+                "createwallet",
+                vec![serde_json::json!(DEFAULT_WALLET_NAME)],
+                "test setup",
+                vec![],
+                true,
+            )
+            .await
+            .expect("createwallet");
+
+        // --- unencrypted wallet ---------------------------------------------
+        // A test chain: the action runs with nothing unlocked, and a passphrase
+        // offered "to remember" is NOT remembered (nothing was unlocked with it).
+        let out = with_wallet_unlocked(
+            Chain::Regtest,
+            &regtest,
+            &session,
+            Some("offered anyway".to_string()),
+            true,
+            || async {
+                ran.store(true, Ordering::SeqCst);
+                Ok::<_, TypedError>(7)
+            },
+        )
+        .await
+        .expect("an unencrypted test-chain wallet is ready with no unlock");
+        assert_eq!(out, 7);
+        assert!(ran.swap(false, Ordering::SeqCst));
+        assert_eq!(
+            session.get(Chain::Regtest),
+            None,
+            "nothing was unlocked, so nothing is remembered"
+        );
+
+        // Mainnet: refused, and the action never runs -- through the guided path
+        // and through the console's gate alike.
+        let refused = with_wallet_unlocked(
+            Chain::Mainnet,
+            &mainnet_label,
+            &session,
+            Some("anything".to_string()),
+            false,
+            || async {
+                ran.store(true, Ordering::SeqCst);
+                Ok::<_, TypedError>(())
+            },
+        )
+        .await
+        .expect_err("an unencrypted mainnet wallet is refused");
+        assert_eq!(refused.code, Some(AppErrorCode::WalletNotEncrypted));
+        assert!(!ran.load(Ordering::SeqCst), "the action did not run");
+        let send = typed(&["send", "addr", "1btc"]);
+        let gated = require_encrypted_wallet_for_console_signing(
+            Chain::Mainnet,
+            &mainnet_label,
+            &send,
+            OrdCommandClass::StateChangingWithDryRun,
+            false,
+        )
+        .await
+        .expect_err("the console's ord send is refused on an unencrypted mainnet wallet");
+        assert_eq!(gated.code, Some(AppErrorCode::WalletNotEncrypted));
+
+        // Encrypt it.
+        regtest
+            .encrypt_wallet(DEFAULT_WALLET_NAME, GLUE_PASSPHRASE)
+            .await
+            .expect("encryptwallet");
+
+        // --- encrypted wallet -----------------------------------------------
+        // No passphrase anywhere: WALLET_LOCKED, action not run.
+        let locked =
+            with_wallet_unlocked(Chain::Regtest, &regtest, &session, None, false, || async {
+                ran.store(true, Ordering::SeqCst);
+                Ok::<_, TypedError>(())
+            })
+            .await
+            .expect_err("an encrypted wallet needs its passphrase");
+        assert_eq!(locked.code, Some(AppErrorCode::WalletLocked));
+        assert!(!ran.load(Ordering::SeqCst));
+
+        // The right passphrase (remember = true): the action *sees* the wallet
+        // unlocked, it is locked again after, and only now is it remembered.
+        let seen = with_wallet_unlocked(
+            Chain::Regtest,
+            &regtest,
+            &session,
+            Some(GLUE_PASSPHRASE.to_string()),
+            true,
+            || async { Ok::<_, TypedError>(glue_unlocked_until(&fixture, &executor).await) },
+        )
+        .await
+        .expect("unlock, run, re-lock");
+        assert!(
+            seen.unwrap_or(0) > 0,
+            "the action ran with the wallet unlocked"
+        );
+        assert_eq!(
+            glue_unlocked_until(&fixture, &executor).await,
+            Some(0),
+            "re-locked afterwards"
+        );
+        assert_eq!(
+            session.get(Chain::Regtest).as_deref().map(String::as_str),
+            Some(GLUE_PASSPHRASE)
+        );
+
+        // No passphrase this time: the remembered one is used.
+        with_wallet_unlocked(Chain::Regtest, &regtest, &session, None, false, || async {
+            Ok::<_, TypedError>(())
+        })
+        .await
+        .expect("the remembered passphrase unlocks the wallet");
+        assert_eq!(glue_unlocked_until(&fixture, &executor).await, Some(0));
+
+        // An action that FAILS: its error comes back, and the wallet is locked.
+        let failed = with_wallet_unlocked(
+            Chain::Regtest,
+            &regtest,
+            &session,
+            Some(GLUE_PASSPHRASE.to_string()),
+            false,
+            || async { Err::<(), _>(TypedError::from("the send failed".to_string())) },
+        )
+        .await
+        .expect_err("the action's error is returned");
+        assert_eq!(failed.message, "the send failed");
+        assert_eq!(
+            glue_unlocked_until(&fixture, &executor).await,
+            Some(0),
+            "re-locked even though the action failed"
+        );
+
+        // The console's gate on an encrypted wallet: signing commands pass.
+        require_encrypted_wallet_for_console_signing(
+            Chain::Mainnet,
+            &mainnet_label,
+            &send,
+            OrdCommandClass::StateChangingWithDryRun,
+            false,
+        )
+        .await
+        .expect("an encrypted mainnet wallet may sign through the console");
+        // ... but not under another wallet's name, which the check never saw.
+        let renamed = require_encrypted_wallet_for_console_signing(
+            Chain::Mainnet,
+            &mainnet_label,
+            &typed(&["--name", "other", "send", "addr", "1btc"]),
+            OrdCommandClass::StateChangingWithDryRun,
+            false,
+        )
+        .await
+        .expect_err("--name is refused on a mainnet signing command");
+        assert!(renamed.message.contains("--name"), "{}", renamed.message);
+
+        // A stale remembered passphrase: the wallet's passphrase is changed, the
+        // session still holds the old one. It is dropped and the user is asked.
+        regtest
+            .call(
+                "walletpassphrasechange",
+                vec![
+                    serde_json::json!(GLUE_PASSPHRASE),
+                    serde_json::json!(GLUE_NEW_PASSPHRASE),
+                ],
+                "test",
+                vec![GLUE_PASSPHRASE.to_string(), GLUE_NEW_PASSPHRASE.to_string()],
+                false,
+            )
+            .await
+            .expect("walletpassphrasechange");
+        assert!(session.get(Chain::Regtest).is_some());
+        let stale =
+            with_wallet_unlocked(Chain::Regtest, &regtest, &session, None, false, || async {
+                ran.store(true, Ordering::SeqCst);
+                Ok::<_, TypedError>(())
+            })
+            .await
+            .expect_err("the old remembered passphrase no longer works");
+        assert_eq!(stale.code, Some(AppErrorCode::WalletLocked));
+        assert!(!ran.load(Ordering::SeqCst));
+        assert_eq!(
+            session.get(Chain::Regtest),
+            None,
+            "the stale one was forgotten"
+        );
+        with_wallet_unlocked(
+            Chain::Regtest,
+            &regtest,
+            &session,
+            Some(GLUE_NEW_PASSPHRASE.to_string()),
+            false,
+            || async { Ok::<_, TypedError>(()) },
+        )
+        .await
+        .expect("the new passphrase works");
+
+        // --- the console's gate needs no node where it does not apply ----------
+        // A client aimed at a closed port: any RPC would fail, so success proves
+        // that none was made.
+        let nowhere = nk_rpc::RpcClient::new(
+            "http://127.0.0.1:1".to_string(),
+            "u".to_string(),
+            "p".to_string(),
+            executor.clone(),
+            "mainnet".to_string(),
+            Chain::Mainnet,
+        );
+        for (chain, args, class, dry_run) in [
+            (
+                Chain::Mainnet,
+                typed(&["balance"]),
+                OrdCommandClass::ReadOnly,
+                false,
+            ),
+            (
+                Chain::Mainnet,
+                send.clone(),
+                OrdCommandClass::StateChangingWithDryRun,
+                true,
+            ),
+            (
+                Chain::Regtest,
+                send.clone(),
+                OrdCommandClass::StateChangingWithDryRun,
+                false,
+            ),
+            (
+                Chain::Signet,
+                typed(&["mint"]),
+                OrdCommandClass::StateChangingNoDryRun,
+                false,
+            ),
+        ] {
+            require_encrypted_wallet_for_console_signing(chain, &nowhere, &args, class, dry_run)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("{chain:?} {args:?} should not be gated: {}", e.message)
+                });
+        }
+        // Where it does apply, an unreadable answer is a refusal, not a pass.
+        let unreadable = require_encrypted_wallet_for_console_signing(
+            Chain::Mainnet,
+            &nowhere,
+            &send,
+            OrdCommandClass::StateChangingWithDryRun,
+            false,
+        )
+        .await;
+        assert!(
+            unreadable.is_err(),
+            "fails closed when Core cannot be asked"
+        );
+
+        fixture.stop().await.expect("bitcoind should stop cleanly");
+    }
+
+    /// How a refused unlock reaches the frontend: only "no passphrase yet" carries
+    /// the code the frontend prompts on; an unencrypted mainnet wallet is a plain
+    /// error (no prompt could fix it), and it says what to do.
+    #[test]
+    fn unlock_refusals_reach_the_frontend_with_the_right_code() {
+        let locked = unlock_error_to_typed(nk_rpc::UnlockError::PassphraseRequired);
+        assert_eq!(locked.code, Some(AppErrorCode::WalletLocked));
+        assert!(locked.message.contains("passphrase"), "{}", locked.message);
+
+        let not_encrypted = unlock_error_to_typed(nk_rpc::UnlockError::MainnetWalletNotEncrypted);
+        assert_eq!(
+            not_encrypted.code,
+            Some(AppErrorCode::WalletNotEncrypted),
+            "its own code, so the frontend can say what to do (not a passphrase prompt)"
+        );
+        assert!(
+            not_encrypted.message.contains("not encrypted")
+                && not_encrypted.message.contains("mainnet"),
+            "{}",
+            not_encrypted.message
+        );
+
+        let rpc = unlock_error_to_typed(nk_rpc::UnlockError::Rpc(nk_rpc::RpcError::Rpc {
+            code: -14,
+            message: "The wallet passphrase entered was incorrect.".to_string(),
+        }));
+        assert_eq!(rpc.code, None);
+        assert!(rpc.message.contains("incorrect"), "{}", rpc.message);
     }
 
     fn args(line: &str) -> Vec<String> {

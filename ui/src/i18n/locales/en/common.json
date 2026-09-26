@@ -235,6 +235,11 @@
       "title": "No verified Bitcoin Core binary",
       "message": "Nodekeeper doesn't have a verified Bitcoin Core binary configured for this installation yet.",
       "whatToDo": "Run the setup wizard to download and verify Bitcoin Core."
+    },
+    "walletNotEncrypted": {
+      "title": "This wallet isn't encrypted",
+      "message": "On mainnet Nodekeeper only signs with an encrypted wallet, and this one has no passphrase.",
+      "whatToDo": "Open the Console and run encryptwallet followed by a passphrase you choose (write it down: it cannot be recovered), then try again."
     }
   },
   "dashboard": {

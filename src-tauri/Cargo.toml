@@ -46,6 +46,7 @@ zeroize = "1"
 base64 = "0.22"
 
 [dev-dependencies]
+nk-testkit = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tempfile = "3"
 serial_test = { version = "3", features = ["file_locks"] }

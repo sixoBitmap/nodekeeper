@@ -28,6 +28,43 @@ pub enum RpcError {
     UnexpectedResponse(String),
 }
 
+/// Whether a wallet needs a passphrase to sign -- what `getwalletinfo` says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalletProtection {
+    /// Encrypted with a passphrase: signing needs `walletpassphrase` first.
+    Encrypted,
+    /// Not encrypted: nothing to unlock.
+    Unencrypted,
+}
+
+/// What [`RpcClient::unlock_for_signing`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigningUnlock {
+    /// Nothing to unlock (an unencrypted wallet on a test chain).
+    NotNeeded,
+    /// `walletpassphrase` succeeded. The caller re-locks the wallet
+    /// (`RpcClient::wallet_lock`) when the signing action is over.
+    Unlocked,
+}
+
+/// Why [`RpcClient::unlock_for_signing`] did not make the wallet ready to sign.
+#[derive(Debug, Error)]
+pub enum UnlockError {
+    /// The wallet is encrypted and no passphrase was given.
+    #[error("This wallet is locked; enter its passphrase to continue.")]
+    PassphraseRequired,
+    /// Every mainnet wallet must be encrypted (CLAUDE.md, Mainnet safety); one
+    /// that is not is refused rather than signed with.
+    #[error(
+        "This mainnet wallet is not encrypted, so Nodekeeper will not sign with it -- every \
+         mainnet wallet must be encrypted. Encrypt it first (in the Console, run `encryptwallet` \
+         with a passphrase you choose), then try again."
+    )]
+    MainnetWalletNotEncrypted,
+    #[error(transparent)]
+    Rpc(#[from] RpcError),
+}
+
 #[derive(Clone)]
 pub struct RpcClient {
     http: reqwest::Client,
@@ -266,6 +303,68 @@ impl RpcClient {
         )
         .await?;
         Ok(())
+    }
+
+    /// Whether `wallet` is encrypted, asked of Bitcoin Core: `getwalletinfo`
+    /// has an `unlocked_until` field **only for a passphrase-encrypted wallet**
+    /// (Core's own help text; confirmed live -- the field is absent on a wallet
+    /// created without a passphrase, present on an encrypted one, including
+    /// while it is locked). Shown in the Live Command Monitor like any other
+    /// call. An answer that is not a JSON object is an error, never a guess.
+    pub async fn wallet_protection(&self, wallet: &str) -> Result<WalletProtection, RpcError> {
+        let info = self
+            .wallet_call(
+                wallet,
+                "getwalletinfo",
+                vec![],
+                "check wallet encryption",
+                vec![],
+                &[],
+                false,
+            )
+            .await?;
+        let object = info.as_object().ok_or_else(|| {
+            RpcError::UnexpectedResponse(format!("getwalletinfo did not return an object: {info}"))
+        })?;
+        Ok(if object.contains_key("unlocked_until") {
+            WalletProtection::Encrypted
+        } else {
+            WalletProtection::Unencrypted
+        })
+    }
+
+    /// Makes `wallet` ready for a signing action -- the one decision about
+    /// *how* (see `with_wallet_unlocked` in the app, its only caller):
+    ///
+    /// - **encrypted**: unlocks it with `passphrase` for `timeout_secs` and
+    ///   returns [`SigningUnlock::Unlocked`] (the caller re-locks afterwards);
+    ///   no passphrase is [`UnlockError::PassphraseRequired`], a wrong one is
+    ///   Core's own error;
+    /// - **unencrypted on a test chain**: [`SigningUnlock::NotNeeded`] -- there
+    ///   is nothing to unlock, and asking for a passphrase that does not exist
+    ///   was a dead end;
+    /// - **unencrypted on mainnet**: [`UnlockError::MainnetWalletNotEncrypted`].
+    ///   Fails closed: the mainnet rule is that every wallet is encrypted, so a
+    ///   wallet that is not is never signed with -- and if the answer cannot be
+    ///   read, that is an error too, not a pass.
+    pub async fn unlock_for_signing(
+        &self,
+        wallet: &str,
+        passphrase: Option<&str>,
+        timeout_secs: u32,
+    ) -> Result<SigningUnlock, UnlockError> {
+        match self.wallet_protection(wallet).await? {
+            WalletProtection::Unencrypted if self.chain == Chain::Mainnet => {
+                Err(UnlockError::MainnetWalletNotEncrypted)
+            }
+            WalletProtection::Unencrypted => Ok(SigningUnlock::NotNeeded),
+            WalletProtection::Encrypted => {
+                let passphrase = passphrase.ok_or(UnlockError::PassphraseRequired)?;
+                self.wallet_passphrase(wallet, passphrase, timeout_secs)
+                    .await?;
+                Ok(SigningUnlock::Unlocked)
+            }
+        }
     }
 
     /// Re-locks the wallet immediately after a signing action, rather
@@ -642,6 +741,177 @@ mod tests {
             display("walletpassphrase", vec![json!("pw"), json!(60)], &[true]),
             "bitcoin-cli -regtest walletpassphrase [redacted] 60"
         );
+    }
+
+    // ---- the unlock decision, with no node -----------------------------------
+
+    /// A JSON-RPC stub: answers every POST according to the method it names.
+    async fn stub_node(answer: impl Fn(&str) -> String + Send + Sync + 'static) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let answer = std::sync::Arc::new(answer);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let answer = answer.clone();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    let (body_at, content_length) = loop {
+                        let n = socket.read(&mut buf).await.unwrap_or(0);
+                        if n == 0 {
+                            return;
+                        }
+                        request.extend_from_slice(&buf[..n]);
+                        if let Some(pos) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                            let head = String::from_utf8_lossy(&request[..pos]).to_lowercase();
+                            let length = head
+                                .lines()
+                                .find_map(|line| line.strip_prefix("content-length:"))
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                                .unwrap_or(0);
+                            break (pos + 4, length);
+                        }
+                    };
+                    while request.len() < body_at + content_length {
+                        let n = socket.read(&mut buf).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buf[..n]);
+                    }
+                    let body: Value =
+                        serde_json::from_slice(&request[body_at..]).unwrap_or(Value::Null);
+                    let payload = answer(body["method"].as_str().unwrap_or(""));
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                        payload.len()
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        url
+    }
+
+    fn rpc_ok(result: &str) -> String {
+        format!(r#"{{"result":{result},"error":null,"id":"nodekeeper"}}"#)
+    }
+
+    fn rpc_error(code: i64, message: &str) -> String {
+        format!(
+            r#"{{"result":null,"error":{{"code":{code},"message":"{message}"}},"id":"nodekeeper"}}"#
+        )
+    }
+
+    /// The decision for **every chain** and every answer Core can give --
+    /// including the ones that are not an answer -- without needing a node, so
+    /// it runs everywhere. An encrypted wallet needs its passphrase; an
+    /// unencrypted one is ready on a test chain and refused on mainnet; and an
+    /// answer that cannot be read, or an error, is an error on **every** chain
+    /// (never "nothing to unlock").
+    #[tokio::test]
+    async fn the_unlock_decision_for_every_chain_and_every_answer() {
+        for chain in Chain::ALL {
+            let client_for = |answer: Box<dyn Fn(&str) -> String + Send + Sync>| async move {
+                RpcClient::new(
+                    stub_node(answer).await,
+                    "u".to_string(),
+                    "p".to_string(),
+                    Executor::new(),
+                    "env".to_string(),
+                    chain,
+                )
+            };
+
+            // Encrypted: `unlocked_until` present (0 while locked).
+            let encrypted = client_for(Box::new(|method| match method {
+                "getwalletinfo" => rpc_ok(r#"{"walletname":"ord","unlocked_until":0}"#),
+                "walletpassphrase" => rpc_ok("null"),
+                _ => rpc_error(-32601, "no such method"),
+            }))
+            .await;
+            assert_eq!(
+                encrypted.wallet_protection("ord").await.unwrap(),
+                WalletProtection::Encrypted
+            );
+            assert_eq!(
+                encrypted
+                    .unlock_for_signing("ord", Some("pw"), 60)
+                    .await
+                    .unwrap(),
+                SigningUnlock::Unlocked,
+                "{chain:?}"
+            );
+            assert!(
+                matches!(
+                    encrypted.unlock_for_signing("ord", None, 60).await,
+                    Err(UnlockError::PassphraseRequired)
+                ),
+                "{chain:?}: no passphrase for an encrypted wallet"
+            );
+
+            // Unencrypted: no `unlocked_until`.
+            let plain = client_for(Box::new(|method| match method {
+                "getwalletinfo" => rpc_ok(r#"{"walletname":"ord","private_keys_enabled":true}"#),
+                _ => rpc_error(-32601, "no such method"),
+            }))
+            .await;
+            assert_eq!(
+                plain.wallet_protection("ord").await.unwrap(),
+                WalletProtection::Unencrypted
+            );
+            for offered in [None, Some("pw")] {
+                let outcome = plain.unlock_for_signing("ord", offered, 60).await;
+                if chain == Chain::Mainnet {
+                    assert!(
+                        matches!(outcome, Err(UnlockError::MainnetWalletNotEncrypted)),
+                        "mainnet refuses an unencrypted wallet ({offered:?}): {outcome:?}"
+                    );
+                } else {
+                    assert_eq!(outcome.unwrap(), SigningUnlock::NotNeeded, "{chain:?}");
+                }
+            }
+
+            // Not an answer: an error on EVERY chain, never a pass.
+            for unreadable in ["null", "[]", r#""text""#, "12", "true"] {
+                let client = client_for(Box::new(move |_| rpc_ok(unreadable))).await;
+                let outcome = client.unlock_for_signing("ord", Some("pw"), 60).await;
+                assert!(
+                    matches!(
+                        outcome,
+                        Err(UnlockError::Rpc(RpcError::UnexpectedResponse(_)))
+                    ),
+                    "{chain:?}: getwalletinfo answered {unreadable}: {outcome:?}"
+                );
+            }
+            let failing = client_for(Box::new(|_| {
+                rpc_error(-18, "Requested wallet does not exist")
+            }))
+            .await;
+            assert!(
+                matches!(
+                    failing.unlock_for_signing("ord", Some("pw"), 60).await,
+                    Err(UnlockError::Rpc(RpcError::Rpc { code: -18, .. }))
+                ),
+                "{chain:?}: an RPC error is an error"
+            );
+
+            // Core rejecting the passphrase is Core's own error, passed through.
+            let wrong = client_for(Box::new(|method| match method {
+                "getwalletinfo" => rpc_ok(r#"{"unlocked_until":0}"#),
+                _ => rpc_error(-14, "The wallet passphrase entered was incorrect."),
+            }))
+            .await;
+            assert!(matches!(
+                wrong.unlock_for_signing("ord", Some("nope"), 60).await,
+                Err(UnlockError::Rpc(RpcError::Rpc { code: -14, .. }))
+            ));
+        }
     }
 
     #[test]

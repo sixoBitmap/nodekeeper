@@ -13,6 +13,7 @@ describe("friendlyError", () => {
       "RPC_WARMING_UP",
       "ORD_NOT_SYNCED",
       "BINARY_NOT_VERIFIED",
+      "WALLET_NOT_ENCRYPTED",
     ] as const;
 
     for (const code of codes) {

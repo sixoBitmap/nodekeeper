@@ -4135,6 +4135,163 @@ and history. The classifier now skips options (and the values of
   sensitivity; the encrypted-backup feature needs a sensitivity-aware
   call and will add one.
 
+### Making the wallet ready to sign: `with_wallet_unlocked` (Phase 10 step 1b, 2026-09-26)
+
+**The problem.** The Wallet screen creates a wallet **without a passphrase** on
+regtest, signet and testnet4 (the passphrase is optional there; only mainnet
+requires one). Send, Inscribe, Batch inscribe and Reinscribe each carried their
+own copy of "unlock with the passphrase, run, re-lock", and every copy began
+by demanding a passphrase -- so on a test chain the GUI could not sign
+anything: it prompted for a passphrase that does not exist and looped on
+Core's error. That also blocked the natural rehearsal on signet/testnet4. On
+mainnet the same code "failed closed" for an unencrypted wallet only by
+accident (`walletpassphrase` errors on it), with a raw message and no reason
+given.
+
+**Decision.** Put to the owner as: skip the unlock for an unencrypted wallet, or
+make encryption default-on for test chains. The owner answered "Do what you
+believe better"; the recommended option was taken: **skip the unlock only for an
+unencrypted wallet on a non-mainnet chain; on mainnet an unencrypted wallet is
+refused** (fail closed). One shared helper for every signing command. A plan
+detail from the mainnet audit, not a new question: the *rehearsal* wallets on
+signet/testnet4 are created **with** a passphrase (PROGRESS.md, Phase 10M), so
+that the rehearsal exercises the real mainnet unlock -> sign -> re-lock path
+and not only this shortcut.
+
+**VERIFY (real binaries).** The test for "is this wallet encrypted" is the
+`unlocked_until` field of `getwalletinfo`. Core 31.1's own help text
+(`bitcoin-cli help getwalletinfo`, asserted by the live test so that a change
+trips it): `"unlocked_until" : xxx, (numeric, optional) the UNIX epoch time
+until which the wallet is unlocked for transfers, or 0 if the wallet is locked
+(only present for passphrase-encrypted wallets)`. Confirmed live
+(`crates/nk-testkit/tests/wallet_unlock.rs`): absent on a wallet created without
+a passphrase; present and `0` on an encrypted wallet that is locked; a positive
+value after `walletpassphrase`; `0` again after `walletlock`. A wrong passphrase
+is Core's `-14`.
+
+**What changed.**
+
+- `nk-rpc`: `RpcClient::wallet_protection` (`getwalletinfo`; an answer that is
+  not a JSON object is an error, never a guess) and `RpcClient::unlock_for_signing`
+  -- encrypted: `walletpassphrase` (no passphrase -> `PassphraseRequired`);
+  unencrypted on a test chain: `NotNeeded`; unencrypted on **mainnet**:
+  `MainnetWalletNotEncrypted`, whatever passphrase is offered. Any error, or an
+  answer that cannot be read, is an error on **every** chain.
+- `src-tauri`: `with_wallet_unlocked` -- resolves the passphrase (the caller's,
+  else the remembered one), unlocks through `unlock_for_signing`, remembers the
+  passphrase only when it really unlocked something and the user asked, runs
+  the action, and re-locks **only if it unlocked**, whatever the action's
+  outcome. `wallet_send`, `wallet_inscribe` and `wallet_inscribe_batch` use it
+  (their three copies are gone; reinscribe goes through `wallet_inscribe`). A
+  **remembered** passphrase that Core now rejects (`-14`: the wallet's passphrase
+  was changed, or the data folder now holds another wallet) is forgotten and
+  reported as `WALLET_LOCKED`, so the frontend asks again instead of retrying the
+  stale one for the rest of the 15-minute remember window.
+- **The console's `ord wallet ...` commands** (found by the review: they sign on
+  their own and skipped the check): on **mainnet**, a command that can sign and
+  broadcast (every class but read-only, and not a dry-run) is refused unless the
+  wallet is encrypted (`require_encrypted_wallet_for_console_signing`, fails
+  closed if Core cannot say), and `--name` is refused there -- the app has one
+  wallet per environment, and another name would sign with a wallet the check
+  never looked at.
+- **A code of its own for the refusal**: `WALLET_NOT_ENCRYPTED` -- an
+  **addition to the spec's list of error codes** (docs/SPEC.md item 8; the pinned
+  test lists it). The refusal needs a "what to do" the user can act on, and the
+  code-less error rendered as "Something went wrong" with the real sentence behind
+  a toggle (traced by the review). The UI text points at a step that exists today,
+  the Console's `encryptwallet <passphrase>`; a guided "encrypt this wallet"
+  action is G3 in PROGRESS.md, Phase 10M. `WALLET_LOCKED` -- the code the frontend
+  prompts on -- is produced only for an encrypted wallet that was given no
+  passphrase (or a stale remembered one); an unencrypted test-chain wallet no
+  longer raises it, so the passphrase prompt never appears for it.
+- The encryption check is one more command in the Live Command Monitor
+  (`bitcoin-cli getwalletinfo`, "check wallet encryption") before each signing
+  action. Dry-runs (which need no unlock) do not come through the helper.
+
+**Found by the adversarial review of this change** (10 findings upheld; fixed
+unless listed under limits): the console's `ord` signing bypassing the mainnet
+check (three reviewers); the refusal shown as "Something went wrong" with no
+in-app remedy (own code, i18n text, wording pointing at the Console); a stale
+remembered passphrase retried forever; the unlock glue having no test at all
+(now a live test of the helper and the console gate against a real node); a
+vacuous "shown in the monitor" assertion (the test's own helper satisfied it --
+it now looks for the app's own action name and checks the unlock/encrypt calls
+were recorded with the passphrase hidden); and no binary-free test of the
+decision (a stub JSON-RPC server now runs the whole matrix -- every chain x
+encrypted / unencrypted / unreadable answers / errors / wrong passphrase --
+anywhere, without a node).
+
+**Verification.**
+
+- **Live, real Bitcoin Core + real ord** (`wallet_unlock.rs`): (1) the field, per
+  state (above); an unencrypted test-chain wallet is ready with no passphrase, and
+  a passphrase offered for it is not used; a client **labelled mainnet** against
+  the same unencrypted wallet refuses (no passphrase, a wrong one, the right
+  one -- the chain label is the only thing that differs; Core is regtest either
+  way); an encrypted wallet: none -> `PassphraseRequired`, wrong -> `-14`, right
+  -> unlocked and `unlocked_until > 0`, re-locked -> `0`; the same encrypted
+  wallet unlocks under the mainnet label; the passphrase and a wrong one appear
+  nowhere in the event stream, the check is recorded as "check wallet encryption",
+  and the unlock/encrypt calls are recorded with `[redacted]`. (2) With real ord:
+  an unencrypted regtest wallet signs a real `ord wallet send` with no passphrase;
+  after `encryptwallet` the send needs the passphrase, works once unlocked, and
+  fails again after the re-lock.
+- **Live, the helper and the console gate** (in the app crate, against a real
+  node): the action does not run when the wallet is not ready (encrypted with no
+  passphrase; unencrypted on mainnet); an unencrypted test-chain wallet runs it
+  and a passphrase "to remember" is *not* remembered; the action sees the wallet
+  unlocked, it is locked again after -- also when the action fails -- and only then
+  is the passphrase remembered; a remembered passphrase is used when none is
+  given; a stale one is forgotten and reported as `WALLET_LOCKED`; the console
+  gate refuses an unencrypted mainnet wallet and `--name`, passes an encrypted
+  one, does no RPC where it does not apply (read-only, dry-run, other chains: a
+  client aimed at a closed port proves it), and refuses when Core cannot be asked.
+- **Negative controls:** restoring the old behaviour (an unencrypted test-chain
+  wallet demands a passphrase) fails both primitive tests; removing the mainnet
+  refusal fails the first; for the helper and the console gate, skipping the re-lock,
+  remembering a passphrase even when nothing was unlocked, never gating the
+  console, and not forgetting a stale remembered passphrase each fail the live
+  glue test (four runs, each reverted).
+- **Live, the real app** (a debug build in an isolated portable folder, its web view
+  driven over a DevTools port, real IPC; a real regtest bitcoind and ord started
+  through the app's own commands): unencrypted wallet, `wallet_send` with no
+  passphrase -> a txid and fee; after `encryptwallet` (through the console) the
+  same call with no passphrase -> `WALLET_LOCKED`, with the passphrase -> a txid,
+  and `getwalletinfo` afterwards shows `unlocked_until: 0`.
+- Unit: the error-to-frontend mapping, the UI's text for every code; the whole
+  decision matrix against a stub node.
+- **The gate**, on the final tree: `cargo fmt --check` and the exact clippy
+  recipe clean; the UI typecheck, lint (the one existing warning) and 23 Vitest
+  tests; every workspace test passes with the real binaries set -- **but not all
+  in one run**: on this 5.9 GB machine, with other applications leaving only
+  about 0.4-0.6 GB free, the live tests that start `bitcoind` hit
+  `Bitcoind(StartupTimeout)` intermittently (3 of the last 8 full-workspace
+  runs, plus 3 of 5 runs of `private_keys`/`wallet_unlock`/the `nk-testkit`
+  library tests; a different test each time, and `nk_proc`'s suite took 543 s
+  instead of 26 s), and each failure leaves an orphaned `bitcoind` behind that
+  holds the output pipe. Each failed test passed when run alone, and every
+  live test file passed in full on a quieter run. Not caused by this change and
+  not weakened; the readiness-cap and fixture-cleanup work is PROGRESS.md
+  Phase 10M, G1.
+
+**Limits, stated plainly.**
+
+- **Mainnet has not run.** The mainnet refusal is exercised by labelling a client
+  as mainnet against a regtest node, which tests the rule, not a mainnet node. The
+  real mainnet unlock -> sign -> re-lock path is a Phase 10M rehearsal item
+  (an *encrypted* wallet on signet/testnet4 through the release exe first).
+- **Not closed here, tracked in PROGRESS.md Phase 10M:** the *creation/restore*
+  window in which a mainnet wallet exists unencrypted (create then `encryptwallet`
+  failing, or a restore rescan lasting hours before encryption), and a guided
+  "encrypt this wallet" action (G3); showing the wallet's encryption state on
+  the Wallet screen so the refusal appears before the user fills in a form (G3);
+  a per-chain single-flight guard, so a double click cannot run two unlock-send-
+  relock sequences that interleave (G7); the console's raw `bitcoin-cli` signing
+  RPCs (`signrawtransactionwithwallet`, `walletprocesspsbt`, ...) and a structural
+  "cannot sign without the check" token in `nk-ord` (G7); surfacing a failed
+  re-lock (G3); the live tests skipping silently when the real binaries are not
+  configured, which `just check` does today (G0).
+
 ### Live smoke test of signet and testnet4 (Phase 10 step 2, 2026-09-26)
 
 **Why.** Only `[regtest]` and `[main]` had ever been started live through

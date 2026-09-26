@@ -22,6 +22,7 @@ const CODE_TO_I18N_KEY: Record<AppErrorCode, string> = {
   RPC_WARMING_UP: "rpcWarmingUp",
   ORD_NOT_SYNCED: "ordNotSynced",
   BINARY_NOT_VERIFIED: "binaryNotVerified",
+  WALLET_NOT_ENCRYPTED: "walletNotEncrypted",
 };
 
 /** Turns a `TypedError` from a Tauri command into UI-ready text. */

@@ -3338,6 +3338,7 @@ dependencies = [
  "nk-rpc",
  "nk-scripts",
  "nk-store",
+ "nk-testkit",
  "nk-verify",
  "rfd",
  "serde",

@@ -25,6 +25,11 @@ pub enum AppErrorCode {
     RpcWarmingUp,
     OrdNotSynced,
     BinaryNotVerified,
+    /// A mainnet wallet that is not encrypted: Nodekeeper will not sign with
+    /// it (Phase 10 step 1b). An addition to the spec's list of codes -- the
+    /// refusal needs a "what to do" the user can act on, and no existing code
+    /// fits.
+    WalletNotEncrypted,
 }
 
 #[cfg(test)]
@@ -45,6 +50,7 @@ mod tests {
             (AppErrorCode::RpcWarmingUp, "RPC_WARMING_UP"),
             (AppErrorCode::OrdNotSynced, "ORD_NOT_SYNCED"),
             (AppErrorCode::BinaryNotVerified, "BINARY_NOT_VERIFIED"),
+            (AppErrorCode::WalletNotEncrypted, "WALLET_NOT_ENCRYPTED"),
         ];
         for (code, expected) in cases {
             assert_eq!(serde_json::to_value(code).unwrap(), expected);
