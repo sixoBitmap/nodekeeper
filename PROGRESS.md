@@ -2100,11 +2100,13 @@ Recommendations are Claude's; none is taken until the owner answers.
   SHA-256 values **from a second device**. Also: is hash-only trust in ord
   enough for real funds (ord has no maintainer signature), or does mainnet
   wait for a source review / build-from-source?
-- **D4 -- Network exposure.** Core defaults to listening on all interfaces
-  and mapping the port on the router (NAT-PMP); every transaction is
-  broadcast from the owner's IP. Recommend for the first mainnet run:
-  outbound-only (`listen=0`, `natpmp=0`), clearnet accepted, Tor later.
-  Or require Tor first (Phase 10 step 5 moves up).
+- **D4 -- Network exposure. Answered 2026-09-27: outbound-only.** Verified
+  live that Core defaults to listening on all interfaces and mapping the
+  port on the router (NAT-PMP); every transaction would otherwise be
+  broadcast from the owner's IP. `listen=0`/`natpmp=0` are now in
+  `generate_bitcoin_conf` for every chain (DECISIONS.md, "Node-lifecycle
+  hardening for the public preview"), proven live. Tor (Phase 10 step 5) is
+  unchanged -- still a later step, not required for this.
 - **D5 -- ord index options on mainnet** (permanent per environment; a
   wrong choice is a multi-day reindex). Recommend `--index-runes` **on**
   (so rune-bearing outputs are protected), sats and addresses off unless
@@ -2483,14 +2485,31 @@ on GitHub, so several items can only be proven there.
 
 - [ ] **R0 -- Mainnet node-lifecycle precondition** (moved up 2026-09-27: the
       mainnet node stays available in the preview, so this gates the tag).
-      From Phase 10M, G1: the readiness wait must not orphan a running `bitcoind`
-      on timeout; a stale `.cookie`/pid after a crash must not lock the user out
-      with no remedy; and mainnet **Start** needs a confirmation (the 1 TB+ /
-      multi-day figures) plus a real free-space check before it runs, since a
-      stranger's first click on the Mainnet Dashboard is exactly that button.
-      Also from the scoping pass: bitcoind's P2P `listen`/`natpmp` defaults are
-      unVERIFIED for 31.1 (record them); decide `listen=0` for a first release
-      or ship Windows Firewall guidance.
+      From Phase 10M, G1:
+  - [x] The readiness wait no longer orphans a running `bitcoind`/`ord` on
+        timeout (it kills the process and removes the pid file), and no longer
+        hangs past its own deadline if a stuck RPC/HTTP connection never
+        answers; the wait is now warm-up aware (`-28` extends the deadline, up
+        to a cap). Done 2026-09-27 -- DECISIONS.md "Node-lifecycle hardening
+        for the public preview". 8 new tests across `nk-proc` and
+        `nk-testkit`, each with a negative control against a real or a
+        scripted node.
+  - [x] bitcoind's P2P `listen`/`natpmp` defaults VERIFIED live for 31.1 and
+        recorded; owner chose outbound-only (`listen=0`, `natpmp=0`, now in
+        `generate_bitcoin_conf`), proven live against a real node (RPC still
+        works; the P2P port refuses a connection). Same DECISIONS.md section.
+        **Still owed**: re-run the signet/testnet4 smoke example
+        (`chain_smoke_test.rs`) against this change -- it waits for an
+        *outbound* peer, which `listen=0` shouldn't affect, but that hasn't
+        been re-checked live.
+  - [ ] A stale `.cookie`/pid after a crash must not lock the user out with no
+        remedy (a different bug from the orphan-on-timeout one just fixed: what
+        happens on the *next* start after an *earlier* unclean exit).
+  - [ ] Attach/adopt for a bitcoind or ord the app didn't start; the stop-path
+        budget and swallowed stop-RPC failures.
+  - [ ] Mainnet **Start** needs a confirmation (the 1 TB+ / multi-day figures)
+        plus a real free-space check before it runs, since a stranger's first
+        click on the Mainnet Dashboard is exactly that button.
 - [ ] **R1 -- Preview safeguards** (the reason it is safe to publish). Feature
       flag and a read-only `get_build_info`; one Rust gate called first in
       `create_wallet`, `restore_wallet`, `wallet_send`, `wallet_inscribe`,

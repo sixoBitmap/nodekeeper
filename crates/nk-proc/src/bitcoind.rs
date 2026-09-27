@@ -53,6 +53,13 @@ impl BitcoindError {
     }
 }
 
+/// How many times the RPC-ready wait in [`BitcoindProcess::wait_ready`] will
+/// push its deadline back out because bitcoind answered with warm-up error
+/// `-28` (proof it's alive and progressing, not proof it will ever finish) --
+/// a hard ceiling so a node that somehow relays `-28` forever still times
+/// out eventually rather than waiting without end.
+const MAX_WARMUP_EXTENSIONS: u32 = 10;
+
 pub struct BitcoindProcess {
     child: tokio::process::Child,
     pub pid: u32,
@@ -134,6 +141,29 @@ impl BitcoindProcess {
     /// it needs. A single shared deadline here previously halved the
     /// real-world budget this had before the two phases were
     /// consolidated into one function, and broke CI (see DECISIONS.md).
+    ///
+    /// The RPC-ready phase is **warm-up aware**: bitcoind answers RPC
+    /// warm-up requests with a real response, JSON-RPC error `-28`
+    /// ("Loading block index...", "Verifying blocks...", and similar --
+    /// Core's own `RPC_IN_WARMUP` code), well before it's ready to serve
+    /// real calls. That is proof of life, not a failure to connect at
+    /// all -- so seeing it once **extends** the deadline by one more
+    /// `ready_timeout` (capped at `MAX_WARMUP_EXTENSIONS` extensions, so
+    /// a node stuck relaying `-28` forever still eventually times out).
+    /// A plain connection failure (the port isn't listening yet) keeps
+    /// the original deadline: found by the mainnet readiness audit
+    /// (PROGRESS.md, Phase 10M/10R) -- the flat timeout this replaced
+    /// could not tell "still loading a huge block index" from "never
+    /// coming up" and was sized for an empty regtest chain either way.
+    ///
+    /// **Never returns an orphan.** If readiness fails for any reason,
+    /// the process this call just spawned is killed (best-effort;
+    /// `stop()`'s own graceful RPC path needs a *working* RPC client,
+    /// which is exactly what didn't happen) and `bitcoind.pid` is
+    /// removed, before the error is returned -- an untracked bitcoind
+    /// left running is worse than a failed start: the next `start()`
+    /// then refuses with `AlreadyRunning` and nothing in the app can
+    /// stop it (found by the same audit).
     #[allow(clippy::too_many_arguments)]
     pub async fn start_and_wait_ready(
         binary_path: &Path,
@@ -144,7 +174,61 @@ impl BitcoindProcess {
         ready_timeout: Duration,
     ) -> Result<(Self, nk_rpc::RpcClient), BitcoindError> {
         let process = Self::start(binary_path, environment).await?;
+        Self::wait_ready_or_clean_up(
+            process,
+            environment,
+            rpc_url,
+            executor,
+            environment_label,
+            ready_timeout,
+        )
+        .await
+    }
 
+    /// `wait_ready`, plus the orphan-cleanup contract documented on
+    /// `start_and_wait_ready`. Takes an already-spawned `process` rather
+    /// than spawning one itself, so a test can substitute a process it
+    /// controls (a long-lived dummy, never meant to become ready) and
+    /// assert directly that a failed wait kills it -- spawning a real
+    /// bitcoind that is *never* going to become ready isn't something a
+    /// test can arrange on demand.
+    async fn wait_ready_or_clean_up(
+        mut process: Self,
+        environment: &Environment,
+        rpc_url: String,
+        executor: nk_exec::Executor,
+        environment_label: String,
+        ready_timeout: Duration,
+    ) -> Result<(Self, nk_rpc::RpcClient), BitcoindError> {
+        match Self::wait_ready(
+            environment,
+            rpc_url,
+            executor,
+            environment_label,
+            ready_timeout,
+        )
+        .await
+        {
+            Ok(rpc) => Ok((process, rpc)),
+            Err(e) => {
+                process.kill_sync();
+                let _ = tokio::time::timeout(Duration::from_secs(5), process.child.wait()).await;
+                let _ = std::fs::remove_file(bitcoind_pid_path(environment));
+                Err(e)
+            }
+        }
+    }
+
+    /// The waiting half of `start_and_wait_ready`, split out so the
+    /// caller can clean up the process on any failure in one place
+    /// (below) instead of at every early return.
+    async fn wait_ready(
+        environment: &Environment,
+        rpc_url: String,
+        executor: nk_exec::Executor,
+        environment_label: String,
+        ready_timeout: Duration,
+    ) -> Result<nk_rpc::RpcClient, BitcoindError> {
         let cookie_deadline = tokio::time::Instant::now() + ready_timeout;
         let cookie_path = environment.bitcoin_cookie_path();
         while !cookie_path.exists() {
@@ -162,13 +246,28 @@ impl BitcoindProcess {
             environment.chain,
         )?;
 
-        let rpc_deadline = tokio::time::Instant::now() + ready_timeout;
+        let mut rpc_deadline = tokio::time::Instant::now() + ready_timeout;
+        let mut warmup_extensions_left = MAX_WARMUP_EXTENSIONS;
         loop {
             // background: true -- this readiness poll can repeat many
             // times (every 200ms) during a slow startup and isn't
             // itself a meaningful user-facing check (docs/SPEC.md item 7).
-            if rpc.get_blockchain_info(true).await.is_ok() {
-                return Ok((process, rpc));
+            //
+            // Wrapped in its own timeout: the RPC client has no request
+            // timeout of its own (same fact `stop()` already accounts
+            // for), so a bitcoind that accepts the connection but whose
+            // RPC threads are stuck -- not just slow -- would otherwise
+            // hang this whole wait past `rpc_deadline`, which is only
+            // ever checked *between* calls. Bounded by `ready_timeout`
+            // itself, so one stuck call can cost at most one deadline's
+            // worth of time, never the wait's ability to time out at all.
+            match tokio::time::timeout(ready_timeout, rpc.get_blockchain_info(true)).await {
+                Ok(Ok(_)) => return Ok(rpc),
+                Ok(Err(nk_rpc::RpcError::Rpc { code: -28, .. })) if warmup_extensions_left > 0 => {
+                    rpc_deadline = tokio::time::Instant::now() + ready_timeout;
+                    warmup_extensions_left -= 1;
+                }
+                Ok(Err(_)) | Err(_) => {}
             }
             if tokio::time::Instant::now() >= rpc_deadline {
                 return Err(BitcoindError::StartupTimeout);
@@ -511,6 +610,269 @@ mod tests {
             started.elapsed() < Duration::from_secs(5),
             "took {:?}",
             started.elapsed()
+        );
+    }
+
+    /// A long-lived dummy process standing in for a `bitcoind` that is
+    /// never going to become ready -- deliberately *not* `kill_on_drop`,
+    /// so the only thing that can end it is `wait_ready_or_clean_up`'s
+    /// own cleanup, never Rust dropping the `Child` handle. Mirrors the
+    /// dummy process the stop-timeout test above already uses.
+    fn spawn_long_lived_dummy() -> tokio::process::Child {
+        let mut command =
+            tokio::process::Command::new(if cfg!(windows) { "ping" } else { "sleep" });
+        if cfg!(windows) {
+            command.args(["-n", "30", "127.0.0.1"]);
+        } else {
+            command.arg("30");
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command
+            .spawn()
+            .expect("failed to spawn a long-lived process")
+    }
+
+    /// The orphan bug the mainnet readiness audit found (PROGRESS.md,
+    /// Phase 10M/10R): a bitcoind that never becomes ready used to be
+    /// dropped, still running, the moment the wait gave up -- the next
+    /// `start()` would then refuse with `AlreadyRunning` against a
+    /// process nothing could stop. A dummy process standing in for that
+    /// stuck bitcoind (real cookie file, so the cookie phase passes at
+    /// once; an RPC port nothing listens on, so every poll fails and the
+    /// wait times out) proves the fix: the dummy is dead once
+    /// `wait_ready_or_clean_up` returns its error, and `bitcoind.pid` is
+    /// gone too.
+    #[tokio::test]
+    async fn a_process_that_never_becomes_ready_is_killed_not_orphaned() {
+        let child = spawn_long_lived_dummy();
+        let pid = child.id().expect("a just-spawned child has a pid");
+        let process = BitcoindProcess {
+            child,
+            pid,
+            started_at: std::time::Instant::now(),
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let environment = Environment::new_default(Chain::Regtest, dir.path());
+        std::fs::create_dir_all(environment.bitcoin_chain_dir()).unwrap();
+        std::fs::write(environment.bitcoin_cookie_path(), "__cookie__:hunter2").unwrap();
+        std::fs::write(bitcoind_pid_path(&environment), pid.to_string()).unwrap();
+
+        assert!(
+            process_is_alive(pid),
+            "the dummy should be alive to start with"
+        );
+
+        let unused_port = random_free_port();
+        let result = BitcoindProcess::wait_ready_or_clean_up(
+            process,
+            &environment,
+            format!("http://127.0.0.1:{unused_port}"),
+            nk_exec::Executor::new(),
+            "test".to_string(),
+            Duration::from_millis(300),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(BitcoindError::StartupTimeout)),
+            "{:?}",
+            result.err()
+        );
+        assert!(
+            !process_is_alive(pid),
+            "a process that never became ready must be killed, not left running"
+        );
+        assert!(
+            !bitcoind_pid_path(&environment).exists(),
+            "the pid file must not survive pointing at a killed process"
+        );
+    }
+
+    /// A minimal JSON-RPC server (the same shape `nk-rpc`'s own stub-node
+    /// tests use): answers a fixed sequence of responses in order, one per
+    /// connection, then `rpc_error(-32601, ...)` forever -- enough to drive
+    /// the warm-up-extension logic in `wait_ready` without a real bitcoind
+    /// (which, on regtest, never actually stays in warm-up long enough to
+    /// test this against). Each response closes the connection, since
+    /// `reqwest` may otherwise try to reuse it for the next call.
+    fn spawn_scripted_rpc_server(responses: Vec<String>) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut responses = responses.into_iter();
+            for mut stream in listener.incoming().flatten() {
+                use std::io::{Read, Write};
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let body = responses
+                    .next()
+                    .unwrap_or_else(|| rpc_error(-32601, "no more scripted responses"));
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        port
+    }
+
+    fn rpc_ok(result: &str) -> String {
+        format!(r#"{{"result":{result},"error":null,"id":"nodekeeper"}}"#)
+    }
+
+    fn rpc_error(code: i64, message: &str) -> String {
+        format!(
+            r#"{{"result":null,"error":{{"code":{code},"message":"{message}"}},"id":"nodekeeper"}}"#
+        )
+    }
+
+    /// Sets up a fresh environment with a cookie file already in place
+    /// (so `wait_ready`'s cookie-wait phase passes at once) and returns it.
+    fn environment_ready_for_rpc_wait(dir: &std::path::Path) -> Environment {
+        let environment = Environment::new_default(Chain::Regtest, dir);
+        std::fs::create_dir_all(environment.bitcoin_chain_dir()).unwrap();
+        std::fs::write(environment.bitcoin_cookie_path(), "__cookie__:hunter2").unwrap();
+        environment
+    }
+
+    /// `-28` ("Loading block index...", Core's own `RPC_IN_WARMUP` code)
+    /// is proof of life, so it must extend the deadline rather than just
+    /// being "another failed poll" -- a node that answers warm-up errors
+    /// the whole time it's loading a huge block index must not be timed
+    /// out from under itself just because that takes longer than one
+    /// `ready_timeout`. Drives the real `wait_ready`, not a copy of its
+    /// logic.
+    #[tokio::test]
+    async fn a_warmup_response_extends_the_deadline_until_the_node_is_really_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let environment = environment_ready_for_rpc_wait(dir.path());
+        // Two warm-up responses, then real readiness -- comfortably past
+        // where a *first* ready_timeout without the extension would have
+        // given up (each -28 pushes the deadline out by another full
+        // ready_timeout).
+        let port = spawn_scripted_rpc_server(vec![
+            rpc_error(-28, "Loading block index..."),
+            rpc_error(-28, "Verifying blocks..."),
+            rpc_ok(r#"{"blocks":0}"#),
+        ]);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            BitcoindProcess::wait_ready(
+                &environment,
+                format!("http://127.0.0.1:{port}"),
+                nk_exec::Executor::new(),
+                "test".to_string(),
+                Duration::from_millis(150),
+            ),
+        )
+        .await
+        .expect("the test's own outer timeout should never be the one that fires");
+        assert!(
+            result.is_ok(),
+            "warm-up responses should not end the wait early: {:?}",
+            result.err()
+        );
+    }
+
+    /// The RPC client has no request timeout of its own (the same fact
+    /// `stop()`'s own tests already exercise). A connection that is
+    /// accepted but never answered must not be able to hang the whole
+    /// ready wait past its deadline -- only the per-call `tokio::time::
+    /// timeout` around `rpc.get_blockchain_info` stands between "one
+    /// stuck call" and "wait forever", since the deadline itself is only
+    /// ever checked *between* calls.
+    #[tokio::test]
+    async fn a_connection_that_never_answers_cannot_hang_the_ready_wait_forever() {
+        let dir = tempfile::tempdir().unwrap();
+        let environment = environment_ready_for_rpc_wait(dir.path());
+        // Accepts connections and holds them open without ever replying --
+        // same shape as the stop-timeout test's "never answers" listener.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let held = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let held_by_thread = held.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                held_by_thread.lock().unwrap().push(stream);
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            BitcoindProcess::wait_ready(
+                &environment,
+                format!("http://127.0.0.1:{port}"),
+                nk_exec::Executor::new(),
+                "test".to_string(),
+                Duration::from_millis(200),
+            ),
+        )
+        .await
+        .expect("a stuck connection must not hang the wait past the test's own outer timeout");
+        assert!(
+            matches!(result, Err(BitcoindError::StartupTimeout)),
+            "{:?}",
+            result.err()
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "took {:?}",
+            started.elapsed()
+        );
+        drop(held);
+    }
+
+    /// The extension has a ceiling: a node that relays `-28` forever
+    /// (or a genuinely broken one that never leaves warm-up) must still
+    /// time out eventually, not wait without end.
+    #[tokio::test]
+    async fn a_node_stuck_in_warmup_forever_still_times_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let environment = environment_ready_for_rpc_wait(dir.path());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                use std::io::{Read, Write};
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let body = rpc_error(-28, "Loading block index...");
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                     Connection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let result = tokio::time::timeout(
+            // MAX_WARMUP_EXTENSIONS + 1 rounds of a 30ms ready_timeout,
+            // generously bounded -- if this fires instead, the ceiling
+            // is missing, not just slow.
+            Duration::from_secs(10),
+            BitcoindProcess::wait_ready(
+                &environment,
+                format!("http://127.0.0.1:{port}"),
+                nk_exec::Executor::new(),
+                "test".to_string(),
+                Duration::from_millis(30),
+            ),
+        )
+        .await
+        .expect("a node stuck in warm-up forever must still time out on its own");
+        assert!(
+            matches!(result, Err(BitcoindError::StartupTimeout)),
+            "{:?}",
+            result.err()
         );
     }
 

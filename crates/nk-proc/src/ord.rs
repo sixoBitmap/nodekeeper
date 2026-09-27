@@ -148,6 +148,12 @@ impl OrdProcess {
     /// bitcoind's block count is a separate, open-ended concern (the
     /// Dashboard's ongoing sync-progress display), not something a
     /// bounded startup wait should block on.
+    /// **Never returns an orphan.** Same reasoning and contract as
+    /// `BitcoindProcess::start_and_wait_ready` (PROGRESS.md, Phase 10M/
+    /// 10R): if ord never answers `/status` in time, the process this
+    /// call just spawned is killed and `ord.pid` removed before the
+    /// error comes back, so a later `start()` doesn't refuse with
+    /// `AlreadyRunning` against a process nothing can stop.
     #[allow(clippy::too_many_arguments)]
     pub async fn start_and_wait_ready(
         binary_path: &Path,
@@ -160,6 +166,46 @@ impl OrdProcess {
         ready_timeout: Duration,
     ) -> Result<(Self, nk_ord::OrdClient), OrdProcessError> {
         let process = Self::start(binary_path, environment, cookie_path, bitcoin_datadir).await?;
+        Self::wait_ready_or_clean_up(
+            process,
+            environment,
+            base_url,
+            executor,
+            environment_label,
+            ready_timeout,
+        )
+        .await
+    }
+
+    /// `wait_ready`, plus the orphan-cleanup contract documented on
+    /// `start_and_wait_ready`. Takes an already-spawned `process` rather
+    /// than spawning one itself, so a test can substitute a process it
+    /// controls -- same reason `BitcoindProcess` splits this the same way.
+    async fn wait_ready_or_clean_up(
+        mut process: Self,
+        environment: &Environment,
+        base_url: String,
+        executor: nk_exec::Executor,
+        environment_label: String,
+        ready_timeout: Duration,
+    ) -> Result<(Self, nk_ord::OrdClient), OrdProcessError> {
+        match Self::wait_ready(base_url, executor, environment_label, ready_timeout).await {
+            Ok(client) => Ok((process, client)),
+            Err(e) => {
+                process.kill_sync();
+                let _ = tokio::time::timeout(Duration::from_secs(5), process.child.wait()).await;
+                let _ = std::fs::remove_file(environment.ord_pid_path());
+                Err(e)
+            }
+        }
+    }
+
+    async fn wait_ready(
+        base_url: String,
+        executor: nk_exec::Executor,
+        environment_label: String,
+        ready_timeout: Duration,
+    ) -> Result<nk_ord::OrdClient, OrdProcessError> {
         let client = nk_ord::OrdClient::new(base_url, executor, environment_label);
 
         let deadline = tokio::time::Instant::now() + ready_timeout;
@@ -168,8 +214,17 @@ impl OrdProcess {
             // times during a slow startup and isn't itself a meaningful
             // user-facing check (docs/SPEC.md item 7), same reasoning as
             // bitcoind's own RPC-ready poll.
-            if client.status(true).await.is_ok() {
-                return Ok((process, client));
+            //
+            // Wrapped in its own timeout for the same reason bitcoind's
+            // poll is: `OrdClient`'s HTTP client has no request timeout
+            // of its own, so an ord that accepts the connection but never
+            // answers would otherwise hang this whole wait past
+            // `deadline`, which is only ever checked *between* calls.
+            if tokio::time::timeout(ready_timeout, client.status(true))
+                .await
+                .is_ok_and(|result| result.is_ok())
+            {
+                return Ok(client);
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(OrdProcessError::StartupTimeout);
@@ -411,6 +466,127 @@ mod tests {
             Err(OrdProcessError::PortInUse { port }) if port == env.ord_port
         ));
         drop(listener);
+    }
+
+    /// Same helper as `bitcoind.rs`'s identical one.
+    fn random_free_port() -> u16 {
+        TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    /// A long-lived dummy standing in for an ord that is never going to
+    /// become ready -- deliberately *not* `kill_on_drop`, so only
+    /// `wait_ready_or_clean_up`'s own cleanup can end it. Same rationale
+    /// as `bitcoind.rs`'s identical helper.
+    fn spawn_long_lived_dummy() -> tokio::process::Child {
+        let mut command =
+            tokio::process::Command::new(if cfg!(windows) { "ping" } else { "sleep" });
+        if cfg!(windows) {
+            command.args(["-n", "30", "127.0.0.1"]);
+        } else {
+            command.arg("30");
+        }
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command
+            .spawn()
+            .expect("failed to spawn a long-lived process")
+    }
+
+    /// The same orphan bug bitcoind's own equivalent test catches
+    /// (PROGRESS.md, Phase 10M/10R): an ord that never answers `/status`
+    /// used to be dropped, still running, the moment the wait gave up.
+    #[tokio::test]
+    async fn a_process_that_never_becomes_ready_is_killed_not_orphaned() {
+        let child = spawn_long_lived_dummy();
+        let pid = child.id().expect("a just-spawned child has a pid");
+        let process = OrdProcess {
+            child,
+            pid,
+            started_at: std::time::Instant::now(),
+            console_mode: ConsoleMode::current(),
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let environment = Environment::new_default(Chain::Regtest, dir.path());
+        std::fs::create_dir_all(environment.ord_index_dir()).unwrap();
+        std::fs::write(environment.ord_pid_path(), pid.to_string()).unwrap();
+
+        assert!(
+            process_is_alive(pid),
+            "the dummy should be alive to start with"
+        );
+
+        let unused_port = random_free_port();
+        let result = OrdProcess::wait_ready_or_clean_up(
+            process,
+            &environment,
+            format!("http://127.0.0.1:{unused_port}"),
+            nk_exec::Executor::new(),
+            "test".to_string(),
+            Duration::from_millis(300),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(OrdProcessError::StartupTimeout)),
+            "{:?}",
+            result.err()
+        );
+        assert!(
+            !process_is_alive(pid),
+            "a process that never became ready must be killed, not left running"
+        );
+        assert!(
+            !environment.ord_pid_path().exists(),
+            "the pid file must not survive pointing at a killed process"
+        );
+    }
+
+    /// `OrdClient` has no request timeout of its own (same fact
+    /// bitcoind's equivalent test exercises), so a connection accepted
+    /// but never answered must not be able to hang the ready wait past
+    /// its deadline.
+    #[tokio::test]
+    async fn a_connection_that_never_answers_cannot_hang_the_ready_wait_forever() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let held = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let held_by_thread = held.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                held_by_thread.lock().unwrap().push(stream);
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_secs(10),
+            OrdProcess::wait_ready(
+                format!("http://127.0.0.1:{port}"),
+                nk_exec::Executor::new(),
+                "test".to_string(),
+                Duration::from_millis(200),
+            ),
+        )
+        .await
+        .expect("a stuck connection must not hang the wait past the test's own outer timeout");
+        assert!(
+            matches!(result, Err(OrdProcessError::StartupTimeout)),
+            "{:?}",
+            result.err()
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "took {:?}",
+            started.elapsed()
+        );
+        drop(held);
     }
 
     /// An ord that already exited on its own (crashed, killed from Task

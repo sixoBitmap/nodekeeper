@@ -3,7 +3,10 @@
 //! txindex both require an unpruned node), `server=1`, RPC bound to
 //! 127.0.0.1 only, cookie auth (the default when no `rpcuser`/
 //! `rpcpassword` is set — never write those), `dbcache` sized to
-//! available RAM.
+//! available RAM, and outbound-only P2P (`listen=0`, `natpmp=0`) --
+//! owner decision, Phase 10R, 2026-09-27; see the module's own doc
+//! comment on `listen`/`natpmp` for the verified real defaults this
+//! turns off.
 //!
 //! **Network-specific settings must live under a `[section]` header, not
 //! at the top level** — confirmed live against real `bitcoind` 31.1, not
@@ -57,6 +60,8 @@ pub fn generate_bitcoin_conf(
          prune=0\n\
          server=1\n\
          dbcache={dbcache_mib}\n\
+         listen=0\n\
+         natpmp=0\n\
          \n\
          [{section}]\n\
          rpcbind=127.0.0.1\n\
@@ -91,7 +96,7 @@ mod tests {
         let (top, sectioned) = conf
             .split_once("[regtest]")
             .expect("must have a [regtest] section");
-        for line in ["txindex=1", "prune=0", "server=1"] {
+        for line in ["txindex=1", "prune=0", "server=1", "listen=0", "natpmp=0"] {
             assert!(
                 top.lines().any(|l| l == line),
                 "missing top-level line: {line}\nconf:\n{conf}"

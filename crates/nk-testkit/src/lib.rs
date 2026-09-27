@@ -281,6 +281,46 @@ mod tests {
         fixture.stop().await.expect("bitcoind should stop cleanly");
     }
 
+    /// The owner's outbound-only decision (Phase 10R, 2026-09-27; `listen=0`
+    /// and `natpmp=0` in `generate_bitcoin_conf`) really takes effect: a real
+    /// bitcoind started with the generated config refuses an inbound TCP
+    /// connection to its own P2P port -- proof it isn't listening, not just
+    /// an assertion about the config text. RPC still answers normally
+    /// (`listen=0` only affects the P2P port, confirmed here rather than
+    /// assumed).
+    #[tokio::test]
+    #[serial(real_bitcoind)]
+    async fn the_generated_config_really_stops_the_node_listening_for_p2p() {
+        let Some(binary_path) = nk_core::live_tests::live_binary("NK_TEST_BITCOIND") else {
+            eprintln!("skipping: NK_TEST_BITCOIND not set");
+            return;
+        };
+        let binary_path = std::path::PathBuf::from(binary_path);
+
+        let fixture = RegtestFixture::start(&binary_path)
+            .await
+            .expect("bitcoind should start");
+
+        fixture
+            .rpc
+            .get_blockchain_info(false)
+            .await
+            .expect("RPC should still work with listen=0");
+
+        let p2p_port = fixture.environment.p2p_port;
+        let connect_result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            tokio::net::TcpStream::connect(("127.0.0.1", p2p_port)),
+        )
+        .await;
+        assert!(
+            matches!(connect_result, Ok(Err(_))),
+            "a TCP connection to the P2P port should be refused with listen=0, got {connect_result:?}"
+        );
+
+        fixture.stop().await.expect("bitcoind should stop cleanly");
+    }
+
     /// Real-node coverage for Phase 5's wallet-unlock flow
     /// (docs/SPEC.md item 3): a signing RPC against an encrypted
     /// wallet fails cleanly while locked, `wallet_passphrase` unlocks

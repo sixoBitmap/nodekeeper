@@ -4459,6 +4459,142 @@ earlier without an answer: the release profile moves from `panic = "abort"` to
 `"unwind"`, with a panic hook and an application log file, so that a crash is
 recorded and cannot skip the app's cleanup (PROGRESS.md, Phase 10R).
 
+### Node-lifecycle hardening for the public preview (Phase 10R, step R0, 2026-09-27)
+
+**Why now.** The owner decided the mainnet node and Explorer stay available in
+the public preview (only mainnet *wallets* are blocked -- see "Public preview
+release: owner decisions" above). That made the mainnet-readiness audit's
+node-lifecycle findings (PROGRESS.md, Phase 10M, G1) a precondition for the
+release tag rather than a later step: a stranger's first click on the Mainnet
+Dashboard is the Start button, and it used to be able to leave a real `bitcoind`
+running with nothing in the app able to stop it.
+
+**Two bugs found and fixed in `BitcoindProcess::start_and_wait_ready` and
+`OrdProcess::start_and_wait_ready` (`crates/nk-proc`), both real, both proven
+live.**
+
+1. **The orphan bug** (the audit's `startup-warmup-budget-and-orphaned-child`).
+   If the readiness wait timed out, the just-spawned `tokio::process::Child`
+   was simply dropped -- and tokio does **not** kill a child on drop unless
+   `kill_on_drop(true)` was set, which neither `start()` did. The process kept
+   running, still holding the data directory and P2P/RPC ports, with nothing in
+   `NodeManager` tracking it. The next `start()` call then reads the pid file
+   Core (or, for ord, Nodekeeper itself) already wrote, finds the process alive,
+   and refuses with `AlreadyRunning` -- and nothing in the app can stop a
+   process it never tracked. **Fix**: on any readiness failure, kill the
+   process, wait briefly for it to exit, and remove the pid file, before
+   returning the error. Verified live: a real long-lived dummy process (never
+   `kill_on_drop`) substituted for a stuck bitcoind/ord is confirmed dead, and
+   its pid file gone, once the call returns `StartupTimeout` -- `bitcoind`'s
+   test also feeds the pid file (`bitcoind.pid`) and checks it. **Negative
+   control**: reverting the cleanup makes both tests fail (the dummy is still
+   alive).
+2. **The hung-poll bug**, found while fixing the first: the RPC-ready poll
+   (`rpc.get_blockchain_info`) and ord's `/status` poll had no per-call
+   timeout, and neither `RpcClient`'s nor `OrdClient`'s HTTP client sets one
+   (`reqwest::Client::new()`) -- the same fact `BitcoindProcess::stop` was
+   already written to account for, just not the readiness wait. A `bitcoind`
+   or `ord` whose RPC/HTTP thread accepts the connection but never answers (a
+   stalled disk -- exactly the portable-drive case this app targets) could hang
+   the whole wait **past its own deadline**, since the deadline is only
+   checked *between* calls. **Fix**: wrap each poll in
+   `tokio::time::timeout(ready_timeout, ...)`. Verified live: a real listener
+   that accepts and holds the connection open, replying to nothing, no longer
+   hangs the wait past a 10-second outer test bound. **Negative control**:
+   removing the per-call timeout makes that test hang until the outer bound
+   and fail.
+
+**Warm-up awareness**, the audit's other ask for this item: `bitcoind` answers
+RPC calls during warm-up with a real response, JSON-RPC error `-28`
+("Loading block index...", "Verifying blocks...", Core's own `RPC_IN_WARMUP`
+code) -- proof it's alive and progressing, not a failure to connect at all. The
+flat 60-second budget this replaced couldn't tell that apart from "never coming
+up," and was only ever sized against an empty regtest chain. Seeing `-28` now
+extends the deadline by one more `ready_timeout`, capped at
+`MAX_WARMUP_EXTENSIONS = 10` extensions so a node that somehow relays `-28`
+forever still times out. Verified against a scripted local JSON-RPC server (the
+same shape used elsewhere in this codebase for RPC-behaviour tests): two
+warm-up responses then real readiness survive past what a single
+`ready_timeout` would have allowed; a server that answers `-28` forever still
+times out well inside a generous outer bound. Real `bitcoind` on regtest never
+stays in warm-up long enough to test this directly (its block index is empty),
+so the scripted server is what actually exercises the extension logic; the
+real binary is what exercises the orphan-cleanup and per-call-timeout fixes,
+and the ordinary case (a normal, quick regtest start).
+
+**Outbound-only P2P** (owner decision, this session): VERIFY, live, against the
+pinned `bitcoind` 31.1 (`bitcoind -help-debug`):
+
+```text
+-listen
+     Accept connections from outside (default: 1 if no -proxy, -connect or
+     -maxconnections=0)
+-natpmp
+     Use PCP or NAT-PMP to map the listening port (default: 1)
+-discover
+     Discover own IP addresses (default: 1 when listening and no -externalip
+     or -proxy)
+-dnsseed
+     Query for peer addresses via DNS lookup, if low on addresses (default: 1
+     unless -connect used or -maxconnections=0)
+```
+
+Nodekeeper's generated `bitcoin.conf` set none of `-proxy`/`-connect`/
+`-maxconnections=0`, so every environment accepted inbound connections and
+tried to map a port on the router by default. Put to the owner as a choice
+(keep Core's defaults, or go outbound-only); the recommended option was taken:
+`generate_bitcoin_conf` (`crates/nk-core/src/bitcoin_conf.rs`) now writes
+`listen=0` and `natpmp=0` for every chain. `-listen=0` only stops *accepting*
+inbound connections -- outbound connections (how a node normally finds peers,
+via `-dnsseed`, which stays on) are unaffected, so the node still syncs and
+finds peers normally; it just never accepts a connection initiated by someone
+else, and never touches the router's port mapping. Verified live: a real
+`bitcoind` started with the generated config answers RPC normally, and a raw
+TCP connection attempt to its own P2P port from the test itself is refused --
+proof the port isn't listening, not just an assertion about the config text.
+**Negative control**: removing the two lines from the generator makes that
+test fail (the port accepts the connection). Not re-verified: the Phase 10
+step 2 signet/testnet4 example (`crates/nk-testkit/examples/chain_smoke_test.rs`,
+needs real network access and is not part of `just check`) waited for an
+*outbound* peer connection, which `listen=0` does not affect per the verified
+semantics above -- but it has not been re-run against this change; do so before
+relying on it.
+
+**Verification.** Unit and live tests added to `crates/nk-proc/src/bitcoind.rs`,
+`crates/nk-proc/src/ord.rs` (orphan cleanup, per-call timeout, warm-up
+extension and its ceiling -- 6 new tests, each with a negative control) and
+`crates/nk-testkit/src/lib.rs` (the live outbound-only proof). The existing
+real-node tests in `nk-testkit` and `nodekeeper` (`NodeManager`'s
+`starts_reports_status_and_stops_a_real_node`, `starts_ord_reports_status_and_
+stops_it`, and every wallet/inscribe/restore test that starts a real node
+through the same generated config) all still pass with `listen=0`/`natpmp=0`
+in effect, so the change doesn't regress anything that already worked.
+
+**Still open from Phase 10M's G1, not done here:** the stale `.cookie`/pid
+reuse after a crash (a different bug -- what happens on the *next* start after
+an unclean exit, not what happens when *this* start doesn't succeed);
+attach/adopt for a bitcoind or ord the app didn't start; the stop-path budget
+and swallowed stop-RPC failures; and R0's other item, a confirmation plus a
+real disk-space check before a mainnet **Start**, which is a separate,
+UI-facing task not yet done.
+
+**The full workspace gate** (`fmt --check`, the exact clippy recipe, every
+workspace test with the real binaries set, the UI typecheck/lint/Vitest) was
+run on this change and is clean, with one exception: `nk-rpc`'s
+`the_unlock_decision_for_every_chain_and_every_answer` (a mock-JSON-RPC-server
+test from Phase 10, step 1(b), unrelated to this change -- untouched here)
+failed once in the full run and, rerun alone three times, failed once more, at
+a different assertion each time and each after several real seconds rather
+than instantly. On this machine, with 1-1.5 GB of RAM free of 6 GB for this
+entire session, that pattern matches the already-documented real-`bitcoind`
+`StartupTimeout` flakiness (this DECISIONS.md, Phase 10 step 1(b)'s gate note)
+more than a logic bug: the mock's own accept loop or `reqwest`'s connection
+pool stalling under load, not the unlock decision itself, which the same test
+proved correct earlier in this session and which nothing here touched. Not
+weakened, not skipped, and not fixed either -- recorded here as an owed
+hardening pass (a bounded per-connection timeout in the test's own mock
+server) before relying on this machine's CI runs unattended.
+
 ## Approved deviations from SPEC.md
 
 Decided by the project owner on 2026-09-22:
