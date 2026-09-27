@@ -4405,6 +4405,26 @@ sync was waited for.
 
 ### Public preview release: owner decisions (2026-09-27)
 
+**Follow-up decisions (2026-09-27, after a sourced scoping pass found the mainnet
+node/wallet split needed an explicit answer):**
+
+- **The mainnet NODE and Explorer stay available** in the preview; only mainnet
+  *wallet* creation, restore, signing and receive are blocked (unchanged from the
+  first decision above). The scoping pass recommended blocking the mainnet node
+  too -- it has never been run through the app, needs 1 TB+ and days to sync, and
+  a first click on Start can hit the known startup-orphan/stale-cookie loop
+  (PROGRESS.md, Phase 10M, G1) -- but the owner chose to keep it available.
+  Consequence, now a **precondition for publishing, not a nice-to-have**: G1's
+  node-lifecycle hardening (the readiness-wait, orphan/attach, and stop-path
+  items) and a mainnet Start confirmation with a real disk-space check must land
+  before the tag is pushed, since a stranger's first click on the Mainnet
+  Dashboard is exactly that Start button.
+- **The VC++ runtime `ord.exe` needs is detected, not bundled.** If missing, the
+  app says so in plain words and links to Microsoft's own redistributable page;
+  no extra download ships inside Nodekeeper. (`bitcoind.exe` does not need it;
+  confirmed by inspecting the cached binaries' import tables.)
+
+
 The owner asked to "make a release ... so anyone can use it". Because that
 puts a wallet-adjacent app in strangers' hands while the mainnet readiness audit
 (PROGRESS.md, Phase 10M) still lists blockers that could lose someone's

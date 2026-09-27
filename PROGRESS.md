@@ -2456,6 +2456,16 @@ on GitHub, so several items can only be proven there.
 - **The mainnet console in the preview is read-only commands only** (which also
   refuses `stop`/`addnode` there): a deny-list of wallet methods would miss
   `walletprocesspsbt`, `sendrawtransaction`, `submitpackage`, future RPCs.
+- **The mainnet node and Explorer stay available** (owner decision, 2026-09-27,
+  against the recommendation to gate them too); only mainnet *wallet*
+  create/restore/sign/receive is blocked. Because of this, **Phase 10M's G1
+  (node-lifecycle hardening: the readiness-wait/orphan/stale-cookie loop, and a
+  mainnet Start confirmation with a real disk check) becomes a precondition for
+  the release tag**, not a later step -- a stranger's first click on the Mainnet
+  Dashboard is a Start button that hits exactly that loop today.
+- **The VC++ runtime `ord.exe` needs is detected, not bundled**: a plain-language
+  message and a link to Microsoft's own page if it's missing, no extra download
+  shipped inside Nodekeeper. `bitcoind.exe` does not need it.
 - **WebView2: Tauri's default `downloadBootstrapper`** (Windows 11 already has the
   runtime; the download from Microsoft only happens where it is missing) -- and
   the portable zip needs the runtime installed. Both go in the README's network
@@ -2471,6 +2481,16 @@ on GitHub, so several items can only be proven there.
 
 ### Tasks, in order
 
+- [ ] **R0 -- Mainnet node-lifecycle precondition** (moved up 2026-09-27: the
+      mainnet node stays available in the preview, so this gates the tag).
+      From Phase 10M, G1: the readiness wait must not orphan a running `bitcoind`
+      on timeout; a stale `.cookie`/pid after a crash must not lock the user out
+      with no remedy; and mainnet **Start** needs a confirmation (the 1 TB+ /
+      multi-day figures) plus a real free-space check before it runs, since a
+      stranger's first click on the Mainnet Dashboard is exactly that button.
+      Also from the scoping pass: bitcoind's P2P `listen`/`natpmp` defaults are
+      unVERIFIED for 31.1 (record them); decide `listen=0` for a first release
+      or ship Windows Firewall guidance.
 - [ ] **R1 -- Preview safeguards** (the reason it is safe to publish). Feature
       flag and a read-only `get_build_info`; one Rust gate called first in
       `create_wallet`, `restore_wallet`, `wallet_send`, `wallet_inscribe`,
@@ -2488,7 +2508,10 @@ on GitHub, so several items can only be proven there.
       stays open to hostile inscription content: a **`get_setting`/`set_setting`
       allowlist** (today one call sets `bitcoind_path` to any exe), a
       `binaries_status` command instead of the UI reading the paths, `opener:default`
-      removed, `inscribe_file_preview` limited to dialog-chosen paths.
+      removed, `inscribe_file_preview` limited to dialog-chosen paths. VC++
+      runtime: detect at ord-start time and show a plain message linking to
+      Microsoft's redistributable page (owner decision, 2026-09-27) --
+      `bitcoind.exe` doesn't need it, `ord.exe` does.
 - [ ] **R2 -- Crash handling and a log** (D11, taken): `panic = "unwind"`, a panic
       hook that shows a message box and writes a log/crash file, the startup
       `.expect(...)`s routed through it, `eprintln!`s that vanish in a GUI exe
@@ -2522,7 +2545,11 @@ on GitHub, so several items can only be proven there.
       the quality gate runs first. `ci.yml` gets `NK_REQUIRE_LIVE`, read-only
       permissions and `--locked`. ⛔ the fetch examples' cache short-circuit
       (they return early without re-verifying) touches the verification path:
-      ask before changing.
+      ask before changing. The attestation step runs in its own job that only
+      downloads the built artifacts and executes no repo code (the build job
+      runs ~600 crates' worth of build scripts and should not also hold
+      `attestations:write`). Add `cargo deny check advisories` (or cargo-audit)
+      and `npm audit --omit=dev` to the gate, recorded in DECISIONS.md.
 - [ ] **R7 -- What can be checked on this PC**: unit and live tests for everything
       above; the debug build in a real portable folder; the MSI's contents
       (`msiexec /a` extraction, no system change) if a debug MSI can be built
@@ -2551,6 +2578,18 @@ Only the owner can do these; the plan lists them so nothing is a surprise.
       (checksum and `gh attestation verify`).
 - [ ] Name/trademark search for "Nodekeeper", the icon artwork, and the export-
       control question -- counsel-type items; nothing here is legal advice.
+- [ ] Scan the built MSI, zip and exe with Windows Defender (and ideally
+      VirusTotal) before publishing -- an unsigned exe that downloads binaries
+      and sends CTRL_BREAK to children is a plausible false-positive target --
+      and have a Microsoft false-positive submission ready.
+- [ ] Account hardening before going public: 2FA/passkeys on the GitHub account,
+      a ruleset on `master` and on `v*` tags, and a release-notes line that says
+      "download only from this repository's Releases page" (hashes and
+      attestations prove integrity, not that the account wasn't compromised).
+- [ ] Write a short yank/rollback runbook (no updater exists yet): a bad release
+      can only be re-worded, marked more clearly pre-release, or deleted (which
+      burns the tag once immutability is on) -- decide the procedure before it's
+      needed, not during an incident.
 - Later, not for the preview: a code-signing certificate (SmartScreen "unknown
   publisher" and Windows Smart App Control can still block an unsigned build).
 
